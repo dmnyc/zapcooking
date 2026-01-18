@@ -12,6 +12,7 @@
   import CommentLikes from './CommentLikes.svelte';
   import { get } from 'svelte/store';
   import { searchProfiles } from '$lib/profileSearchService';
+  import NoteContent from './NoteContent.svelte';
 
   export let parentComment: NDKEvent;
 
@@ -1027,9 +1028,9 @@
                     {formatDate(new Date((reply.created_at || 0) * 1000))}
                   </span>
                 </div>
-                <p class="reply-body">
-                  {reply.content}
-                </p>
+                <div class="reply-body">
+                  <NoteContent content={reply.content} />
+                </div>
                 <!-- Reply Actions -->
                 <div class="flex items-center gap-2">
                   <CommentLikes event={reply} />
