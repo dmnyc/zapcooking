@@ -780,7 +780,6 @@
       commentText = htmlToPlainText(commentComposerEl);
       lastRenderedComment = commentText;
     }
-
     if (!$ndk?.signer) {
       console.error('No signer available - user must be logged in');
       alert('Please log in to post comments');
@@ -809,7 +808,6 @@
         ev.tags.push(['p', pubkey]);
       }
     }
-
     // Add NIP-89 client tag
     addClientTagToEvent(ev);
 
@@ -862,7 +860,6 @@
 
   // Sort all comments chronologically (oldest first)
   $: sortedComments = [...events].sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
-
   $: if (commentComposerEl && commentText !== lastRenderedComment) {
     syncComposerContent(commentText);
   }

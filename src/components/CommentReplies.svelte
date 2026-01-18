@@ -10,9 +10,9 @@
   import { addClientTagToEvent } from '$lib/nip89';
   import { buildNip22CommentTags } from '$lib/tagUtils';
   import CommentLikes from './CommentLikes.svelte';
+  import NoteContent from './NoteContent.svelte';
   import { get } from 'svelte/store';
   import { searchProfiles } from '$lib/profileSearchService';
-  import NoteContent from './NoteContent.svelte';
 
   export let parentComment: NDKEvent;
 
