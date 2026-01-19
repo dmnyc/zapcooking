@@ -17,6 +17,7 @@ const adapter = process.env.ADAPTER === 'static'
       }
     })
   : adapterAuto();
+  : adapterAuto();
 
 /** @type {import('@sveltejs/kit').Config} */
 const config = {
