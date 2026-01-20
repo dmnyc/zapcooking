@@ -34,6 +34,8 @@
   import { getAuthManager } from '$lib/authManager';
   import { profileCacheManager } from '$lib/profileCache';
   import { timerWidgetOpen } from '$lib/stores/timerWidget';
+  import { walletConnected } from '$lib/wallet/walletStore';
+  import { weblnConnected } from '$lib/wallet/webln';
 
   export let open = false;
 
@@ -305,6 +307,11 @@
               >
                 <WalletIcon size={22} />
                 <span class="font-medium">Wallet</span>
+                {#if !$walletConnected && !$weblnConnected}
+                  <span class="text-xs px-2 py-0.5 rounded-full bg-primary/20 text-primary"
+                    >Connect</span
+                  >
+                {/if}
               </button>
             </li>
             {#if SHOW_PRO_FEATURES}
