@@ -15,6 +15,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { get } from 'svelte/store';
+  import { browser } from '$app/environment';
   import {
     ndk,
     userPublickey,
@@ -35,16 +36,17 @@
   import NoteRepost from './NoteRepost.svelte';
   import FeedComments from './FeedComments.svelte';
   import ZapModal from './ZapModal.svelte';
+  import ShareModal from './ShareModal.svelte';
+  import PostActionsMenu from './PostActionsMenu.svelte';
   import NoteContent from './NoteContent.svelte';
   import AuthorName from './AuthorName.svelte';
+  import { generateNoteImage, generateImageFilename, extractNostrReferences, decodeNostrReference, type EngagementData as ShareEngagementData, type ReferencedNote } from '$lib/shareNoteImage';
   import { optimizeImageUrl, getOptimalFormat } from '$lib/imageOptimizer';
   import { compressedCacheManager, COMPRESSED_FEED_CACHE_CONFIG } from '$lib/compressedCache';
   import FeedErrorBoundary from './FeedErrorBoundary.svelte';
   import FeedPostSkeleton from './FeedPostSkeleton.svelte';
   import LoadingState from './LoadingState.svelte';
   import { nip19 } from 'nostr-tools';
-  import CopyIcon from 'phosphor-svelte/lib/Copy';
-  import CheckIcon from 'phosphor-svelte/lib/Check';
   import ClientAttribution from './ClientAttribution.svelte';
 
   let portalTarget: HTMLElement | null = null;
@@ -65,7 +67,7 @@
   import { getEventStore, cacheFeedEvents } from '$lib/eventStore';
 
   // Batched engagement fetching for reactions/subscriptions
-  import { batchFetchEngagement, getEngagementStore } from '$lib/engagementCache';
+  import { batchFetchEngagement, getEngagementStore, fetchEngagement, type EngagementData } from '$lib/engagementCache';
 
   // Garden relay dedicated cache (IndexedDB-based)
   import {
@@ -466,7 +468,19 @@
 
   // UI state
   let carouselStates: { [eventId: string]: number } = {};
-  let copiedNoteId = '';
+  // Share modal state
+  let shareModalOpen = false;
+  let shareUrl = '';
+  let shareTitle = '';
+  let shareImageUrl = '';
+  let shareImageBlob: Blob | null = null;
+  let shareImageName = 'zap-cooking-note.png';
+  let shareModalEvent: NDKEvent | null = null;
+  let isGeneratingShareImage = false;
+  
+  // Share as image state (direct share)
+  let isGeneratingImage = false;
+  let imageGenerationError: string | null = null;
   let expandedParentNotes: { [eventId: string]: boolean } = {}; // Track expanded parent notes
   let parentNoteCache: { [eventId: string]: NDKEvent | null } = {}; // Cache full parent notes
   let foodFilterEnabled = true; // Toggle for food filtering in Following/Replies modes
@@ -660,6 +674,67 @@
     return deduplicateText(cleaned);
   }
 
+  // Extract the first quoted note ID from content (for quote reposts)
+  function getQuotedNoteId(event: NDKEvent): string | null {
+    try {
+      if (!event || !event.content) return null;
+      
+      // First check for q tag (NIP-18 style quote repost)
+      if (Array.isArray(event.tags)) {
+        const qTag = event.tags.find(tag => Array.isArray(tag) && tag[0] === 'q');
+        if (qTag && qTag[1]) {
+          return qTag[1];
+        }
+      }
+      
+      // Then check for nostr:nevent1 or nostr:note1 in content
+      // Use a fresh regex each time to avoid lastIndex issues
+      const regex = /nostr:(nevent1[023456789acdefghjklmnpqrstuvwxyz]+|note1[023456789acdefghjklmnpqrstuvwxyz]+)/;
+      const match = event.content.match(regex);
+      if (match && match[1]) {
+        const nostrString = match[1];
+        if (nostrString.startsWith('nevent1')) {
+          const decoded = nip19.decode(nostrString);
+          if (decoded.type === 'nevent') {
+            return decoded.data.id;
+          }
+        } else if (nostrString.startsWith('note1')) {
+          const decoded = nip19.decode(nostrString);
+          if (decoded.type === 'note') {
+            return decoded.data;
+          }
+        }
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  // Check if an event has a quoted note (but is not a reply)
+  function hasQuotedNote(event: NDKEvent): boolean {
+    try {
+      // Don't show quote embed if it's already a reply (to avoid double embeds)
+      if (isReply(event)) return false;
+      return getQuotedNoteId(event) !== null;
+    } catch {
+      return false;
+    }
+  }
+
+  // Get content without the quoted note reference (so it doesn't render as inline embed)
+  function getContentWithoutQuote(content: string): string {
+    try {
+      if (!content) return '';
+      return content
+        .replace(/nostr:(nevent1[023456789acdefghjklmnpqrstuvwxyz]+|note1[023456789acdefghjklmnpqrstuvwxyz]+)/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    } catch {
+      return content || '';
+    }
+  }
+
   // ═══════════════════════════════════════════════════════════════
   // CONTENT FILTERING
   // ═══════════════════════════════════════════════════════════════
@@ -726,14 +801,35 @@
     return Math.max(contentHashtags, tagHashtags);
   }
 
+  // Cache muted users to avoid repeated localStorage parsing
+  let cachedMutedUsers: string[] | null = null;
+  let cachedMutedUsersKey: string | null = null;
+  
   function getMutedUsers(): string[] {
     if (!$userPublickey) return [];
+    
+    // Return cached value if user hasn't changed
+    if (cachedMutedUsersKey === $userPublickey && cachedMutedUsers !== null) {
+      return cachedMutedUsers;
+    }
+    
     try {
       const storedMutes = localStorage.getItem('mutedUsers');
-      return storedMutes ? JSON.parse(storedMutes) : [];
+      const parsed: string[] = storedMutes ? JSON.parse(storedMutes) : [];
+      cachedMutedUsers = parsed;
+      cachedMutedUsersKey = $userPublickey;
+      return parsed;
     } catch {
+      cachedMutedUsers = [];
+      cachedMutedUsersKey = $userPublickey;
       return [];
     }
+  }
+  
+  // Invalidate muted users cache when needed (call after mute/unmute actions)
+  export function invalidateMutedUsersCache() {
+    cachedMutedUsers = null;
+    cachedMutedUsersKey = null;
   }
 
   function shouldIncludeEvent(event: NDKEvent): boolean {
@@ -1515,7 +1611,18 @@
 
             // Convert cached events to NDK-like format and display immediately
             const cachedNDKEvents = cachedEvents.map((e) => cachedEventToNDKLike(e));
-            events = cachedNDKEvents;
+            
+            // Apply food filter if enabled
+            const beforeFilter = cachedNDKEvents.length;
+            const filteredCachedEvents = foodFilterEnabled
+              ? cachedNDKEvents.filter((e) => shouldIncludeEvent(e))
+              : cachedNDKEvents;
+            
+            if (foodFilterEnabled && beforeFilter !== filteredCachedEvents.length) {
+              console.log(`[Feed] Garden: Filtered cached events: ${filteredCachedEvents.length} / ${beforeFilter}`);
+            }
+            
+            events = filteredCachedEvents;
             loading = false; // Show cached data immediately
 
             // Check for stale results
@@ -1612,8 +1719,18 @@
         const hadCachedEvents = events.length;
 
         if (gardenEvents.length > 0) {
+          // Apply food filter if enabled
+          const beforeFilter = gardenEvents.length;
+          const filteredGardenEvents = foodFilterEnabled
+            ? gardenEvents.filter((e) => shouldIncludeEvent(e))
+            : gardenEvents;
+          
+          if (foodFilterEnabled && beforeFilter !== filteredGardenEvents.length) {
+            console.log(`[Feed] Garden: Filtered relay events: ${filteredGardenEvents.length} / ${beforeFilter}`);
+          }
+          
           // Got fresh events from relay - update display and cache
-          events = dedupeAndSort(gardenEvents);
+          events = dedupeAndSort(filteredGardenEvents);
           console.log(`[Feed] Garden: Got ${events.length} fresh events from relay`);
 
           // Save to dedicated Garden cache
@@ -1867,7 +1984,7 @@
     }
 
     if (filterMode === 'garden') {
-      // Subscribe to garden relay - show ALL content (not just food-tagged)
+      // Subscribe to garden relay - content filtering controlled by foodFilterEnabled toggle
       const gardenFilter: any = {
         kinds: [1],
         since
@@ -1967,10 +2084,15 @@
     // Skip if already seen
     if (seenEventIds.has(event.id)) return;
 
-    // Validate content - skip food filter for garden/members feeds
-    if (filterMode !== 'garden' && filterMode !== 'members') {
+    // Validate content - apply food filter based on toggle for garden mode
+    if (filterMode === 'garden') {
+      // Garden mode: respect foodFilterEnabled toggle
+      if (foodFilterEnabled && !shouldIncludeEvent(event)) return;
+    } else if (filterMode !== 'members') {
+      // Other modes (except members): always apply food filter
       if (!shouldIncludeEvent(event)) return;
     }
+    // Members mode: no food filter
 
     // Mark as seen and queue for batch processing
     seenEventIds.add(event.id);
@@ -2218,8 +2340,9 @@
       const validOlder = olderEvents.filter((e) => {
         if (seenEventIds.has(e.id)) return false;
 
-        // Garden mode: NO FILTERING - show ALL content from garden relay
+        // Garden mode: apply food filter based on toggle
         if (filterMode === 'garden') {
+          if (foodFilterEnabled && !shouldIncludeEvent(e)) return false;
           return true;
         }
 
@@ -2546,11 +2669,232 @@
     if (target) target.style.display = 'none';
   }
 
-  async function copyNoteId(event: NDKEvent) {
-    const noteId = nip19.noteEncode(event.id);
-    await navigator.clipboard.writeText(noteId);
-    copiedNoteId = event.id;
-    setTimeout(() => (copiedNoteId = ''), 2000);
+  function handlePostCopy(event: CustomEvent<{ noteId: string }>) {
+    // Copy handled by PostActionsMenu component
+    console.log('Note ID copied:', event.detail.noteId);
+  }
+
+  function handlePostShare(event: CustomEvent<{ url: string }>, noteEvent?: NDKEvent) {
+    shareUrl = event.detail.url;
+    shareTitle = 'Check out this post on Zap Cooking';
+    shareImageUrl = '';
+    shareImageBlob = null;
+    shareModalEvent = noteEvent || null;
+    isGeneratingShareImage = false;
+    shareModalOpen = true;
+  }
+
+  async function generateShareModalImage() {
+    if (!shareModalEvent || !browser) return;
+    
+    isGeneratingShareImage = true;
+    
+    try {
+      const { resolveProfileByPubkey, formatDisplayName } = await import('$lib/profileResolver');
+      
+      // Get author info
+      let authorName: string | undefined;
+      let authorPicture: string | undefined;
+      try {
+        const profile = await resolveProfileByPubkey(shareModalEvent.author?.hexpubkey || shareModalEvent.pubkey, $ndk);
+        if (profile) {
+          authorName = formatDisplayName(profile);
+          authorPicture = profile.picture;
+        }
+      } catch (err) {
+        console.warn('Failed to fetch author profile:', err);
+      }
+      
+      // Check for referenced notes
+      let referencedNote: ReferencedNote | undefined;
+      try {
+        const nostrRefs = extractNostrReferences(shareModalEvent.content || '');
+        if (nostrRefs.length > 0) {
+          const refEventId = decodeNostrReference(nostrRefs[0]);
+          if (refEventId) {
+            const refEvent = await $ndk.fetchEvent(refEventId);
+            if (refEvent) {
+              let refAuthorName: string | undefined;
+              let refAuthorPicture: string | undefined;
+              try {
+                const refProfile = await resolveProfileByPubkey(refEvent.author?.hexpubkey || refEvent.pubkey, $ndk);
+                if (refProfile) {
+                  refAuthorName = formatDisplayName(refProfile);
+                  refAuthorPicture = refProfile.picture;
+                }
+              } catch {
+                // Continue without ref author info
+              }
+              
+              referencedNote = {
+                id: refEvent.id,
+                content: refEvent.content,
+                authorName: refAuthorName,
+                authorPicture: refAuthorPicture,
+                authorPubkey: refEvent.author?.hexpubkey || refEvent.pubkey,
+                timestamp: refEvent.created_at
+              };
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to fetch referenced note:', err);
+      }
+      
+      // Get engagement data
+      const engagementStore = getEngagementStore(shareModalEvent.id);
+      const engagementValue = get(engagementStore);
+      const engagement: ShareEngagementData = {
+        zaps: { totalAmount: engagementValue.zaps.totalAmount, count: engagementValue.zaps.count },
+        reactions: { count: engagementValue.reactions.count },
+        comments: { count: engagementValue.comments.count }
+      };
+      
+      // Generate image
+      const blob = await generateNoteImage(shareModalEvent, engagement, 'square', false, authorName, authorPicture, referencedNote);
+      
+      if (blob) {
+        shareImageBlob = blob;
+        shareImageName = generateImageFilename(shareModalEvent);
+      } else {
+        // Show error to user
+        imageGenerationError = 'Failed to generate image. Please try again.';
+      }
+    } catch (err) {
+      console.error('Failed to generate share image:', err);
+      imageGenerationError = err instanceof Error ? err.message : 'Failed to generate image. Please try again.';
+    } finally {
+      isGeneratingShareImage = false;
+    }
+  }
+
+  async function handleDownloadImage(event: CustomEvent<{ event: NDKEvent; engagementData: ShareEngagementData }>) {
+    if (!browser) return;
+    
+    const noteEvent = event.detail.event;
+    const engagement = event.detail.engagementData;
+    
+    isGeneratingImage = true;
+    imageGenerationError = null;
+    
+    try {
+      // Try to get author name and picture from profile cache
+      let authorName: string | undefined;
+      let authorPicture: string | undefined;
+      const { resolveProfileByPubkey, formatDisplayName } = await import('$lib/profileResolver');
+      
+      try {
+        const profile = await resolveProfileByPubkey(noteEvent.author?.hexpubkey || noteEvent.pubkey, $ndk);
+        if (profile) {
+          authorName = formatDisplayName(profile);
+          authorPicture = profile.picture;
+        }
+      } catch (err) {
+        console.warn('Failed to fetch author profile for image:', err);
+      }
+      
+      // Check for referenced notes (nostr:nevent or nostr:note)
+      let referencedNote: ReferencedNote | undefined;
+      try {
+        const nostrRefs = extractNostrReferences(noteEvent.content || '');
+        if (nostrRefs.length > 0) {
+          const refEventId = decodeNostrReference(nostrRefs[0]);
+          if (refEventId) {
+            // Fetch the referenced event
+            const refEvent = await $ndk.fetchEvent(refEventId);
+            if (refEvent) {
+              // Get the referenced note author's profile
+              let refAuthorName: string | undefined;
+              let refAuthorPicture: string | undefined;
+              try {
+                const refProfile = await resolveProfileByPubkey(refEvent.author?.hexpubkey || refEvent.pubkey, $ndk);
+                if (refProfile) {
+                  refAuthorName = formatDisplayName(refProfile);
+                  refAuthorPicture = refProfile.picture;
+                }
+              } catch {
+                // Continue without ref author info
+              }
+              
+              referencedNote = {
+                id: refEvent.id,
+                content: refEvent.content,
+                authorName: refAuthorName,
+                authorPicture: refAuthorPicture,
+                authorPubkey: refEvent.author?.hexpubkey || refEvent.pubkey,
+                timestamp: refEvent.created_at
+              };
+              console.log('[DownloadImage] Referenced note found:', referencedNote);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to fetch referenced note:', err);
+        // Continue without referenced note
+      }
+      
+      // Generate image (default to square format)
+      const blob = await generateNoteImage(noteEvent, engagement, 'square', false, authorName, authorPicture, referencedNote);
+      
+      if (!blob) {
+        throw new Error('Failed to generate image');
+      }
+      
+      // Download the image directly
+      const filename = generateImageFilename(noteEvent);
+      const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+      
+      if (isSafari) {
+        // For Safari on iOS/macOS, try native share which lets user save to Photos
+        if (navigator.share && navigator.canShare) {
+          try {
+            const file = new File([blob], filename, { type: 'image/png' });
+            if (navigator.canShare({ files: [file] })) {
+              await navigator.share({
+                files: [file],
+              });
+              // Share completed (or cancelled) - don't do anything else
+              return;
+            }
+          } catch (e) {
+            // User cancelled or share failed - that's ok, just exit
+            return;
+          }
+        }
+        
+        // Fallback for older Safari without share API: use data URL download
+        const reader = new FileReader();
+        reader.onload = () => {
+          const dataUrl = reader.result as string;
+          const a = document.createElement('a');
+          a.href = dataUrl;
+          a.download = filename;
+          a.style.display = 'none';
+          document.body.appendChild(a);
+          a.click();
+          setTimeout(() => document.body.removeChild(a), 100);
+        };
+        reader.readAsDataURL(blob);
+      } else {
+        // Non-Safari: use blob URL
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        }, 100);
+      }
+    } catch (error) {
+      console.error('Download image failed:', error);
+      imageGenerationError = error instanceof Error ? error.message : 'Failed to generate image';
+    } finally {
+      isGeneratingImage = false;
+    }
   }
 
   // Carousel navigation
@@ -2607,6 +2951,186 @@
     const current = carouselStates[eventId] || 0;
     carouselStates[eventId] = current === 0 ? totalSlides - 1 : current - 1;
     carouselStates = { ...carouselStates };
+  }
+
+  // Consolidated engagement info for rendering - avoids multiple store lookups
+  interface EngagementRenderInfo {
+    isZapPopular: boolean;
+    zapGlowTier: 'none' | 'soft' | 'medium' | 'bright';
+    totalSats: number;
+    zapCount: number;
+  }
+  
+  // Constants for tier calculation - defined once, reused everywhere
+  const GLOW_TIERS = ['none', 'soft', 'medium', 'bright'] as const;
+  type GlowTier = typeof GLOW_TIERS[number];
+  
+  // Thresholds: [soft, medium, bright]
+  const COUNT_THRESHOLDS = [3, 6, 9];
+  const AMOUNT_THRESHOLDS = [500, 1000, 2000];
+  const ESTIMATED_SATS_PER_ZAP = 200;
+  
+  // Reactive engagement cache - stores computed glow info per event
+  let engagementGlowCache = new Map<string, EngagementRenderInfo>();
+  let engagementSubscriptions = new Map<string, () => void>();
+  let pendingCleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  
+  // Fast tier calculation - returns index 0-3 (none, soft, medium, bright)
+  function getTierIndex(value: number, thresholds: number[]): number {
+    if (value >= thresholds[2]) return 3; // bright
+    if (value >= thresholds[1]) return 2; // medium
+    if (value >= thresholds[0]) return 1; // soft
+    return 0; // none
+  }
+  
+  // Calculate glow tier from engagement data - optimized for speed
+  function calculateEngagementInfo(data: EngagementData): EngagementRenderInfo {
+    const zapCount = data.zaps?.count || 0;
+    const uniqueZapperCount = data.zaps?.topZappers?.length || 0;
+    const totalReactionCount = data.reactions?.count || 0;
+    const totalSats = (data.zaps?.totalAmount || 0) / 1000; // Convert millisats to sats
+    
+    // Zap-popular: only for garden posts with more zappers than reactions
+    const isZapPopular = filterMode === 'garden' && 
+                         uniqueZapperCount > 0 && 
+                         uniqueZapperCount > totalReactionCount;
+    
+    // Get tier from count (3/6/9 thresholds)
+    const countTierIdx = getTierIndex(zapCount, COUNT_THRESHOLDS);
+    
+    // Get tier from amount (500/1000/2000 thresholds)
+    // If no amount data yet, estimate from count
+    const effectiveSats = totalSats > 0 ? totalSats : zapCount * ESTIMATED_SATS_PER_ZAP;
+    const amountTierIdx = getTierIndex(effectiveSats, AMOUNT_THRESHOLDS);
+    
+    // Use whichever tier is higher
+    const zapGlowTier = GLOW_TIERS[Math.max(countTierIdx, amountTierIdx)];
+    
+    return { isZapPopular, zapGlowTier, totalSats, zapCount };
+  }
+  
+  // Subscribe to an engagement store and update cache reactively
+  function subscribeToEngagement(eventId: string): void {
+    if (engagementSubscriptions.has(eventId)) return;
+    
+    // Cancel any pending cleanup for this eventId
+    const pendingCleanup = pendingCleanupTimers.get(eventId);
+    if (pendingCleanup) {
+      clearTimeout(pendingCleanup);
+      pendingCleanupTimers.delete(eventId);
+    }
+    
+    const store = getEngagementStore(eventId);
+    
+    // Immediately read cached data (this loads from localStorage instantly)
+    const initialData = get(store);
+    const initialInfo = calculateEngagementInfo(initialData);
+    engagementGlowCache.set(eventId, initialInfo);
+    
+    // Subscribe to future updates from relays
+    const unsubscribe = store.subscribe((data) => {
+      const newInfo = calculateEngagementInfo(data);
+      const currentInfo = engagementGlowCache.get(eventId);
+      
+      // Only update if glow tier changed or sats increased (never decrease glow from cache)
+      if (!currentInfo || 
+          newInfo.zapGlowTier !== currentInfo.zapGlowTier ||
+          newInfo.totalSats > currentInfo.totalSats) {
+        engagementGlowCache.set(eventId, newInfo);
+        // Trigger Svelte reactivity - assignment to self
+        engagementGlowCache = engagementGlowCache;
+      }
+    });
+    
+    engagementSubscriptions.set(eventId, unsubscribe);
+  }
+  
+  // Unsubscribe from engagement updates
+  function unsubscribeFromEngagement(eventId: string): void {
+    const unsub = engagementSubscriptions.get(eventId);
+    if (unsub) {
+      unsub();
+      engagementSubscriptions.delete(eventId);
+    }
+  }
+  
+  // Default engagement info - cached to avoid object allocation
+  const DEFAULT_ENGAGEMENT_INFO: EngagementRenderInfo = Object.freeze({ 
+    isZapPopular: false, 
+    zapGlowTier: 'none' as const,
+    totalSats: 0,
+    zapCount: 0
+  });
+  
+  // Get engagement info - reads from reactive cache
+  // Optimized: single code path, minimal allocations
+  function getEngagementRenderInfo(eventId: string, shouldSubscribe: boolean = true): EngagementRenderInfo {
+    // Set up subscription if needed (this also populates cache)
+    if (shouldSubscribe && !engagementSubscriptions.has(eventId)) {
+      subscribeToEngagement(eventId);
+      // subscribeToEngagement populates the cache, so check it
+      return engagementGlowCache.get(eventId) || DEFAULT_ENGAGEMENT_INFO;
+    }
+    
+    // Return cached info or default
+    return engagementGlowCache.get(eventId) || DEFAULT_ENGAGEMENT_INFO;
+  }
+  
+  // Cleanup subscriptions when events leave view
+  // Uses tracked timers to avoid duplicate cleanup attempts
+  $: {
+    // When visibleNotes changes, schedule cleanup for notes no longer visible
+    const visibleIds = new Set(events.map(e => e.id).filter(id => visibleNotes.has(id)));
+    for (const eventId of engagementSubscriptions.keys()) {
+      if (!visibleIds.has(eventId) && !pendingCleanupTimers.has(eventId)) {
+        // Schedule cleanup with grace period (in case user scrolls back)
+        const timer = setTimeout(() => {
+          pendingCleanupTimers.delete(eventId);
+          // Double-check still not visible before cleanup
+          if (!visibleNotes.has(eventId)) {
+            unsubscribeFromEngagement(eventId);
+            engagementGlowCache.delete(eventId);
+          }
+        }, 30000); // 30 second grace period
+        pendingCleanupTimers.set(eventId, timer);
+      }
+    }
+  }
+
+  // Zap animation state
+  let zapAnimatingNotes = new Set<string>();
+  let zapAnimationTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
+  
+  function handleZapComplete(eventId: string) {
+    // Clear any existing timeout for this note
+    const existingTimeout = zapAnimationTimeouts.get(eventId);
+    if (existingTimeout) {
+      clearTimeout(existingTimeout);
+    }
+    
+    // Add to animating set
+    zapAnimatingNotes.add(eventId);
+    zapAnimatingNotes = zapAnimatingNotes;
+    
+    // Remove after animation completes (2 seconds)
+    const timeout = setTimeout(() => {
+      zapAnimatingNotes.delete(eventId);
+      zapAnimatingNotes = zapAnimatingNotes;
+      zapAnimationTimeouts.delete(eventId);
+    }, 2000);
+    
+    zapAnimationTimeouts.set(eventId, timeout);
+    
+    // Refresh engagement data to show new zap
+    if ($userPublickey) {
+      fetchEngagement($ndk, eventId, $userPublickey);
+    }
+  }
+  
+  // Cleanup function for zap animation timeouts
+  function cleanupZapAnimationTimeouts() {
+    zapAnimationTimeouts.forEach((timeout) => clearTimeout(timeout));
+    zapAnimationTimeouts.clear();
   }
 
   // Zap modal
@@ -2784,6 +3308,10 @@
     if (engagementPreloadTimeout) {
       clearTimeout(engagementPreloadTimeout);
     }
+    
+    // Clean up zap animation timeouts
+    cleanupZapAnimationTimeouts();
+    
     cleanupInfiniteScroll();
     await cleanup();
   });
@@ -2879,7 +3407,7 @@
   <div class="max-w-2xl mx-auto">
     <!-- Note: Refresh indicator is handled by PullToRefresh component on the page -->
 
-    {#if filterMode === 'following' || filterMode === 'replies' || authorPubkey}
+    {#if filterMode === 'following' || filterMode === 'replies' || filterMode === 'garden' || authorPubkey}
       <div class="flex items-center justify-end gap-2 px-2 sm:px-0 mb-4">
         {#if foodFilterEnabled}
           <span class="text-sm">
@@ -2992,26 +3520,75 @@
     {:else}
       <div class="space-y-0">
         {#each events as event (event.id)}
+          <!-- Get engagement info - always check cache, subscribe only when visible -->
+          {@const isVisible = visibleNotes.has(event.id)}
+          {@const engagementInfo = getEngagementRenderInfo(event.id, isVisible)}
+          {@const isPopular = engagementInfo.isZapPopular}
+          {@const isZapAnimating = zapAnimatingNotes.has(event.id)}
+          {@const zapGlowTier = engagementInfo.zapGlowTier}
+          {@const engagementStoreValue = get(getEngagementStore(event.id))}
+          {@const engagementData = {
+            zaps: { totalAmount: engagementStoreValue.zaps.totalAmount, count: engagementStoreValue.zaps.count },
+            reactions: { count: engagementStoreValue.reactions.count },
+            comments: { count: engagementStoreValue.comments.count }
+          }}
           <article
-            class="border-b py-4 sm:py-6 first:pt-0"
-            style="border-color: var(--color-input-border)"
+            class="border-b py-4 sm:py-6 first:pt-0 
+                   {isPopular ? 'zap-popular-post' : ''} 
+                   {isZapAnimating ? 'zap-bolt-animation' : ''}
+                   {zapGlowTier !== 'none' ? `zap-glow-${zapGlowTier}` : ''}"
+            style="border-color: var(--color-input-border); {isPopular ? 'box-shadow: 0 0 20px rgba(251, 191, 36, 0.4), 0 0 40px rgba(251, 191, 36, 0.2); border-radius: 8px; border: 2px solid rgba(251, 191, 36, 0.6); padding: 1rem; margin-bottom: 1rem;' : ''}"
           >
-            <div class="flex space-x-3 px-2 sm:px-0">
-              {#if !hideAvatar}
-                <a
-                  href="/user/{nip19.npubEncode(event.author?.hexpubkey || event.pubkey)}"
-                  class="flex-shrink-0"
-                >
-                  <CustomAvatar
-                    className="cursor-pointer"
-                    pubkey={event.author?.hexpubkey || event.pubkey}
-                    size={40}
-                  />
-                </a>
-              {/if}
+            <!-- User header with avatar and name -->
+            <div class="flex items-center justify-between mb-3 px-2 sm:px-0">
+              <div class="flex items-center space-x-3 flex-1 min-w-0">
+                {#if !hideAvatar}
+                  <a
+                    href="/user/{nip19.npubEncode(event.author?.hexpubkey || event.pubkey)}"
+                    class="flex-shrink-0"
+                  >
+                    <CustomAvatar
+                      className="cursor-pointer"
+                      pubkey={event.author?.hexpubkey || event.pubkey}
+                      size={40}
+                    />
+                  </a>
+                {/if}
+                
+                <div class="flex items-center space-x-2 flex-wrap min-w-0">
+                  {#if !hideAuthorName}
+                    <AuthorName {event} />
+                    <span class="text-sm" style="color: var(--color-caption)">·</span>
+                  {/if}
+                  <span class="text-sm" style="color: var(--color-caption)">
+                    {event.created_at ? formatTimeAgo(event.created_at) : 'Unknown time'}
+                  </span>
+                  <ClientAttribution tags={event.tags} enableEnrichment={false} />
+                </div>
+              </div>
+              
+              <!-- Post actions menu (top right) -->
+              <div class="flex-shrink-0 ml-2">
+                <PostActionsMenu 
+                  {event}
+                  {engagementData}
+                  on:copy={(e) => {
+                    selectedEvent = event;
+                    handlePostCopy(e);
+                  }}
+                  on:share={(e) => {
+                    selectedEvent = event;
+                    handlePostShare(e, event);
+                  }}
+                  on:downloadImage={handleDownloadImage}
+                />
+              </div>
+            </div>
 
-              <div class="flex-1 min-w-0">
-                {#if isReply(event)}
+            <!-- Main content area - full width below header -->
+            <div class="px-2 sm:px-0">
+              <!-- Reply context (orange bracket at top for replies) -->
+              {#if isReply(event)}
                   {@const parentNoteId = getParentNoteId(event)}
                   {#if parentNoteId}
                     {#await resolveReplyContext(parentNoteId)}
@@ -3074,21 +3651,21 @@
                         </div>
                       </a>
                     {/await}
-                  {/if}
                 {/if}
+              {/if}
 
-                <div class="flex items-center space-x-2 mb-2 flex-wrap">
-                  {#if !hideAuthorName}
-                    <AuthorName {event} />
-                    <span class="text-sm" style="color: var(--color-caption)">·</span>
+              <!-- Content - strip quoted note reference if present to avoid bubble embed -->
+                {#if hasQuotedNote(event)}
+                  {@const cleanContent = getContentWithoutMedia(getContentWithoutQuote(event.content))}
+                  {#if cleanContent}
+                    <div
+                      class="text-sm leading-relaxed mb-3"
+                      style="color: var(--color-text-primary)"
+                    >
+                      <NoteContent content={cleanContent} />
+                    </div>
                   {/if}
-                  <span class="text-sm" style="color: var(--color-caption)">
-                    {event.created_at ? formatTimeAgo(event.created_at) : 'Unknown time'}
-                  </span>
-                  <ClientAttribution tags={event.tags} enableEnrichment={false} />
-                </div>
-
-                {#if getContentWithoutMedia(event.content)}
+                {:else if getContentWithoutMedia(event.content)}
                   {@const cleanContent = getContentWithoutMedia(event.content)}
                   <div
                     class="text-sm leading-relaxed mb-3"
@@ -3096,6 +3673,73 @@
                   >
                     <NoteContent content={cleanContent} />
                   </div>
+                {/if}
+
+                <!-- Quoted note embed (appears below user's content) -->
+                {#if hasQuotedNote(event)}
+                  {@const quotedNoteId = getQuotedNoteId(event)}
+                  {#if quotedNoteId}
+                    {#await resolveReplyContext(quotedNoteId)}
+                      <!-- Loading state -->
+                      <div class="parent-quote-embed mb-3">
+                        <div class="parent-quote-loading">
+                          <div class="w-4 h-4 bg-accent-gray rounded-full animate-pulse"></div>
+                          <div class="h-3 bg-accent-gray rounded w-20 animate-pulse"></div>
+                        </div>
+                      </div>
+                    {:then context}
+                      <!-- Quoted note with orange bracket style -->
+                      <a
+                        href="/{nip19.noteEncode(quotedNoteId)}"
+                        class="parent-quote-embed mb-3 block hover:opacity-90 transition-opacity"
+                        on:click|stopPropagation
+                      >
+                        <div class="parent-quote-header">
+                          {#if context.authorPubkey}
+                            <CustomAvatar pubkey={context.authorPubkey} size={16} />
+                          {/if}
+                          <span class="parent-quote-author">
+                            {#if context.error === 'deleted'}
+                              <span class="italic">deleted note</span>
+                            {:else if context.error === 'Failed to load'}
+                              a note
+                            {:else}
+                              {context.authorName.startsWith('npub')
+                                ? context.authorName.substring(0, 12) + '...'
+                                : context.authorName}
+                            {/if}
+                          </span>
+                        </div>
+                        {#if context.notePreview && !context.error}
+                          <p class="parent-quote-content">{context.notePreview}</p>
+                        {/if}
+                        <span class="parent-quote-link"> View quoted note → </span>
+                      </a>
+                    {:catch}
+                      <!-- Fallback - simple link -->
+                      <a
+                        href="/{nip19.noteEncode(quotedNoteId)}"
+                        class="parent-quote-embed mb-3 block"
+                      >
+                        <div class="parent-quote-header">
+                          <svg
+                            class="w-4 h-4"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path
+                              stroke-linecap="round"
+                              stroke-linejoin="round"
+                              stroke-width="2"
+                              d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"
+                            />
+                          </svg>
+                          <span class="parent-quote-author">Quoting a note</span>
+                        </div>
+                      </a>
+                    {/await}
+                  {/if}
                 {/if}
 
                 {#if getImageUrls(event).length > 0}
@@ -3228,10 +3872,10 @@
                 {/if}
 
                 <div
-                  class="flex items-center justify-between px-2 sm:px-0 py-1"
+                  class="flex items-center justify-between flex-wrap gap-2 px-2 sm:px-0 py-1"
                   use:lazyLoadAction={event.id}
                 >
-                  <div class="flex items-center space-x-1">
+                  <div class="flex items-center space-x-1 flex-shrink-0">
                     {#if visibleNotes.has(event.id)}
                       <div class="hover:bg-accent-gray rounded-full p-1.5 transition-colors">
                         <NoteTotalLikes {event} />
@@ -3245,12 +3889,9 @@
                         <NoteRepost {event} />
                       </div>
 
-                      <button
-                        class="flex items-center hover:bg-amber-50 rounded-full p-1.5 transition-colors cursor-pointer"
-                        on:click|stopPropagation={() => openZapModal(event)}
-                      >
-                        <NoteTotalZaps {event} />
-                      </button>
+                      <div class="hover:bg-amber-50 rounded-full p-1.5 transition-colors">
+                        <NoteTotalZaps {event} onZapClick={() => openZapModal(event)} />
+                      </div>
                     {:else}
                       <span class="text-caption p-1.5">♡ –</span>
                       <span class="text-caption p-1.5">💬 –</span>
@@ -3259,19 +3900,6 @@
                     {/if}
                   </div>
 
-                  <div class="flex items-center space-x-1">
-                    <button
-                      class="flex items-center text-caption hover:opacity-80 hover:bg-accent-gray rounded-full p-1.5 transition-colors"
-                      on:click={() => copyNoteId(event)}
-                      title="Copy note ID"
-                    >
-                      {#if copiedNoteId === event.id}
-                        <CheckIcon size={16} weight="bold" class="text-green-500" />
-                      {:else}
-                        <CopyIcon size={16} />
-                      {/if}
-                    </button>
-                  </div>
                 </div>
 
                 <div class="px-2 sm:px-0">
@@ -3279,7 +3907,6 @@
                     <FeedComments {event} />
                   {/if}
                 </div>
-              </div>
             </div>
           </article>
         {/each}
@@ -3307,7 +3934,80 @@
 </FeedErrorBoundary>
 
 {#if selectedEvent}
-  <ZapModal bind:open={zapModal} event={selectedEvent} />
+  <ZapModal 
+    bind:open={zapModal} 
+    event={selectedEvent}
+    on:zap-complete={() => selectedEvent && handleZapComplete(selectedEvent.id)}
+  />
+{/if}
+
+<ShareModal 
+  bind:open={shareModalOpen}
+  url={shareUrl}
+  title={shareTitle}
+  imageUrl={shareImageUrl}
+  imageBlob={shareImageBlob}
+  imageName={shareImageName}
+  isGeneratingImage={isGeneratingShareImage}
+  onGenerateImage={shareModalEvent ? generateShareModalImage : null}
+/>
+
+<!-- Image generation loading overlay -->
+{#if isGeneratingImage}
+  <div
+    class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+    style="backdrop-filter: blur(4px);"
+    on:click={() => isGeneratingImage = false}
+    role="button"
+    tabindex="0"
+    on:keydown={(e) => e.key === 'Escape' && (isGeneratingImage = false)}
+  >
+    <div
+      class="bg-input rounded-lg p-6 max-w-sm mx-4 text-center"
+      style="border: 1px solid var(--color-input-border);"
+      on:click|stopPropagation
+      role="dialog"
+    >
+      <div class="animate-spin rounded-full h-10 w-10 border-b-2 border-yellow-500 mx-auto mb-3"></div>
+      <p class="text-base font-semibold mb-1" style="color: var(--color-text-primary);">
+        Generating image...
+      </p>
+      <p class="text-xs mb-3" style="color: var(--color-text-secondary);">
+        This may take a few seconds
+      </p>
+      <button
+        on:click={() => isGeneratingImage = false}
+        class="text-xs px-3 py-1.5 rounded bg-gray-600 hover:bg-gray-500 text-white transition"
+      >
+        Cancel
+      </button>
+    </div>
+  </div>
+{/if}
+
+{#if imageGenerationError}
+  <div
+    class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+    style="backdrop-filter: blur(4px);"
+    on:click={() => imageGenerationError = null}
+  >
+    <div
+      class="bg-input rounded-lg p-6 max-w-sm mx-4"
+      style="border: 1px solid var(--color-input-border);"
+      on:click|stopPropagation
+    >
+      <p class="text-lg font-semibold mb-2 text-red-500">Error</p>
+      <p class="text-sm mb-4" style="color: var(--color-text-primary);">
+        {imageGenerationError}
+      </p>
+      <button
+        on:click={() => imageGenerationError = null}
+        class="w-full px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors"
+      >
+        Close
+      </button>
+    </div>
+  </div>
 {/if}
 
 <svelte:window on:keydown={handleImageModalKeydown} />
@@ -3495,5 +4195,209 @@
   .carousel-slide {
     scroll-snap-align: start;
     scroll-snap-stop: always;
+  }
+
+  /* Zap-popular post golden border animation */
+  .zap-popular-post {
+    animation: golden-pulse 3s ease-in-out infinite;
+    transition: all 0.3s ease;
+  }
+
+  @keyframes golden-pulse {
+    0%, 100% {
+      box-shadow: 0 0 20px rgba(251, 191, 36, 0.4), 0 0 40px rgba(251, 191, 36, 0.2);
+    }
+    50% {
+      box-shadow: 0 0 30px rgba(251, 191, 36, 0.6), 0 0 60px rgba(251, 191, 36, 0.3);
+    }
+  }
+
+  /* Tiered zap glow effects - visible amber glow */
+  /* Tier 1: Soft glow (>500 sats) - Gentle amber hint */
+  .zap-glow-soft {
+    border-radius: 12px;
+    background: linear-gradient(135deg, rgba(251, 191, 36, 0.03) 0%, transparent 100%);
+    box-shadow: 
+      0 0 15px rgba(251, 191, 36, 0.25),
+      0 0 30px rgba(251, 191, 36, 0.12),
+      inset 0 0 20px rgba(251, 191, 36, 0.03);
+    border: 1px solid rgba(251, 191, 36, 0.15);
+    transition: all 0.5s ease-in-out;
+    margin: 0.25rem 0;
+    padding: 0.75rem !important;
+    overflow: hidden; /* Prevent content overflow */
+    max-width: 100%; /* Ensure it doesn't exceed container */
+  }
+
+  /* Tier 2: Medium glow (>1000 sats) - Noticeable warm glow */
+  .zap-glow-medium {
+    border-radius: 12px;
+    background: linear-gradient(135deg, rgba(251, 191, 36, 0.05) 0%, transparent 100%);
+    box-shadow: 
+      0 0 20px rgba(251, 191, 36, 0.35),
+      0 0 40px rgba(251, 191, 36, 0.18),
+      0 0 60px rgba(251, 191, 36, 0.08),
+      inset 0 0 30px rgba(251, 191, 36, 0.04);
+    border: 1px solid rgba(251, 191, 36, 0.25);
+    transition: all 0.5s ease-in-out;
+    margin: 0.25rem 0;
+    padding: 0.75rem !important;
+    overflow: hidden; /* Prevent content overflow */
+    max-width: 100%; /* Ensure it doesn't exceed container */
+  }
+
+  /* Tier 3: Bright glow (>2000 sats) - Prominent golden aura */
+  .zap-glow-bright {
+    border-radius: 12px;
+    background: linear-gradient(135deg, rgba(251, 191, 36, 0.08) 0%, rgba(245, 158, 11, 0.03) 100%);
+    box-shadow: 
+      0 0 25px rgba(251, 191, 36, 0.45),
+      0 0 50px rgba(251, 191, 36, 0.25),
+      0 0 75px rgba(251, 191, 36, 0.12),
+      0 0 100px rgba(251, 191, 36, 0.06),
+      inset 0 0 40px rgba(251, 191, 36, 0.05);
+    border: 1px solid rgba(251, 191, 36, 0.35);
+    transition: all 0.5s ease-in-out;
+    animation: subtle-glow-pulse 4s ease-in-out infinite;
+    margin: 0.25rem 0;
+    padding: 0.75rem !important;
+    overflow: hidden; /* Prevent content overflow */
+    max-width: 100%; /* Ensure it doesn't exceed container */
+  }
+
+  /* Subtle pulse animation for highest tier */
+  @keyframes subtle-glow-pulse {
+    0%, 100% {
+      box-shadow: 
+        0 0 25px rgba(251, 191, 36, 0.45),
+        0 0 50px rgba(251, 191, 36, 0.25),
+        0 0 75px rgba(251, 191, 36, 0.12),
+        0 0 100px rgba(251, 191, 36, 0.06),
+        inset 0 0 40px rgba(251, 191, 36, 0.05);
+    }
+    50% {
+      box-shadow: 
+        0 0 35px rgba(251, 191, 36, 0.55),
+        0 0 60px rgba(251, 191, 36, 0.30),
+        0 0 85px rgba(251, 191, 36, 0.15),
+        0 0 110px rgba(251, 191, 36, 0.08),
+        inset 0 0 50px rgba(251, 191, 36, 0.07);
+    }
+  }
+
+  /* Accessibility: Respect user preference for reduced motion */
+  @media (prefers-reduced-motion: reduce) {
+    .zap-glow-bright {
+      animation: none;
+    }
+  }
+
+  /* Lightning bolt rain animation ⚡️ */
+  .zap-bolt-animation {
+    position: relative;
+    border-radius: 12px;
+    overflow: hidden;
+    animation: zap-flash-bg 0.15s ease-out;
+  }
+
+  /* Lightning flash background */
+  @keyframes zap-flash-bg {
+    0% { background-color: rgba(255, 215, 0, 0.3); }
+    100% { background-color: transparent; }
+  }
+
+  /* Container for lightning bolts */
+  .zap-bolt-animation::before {
+    content: '⚡️⚡️⚡️⚡️⚡️⚡️⚡️⚡️';
+    position: absolute;
+    top: -40px;
+    left: 0;
+    right: 0;
+    font-size: 24px;
+    letter-spacing: 8px;
+    text-align: center;
+    animation: lightning-rain 0.6s ease-in forwards;
+    pointer-events: none;
+    z-index: 20;
+    filter: drop-shadow(0 0 8px rgba(255, 215, 0, 0.9)) drop-shadow(0 0 15px rgba(255, 215, 0, 0.6));
+    opacity: 0;
+  }
+
+  /* Second wave of lightning - staggered */
+  .zap-bolt-animation::after {
+    content: '⚡️⚡️⚡️⚡️⚡️⚡️';
+    position: absolute;
+    top: -30px;
+    left: 15%;
+    right: 15%;
+    font-size: 20px;
+    letter-spacing: 12px;
+    text-align: center;
+    animation: lightning-rain 0.7s ease-in 0.1s forwards;
+    pointer-events: none;
+    z-index: 19;
+    filter: drop-shadow(0 0 6px rgba(255, 215, 0, 0.8)) drop-shadow(0 0 12px rgba(255, 215, 0, 0.5));
+    opacity: 0;
+  }
+
+  @keyframes lightning-rain {
+    0% {
+      opacity: 0;
+      transform: translateY(0) scaleY(0.5);
+    }
+    15% {
+      opacity: 1;
+      transform: translateY(20px) scaleY(1.2);
+    }
+    30% {
+      opacity: 1;
+      transform: translateY(60px) scaleY(1);
+    }
+    50% {
+      opacity: 0.9;
+      transform: translateY(120px) scaleY(0.9);
+    }
+    70% {
+      opacity: 0.6;
+      transform: translateY(200px) scaleY(0.8);
+    }
+    100% {
+      opacity: 0;
+      transform: translateY(350px) scaleY(0.5);
+    }
+  }
+
+  /* Golden border pulse effect */
+  .zap-bolt-animation {
+    box-shadow: 
+      0 0 0 2px rgba(255, 215, 0, 0.8),
+      0 0 20px rgba(255, 215, 0, 0.6),
+      0 0 40px rgba(255, 215, 0, 0.3),
+      inset 0 0 30px rgba(255, 215, 0, 0.1);
+    animation: zap-flash-bg 0.15s ease-out, zap-border-pulse 2s ease-out forwards;
+  }
+
+  @keyframes zap-border-pulse {
+    0% {
+      box-shadow: 
+        0 0 0 3px rgba(255, 215, 0, 1),
+        0 0 30px rgba(255, 215, 0, 0.8),
+        0 0 60px rgba(255, 215, 0, 0.5),
+        inset 0 0 40px rgba(255, 215, 0, 0.2);
+    }
+    30% {
+      box-shadow: 
+        0 0 0 2px rgba(255, 215, 0, 0.8),
+        0 0 20px rgba(255, 215, 0, 0.6),
+        0 0 40px rgba(255, 215, 0, 0.3),
+        inset 0 0 25px rgba(255, 215, 0, 0.1);
+    }
+    100% {
+      box-shadow: 
+        0 0 0 0px rgba(255, 215, 0, 0),
+        0 0 0px rgba(255, 215, 0, 0),
+        0 0 0px rgba(255, 215, 0, 0),
+        inset 0 0 0px rgba(255, 215, 0, 0);
+    }
   }
 </style>

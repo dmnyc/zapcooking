@@ -12,7 +12,11 @@
   import NotificationBell from './NotificationBell.svelte';
   import WalletBalance from './WalletBalance.svelte';
   import UserSidePanel from './UserSidePanel.svelte';
+  import LightningIcon from 'phosphor-svelte/lib/Lightning';
   import { timerStore } from '$lib/timerStore';
+  import { navBalanceVisible, walletConnected } from '$lib/wallet';
+  import { weblnConnected } from '$lib/wallet/webln';
+  import { bitcoinConnectEnabled, bitcoinConnectWalletInfo } from '$lib/wallet/bitcoinConnect';
   import { timerWidgetOpen } from '$lib/stores/timerWidget';
   import TimerWidget from './TimerWidget.svelte';
   import CreateMenuButton from './CreateMenuButton.svelte';
@@ -51,6 +55,10 @@
   // Reactive resolved theme for logo switching
   $: resolvedTheme = $theme === 'system' ? theme.getResolvedTheme() : $theme;
   $: isDarkMode = resolvedTheme === 'dark';
+  $: hasNavWallet =
+    $walletConnected ||
+    $weblnConnected ||
+    ($bitcoinConnectEnabled && $bitcoinConnectWalletInfo.connected);
 
   function toggleTimerWidget() {
     timerWidgetOpen.update((open) => !open);
@@ -140,11 +148,22 @@
 
     <CreateMenuButton variant="header" />
 
-    <!-- Wallet Balance - only show when logged in and wallet connected -->
-    {#if $userPublickey}
-      <div class="hidden sm:block">
-        <WalletBalance />
-      </div>
+    <!-- Wallet Balance - only show when logged in -->
+    {#if $userPublickey && $navBalanceVisible}
+      {#if hasNavWallet}
+        <div class="hidden sm:block">
+          <WalletBalance />
+        </div>
+      {:else}
+        <a
+          href="/wallet"
+          class="hidden sm:flex items-center gap-2 px-3 py-1.5 min-w-[154px] rounded-full text-sm font-medium transition-colors hover:bg-accent-gray"
+          style="background-color: var(--color-input-bg); color: var(--color-text-primary); border: 1px solid var(--color-input-border);"
+        >
+          <LightningIcon size={14} weight="fill" class="text-amber-500" aria-hidden="true" />
+          <span>Set up a Wallet</span>
+        </a>
+      {/if}
     {/if}
 
     <!-- Notifications - only show when logged in -->

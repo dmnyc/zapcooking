@@ -1,16 +1,24 @@
 <script lang="ts">
   import Modal from './Modal.svelte';
   import PostComposer from './PostComposer.svelte';
+  import CloseIcon from 'phosphor-svelte/lib/XCircle';
+  import { quotedNoteStore, clearQuotedNote } from '$lib/postComposerStore';
 
   export let open = false;
 
   type RelaySelection = 'all' | 'garden' | 'pantry' | 'garden-pantry';
   let selectedRelay: RelaySelection = 'all';
+
+  function handleClose() {
+    open = false;
+    clearQuotedNote();
+  }
 </script>
 
-<Modal bind:open allowOverflow={true}>
-  <svelte:fragment slot="title">
-    <div class="flex items-center justify-end gap-4 w-full">
+<Modal bind:open allowOverflow={true} noHeader={true}>
+  <div class="flex flex-col gap-4">
+    <!-- Header: relay selector on left, X on right -->
+    <div class="flex items-center justify-between">
       <div class="flex items-center gap-2">
         <label for="relay-select" class="text-sm text-caption whitespace-nowrap">Post to:</label>
         <select
@@ -29,10 +37,24 @@
           <option value="garden-pantry">🌱🏪 Garden + Pantry</option>
         </select>
       </div>
-    </div>
-  </svelte:fragment>
 
-  <PostComposer variant="modal" {selectedRelay} on:close={() => (open = false)} />
+      <button
+        class="cursor-pointer hover:opacity-80 transition-opacity"
+        style="color: var(--color-text-primary)"
+        on:click={handleClose}
+        aria-label="Close"
+      >
+        <CloseIcon size={24} />
+      </button>
+    </div>
+
+    <PostComposer 
+      variant="modal" 
+      {selectedRelay} 
+      initialQuotedNote={$quotedNoteStore}
+      on:close={handleClose} 
+    />
+  </div>
 </Modal>
 
 <style>
