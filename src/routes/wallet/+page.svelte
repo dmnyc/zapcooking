@@ -2238,17 +2238,19 @@
       </div>
     {/if}
 
-    {#if successMessage}
-      <div
-        class="fixed top-4 left-4 right-4 max-w-2xl mx-auto p-4 rounded-lg flex items-center gap-3 shadow-xl border z-[100]"
-        style="background-color: var(--color-bg-primary); border-color: #22c55e; color: #22c55e;"
-      >
-        <CheckCircleIcon size={20} class="flex-shrink-0" />
-        <span class="flex-1 text-sm">{successMessage}</span>
-        <button
-          class="text-sm underline flex-shrink-0 hover:opacity-80"
-          on:click={() => (successMessage = '')}>Dismiss</button
+    {#if successMessage && portalTarget}
+      <div use:portal={portalTarget}>
+        <div
+          class="fixed top-4 left-4 right-4 max-w-2xl mx-auto p-4 rounded-lg flex items-center gap-3 shadow-xl border z-[9999]"
+          style="background-color: var(--color-bg-primary); border-color: #22c55e; color: #22c55e;"
         >
+          <CheckCircleIcon size={20} class="flex-shrink-0" />
+          <span class="flex-1 text-sm">{successMessage}</span>
+          <button
+            class="text-sm underline flex-shrink-0 hover:opacity-80"
+            on:click={() => (successMessage = '')}>Dismiss</button
+          >
+        </div>
       </div>
     {/if}
 
@@ -4755,12 +4757,13 @@
                     <!-- Segmented address display -->
                     <div class="p-4 rounded-lg bg-input">
                       <p class="text-xs text-caption mb-2 text-center">Sending to:</p>
-                      <div class="font-mono text-sm text-primary-color text-center leading-relaxed">
+                      <div
+                        class="font-mono text-sm text-primary-color flex flex-wrap justify-center gap-x-2 gap-y-1"
+                      >
                         {#each formatAddressSegments(sendInput.trim()) as segment, i}
                           <span class={i % 2 === 0 ? 'text-primary-color' : 'text-amber-500'}
                             >{segment}</span
-                          >{#if (i + 1) % 8 === 0 && i < formatAddressSegments(sendInput.trim()).length - 1}<br
-                            />{:else if i < formatAddressSegments(sendInput.trim()).length - 1}{' '}{/if}
+                          >
                         {/each}
                       </div>
                     </div>
@@ -4999,12 +5002,13 @@
                   <!-- Address (segmented for easier verification) -->
                   <div class="p-4 rounded-lg bg-input">
                     <p class="text-xs text-caption mb-2 text-center">Bitcoin Address</p>
-                    <div class="font-mono text-sm text-primary-color text-center leading-relaxed">
+                    <div
+                      class="font-mono text-sm text-primary-color flex flex-wrap justify-center gap-x-2 gap-y-1"
+                    >
                       {#each formatAddressSegments(onchainAddress) as segment, i}
                         <span class={i % 2 === 0 ? 'text-primary-color' : 'text-amber-500'}
                           >{segment}</span
-                        >{#if (i + 1) % 8 === 0 && i < formatAddressSegments(onchainAddress).length - 1}<br
-                          />{:else if i < formatAddressSegments(onchainAddress).length - 1}{' '}{/if}
+                        >
                       {/each}
                     </div>
                   </div>

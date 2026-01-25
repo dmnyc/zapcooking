@@ -135,11 +135,11 @@ h3 {
 }
 
 .nav-active {
-  background-color: color-mix(in srgb, var(--color-accent-gray) 50%, transparent);
+  background-color: var(--color-input-bg);
 }
 
 .nav-hover:hover {
-  background-color: color-mix(in srgb, var(--color-accent-gray) 30%, transparent);
+  background-color: color-mix(in srgb, var(--color-input-bg) 70%, transparent);
 }
 
 .text-caption {
