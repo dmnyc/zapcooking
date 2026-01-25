@@ -329,7 +329,6 @@
 <style>
   /* Safe area support for Android/iOS edge-to-edge displays */
   .safe-area-container {
-    padding-top: env(safe-area-inset-top, 0px);
     padding-left: env(safe-area-inset-left, 0px);
     padding-right: env(safe-area-inset-right, 0px);
   }
@@ -343,6 +342,7 @@
 
   /* Header with frosted glass effect */
   .header-blur {
+    padding-top: env(safe-area-inset-top, 0px);
     background-color: color-mix(in srgb, var(--color-bg-primary) 70%, transparent);
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
