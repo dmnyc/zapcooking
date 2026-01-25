@@ -28,8 +28,8 @@
 </script>
 
 <nav
-  class="lg:hidden pt-2 bg-input w-full fixed bottom-0 left-0 grid grid-cols-5 grid-rows-1 text-center print:hidden bottom-nav-safe"
-  style="color: var(--color-text-primary); border-top: 1px solid var(--color-input-border);"
+  class="lg:hidden bg-input w-full fixed left-0 right-0 z-40 grid grid-cols-5 text-center print:hidden"
+  style="color: var(--color-text-primary); border-top: 1px solid var(--color-input-border); bottom: env(safe-area-inset-bottom, 0px); padding: 0.5rem 0;"
 >
   <a href="/community" class="flex flex-col items-center justify-center hover:text-primary">
     <ChatCircleDotsIcon class="self-center" size={24} />
@@ -72,13 +72,3 @@
     <span class="sr-only">Notifications</span>
   </a>
 </nav>
-
-<style>
-  /* Add safe area padding for bottom navigation bar on Android/iOS */
-  .bottom-nav-safe {
-    /* Always keep a little space below icons, plus device safe-area */
-    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 0.75rem);
-    padding-left: env(safe-area-inset-left, 0px);
-    padding-right: env(safe-area-inset-right, 0px);
-  }
-</style>

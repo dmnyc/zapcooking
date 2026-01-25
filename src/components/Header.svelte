@@ -10,16 +10,14 @@
   import CustomAvatar from './CustomAvatar.svelte';
   import { theme } from '$lib/themeStore';
   import WalletBalance from './WalletBalance.svelte';
-  import UserSidePanel from './UserSidePanel.svelte';
   import LightningIcon from 'phosphor-svelte/lib/Lightning';
+  import { userSidePanelOpen } from '$lib/stores/userSidePanel';
   import { timerStore } from '$lib/timerStore';
   import { navBalanceVisible, walletConnected } from '$lib/wallet';
   import { weblnConnected } from '$lib/wallet/webln';
   import { bitcoinConnectEnabled, bitcoinConnectWalletInfo } from '$lib/wallet/bitcoinConnect';
   import { timerWidgetOpen } from '$lib/stores/timerWidget';
-  import TimerWidget from './TimerWidget.svelte';
 
-  let sidePanelOpen = false;
   let searchActive = false;
   let isLoading = true;
 
@@ -156,12 +154,11 @@
       {#if $userPublickey !== ''}
         <button
           class="flex cursor-pointer rounded-full transition-transform duration-200 hover:scale-105 active:scale-95"
-          on:click={() => (sidePanelOpen = true)}
+          on:click={() => userSidePanelOpen.set(true)}
           aria-label="Open user menu"
         >
           <CustomAvatar pubkey={$userPublickey} size={36} imageUrl={$userProfilePictureOverride} />
         </button>
-        <UserSidePanel bind:open={sidePanelOpen} />
       {:else}
         <a
           href="/login"
@@ -173,9 +170,6 @@
     </div>
   </div>
 </div>
-
-<!-- Timer Widget -->
-<TimerWidget bind:open={$timerWidgetOpen} />
 
 <style>
   .signin-button:hover {

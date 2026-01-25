@@ -23,6 +23,9 @@
   import { weblnConnected } from '$lib/wallet/webln';
   import { bitcoinConnectEnabled, bitcoinConnectWalletInfo } from '$lib/wallet/bitcoinConnect';
   import { postComposerOpen } from '$lib/postComposerStore';
+  import { timerWidgetOpen } from '$lib/stores/timerWidget';
+  import TimerWidget from '../components/TimerWidget.svelte';
+  import UserSidePanel from '../components/UserSidePanel.svelte';
   // Import sync service to initialize offline sync functionality
   import '$lib/syncService';
   // Import platform detection to initialize early
@@ -313,6 +316,8 @@
       </div>
       <CreateMenuButton variant="floating" />
       <BottomNav />
+      <TimerWidget bind:open={$timerWidgetOpen} />
+      <UserSidePanel />
       <PostModal bind:open={$postComposerOpen} />
       <WalletWelcomeModal bind:open={walletWelcomeOpen} onDismiss={markWalletWelcomeSeen} />
     </div>
