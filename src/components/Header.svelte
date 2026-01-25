@@ -85,7 +85,7 @@
 {/if}
 
 <!-- Mobile-first layout -->
-<div class="relative flex gap-4 sm:gap-9 justify-between overflow-visible">
+<div class="relative flex gap-4 sm:gap-9 lg:gap-12 justify-between overflow-visible">
   <a href="/recent" class="flex-none lg:hidden">
     <img
       src={isDarkMode ? '/zap_cooking_logo_white.svg' : SVGNostrCookingWithText}
@@ -95,7 +95,7 @@
   </a>
 
   <div
-    class="hidden sm:flex flex-1 self-center print:hidden max-w-2xl min-w-[280px] lg:min-w-[320px]"
+    class="hidden sm:flex flex-1 self-center print:hidden max-w-2xl min-w-[280px] lg:min-w-[500px]"
   >
     <TagsSearchAutocomplete
       placeholderString={'Search recipes, tags, or users...'}

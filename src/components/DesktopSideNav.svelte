@@ -111,19 +111,16 @@
   }
 </script>
 
-<aside class="hidden lg:block lg:w-72 xl:w-80">
-  <div
-    class="sticky top-2 max-h-[calc(100vh-1rem)] overflow-y-auto p-3"
-    style="background-color: var(--color-bg-primary);"
-  >
-    <a href="/community" class="block px-2 py-2 rounded-xl hover:bg-accent-gray transition-colors">
+<aside class="hidden lg:block lg:w-72 xl:w-80 fixed top-0 left-0 h-screen z-10">
+  <div class="h-full overflow-y-auto p-3" style="background-color: var(--color-bg-primary);">
+    <!-- Logo aligned with header position -->
+    <a href="/community" class="block pl-2 py-3">
       <img
         src={isDarkMode ? '/zap_cooking_logo_white.svg' : SVGNostrCookingWithText}
-        class="w-44 my-1"
+        class="w-40"
         alt="Zap Cooking"
       />
     </a>
-
     <nav class="flex flex-col gap-4 mt-4">
       <div>
         <h3
