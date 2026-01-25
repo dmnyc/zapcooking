@@ -156,11 +156,21 @@
 
   onMount(() => {
     if (typeof window === 'undefined' || variant !== 'floating') return;
+    // Listen to scroll on the app-scroll container (not window) since that's where scrolling happens
+    const scrollContainer = document.getElementById('app-scroll');
+    if (scrollContainer) {
+      scrollContainer.addEventListener('scroll', handleScroll, { passive: true });
+    }
+    // Also listen to window scroll as fallback
     window.addEventListener('scroll', handleScroll, { passive: true });
   });
 
   onDestroy(() => {
     if (typeof window === 'undefined' || variant !== 'floating') return;
+    const scrollContainer = document.getElementById('app-scroll');
+    if (scrollContainer) {
+      scrollContainer.removeEventListener('scroll', handleScroll);
+    }
     window.removeEventListener('scroll', handleScroll);
     if (scrollTimeout) {
       clearTimeout(scrollTimeout);
@@ -172,6 +182,7 @@
 {#if isSignedIn}
   <div
     class={`create-menu ${variant === 'floating' ? 'create-menu-floating' : 'create-menu-header'} ${className}`}
+    role="presentation"
     on:pointerdown={handlePointerDown}
     on:pointerup={handlePointerUp}
     on:pointercancel={handlePointerUp}
@@ -210,6 +221,7 @@
         class={`create-menu-panel ${
           variant === 'floating' ? 'create-menu-panel-floating' : 'create-menu-panel-header'
         }`}
+        role="presentation"
         style="border-color: var(--color-input-border);"
         on:mouseenter={() => {
           menuHovering = true;
@@ -246,7 +258,8 @@
   .create-menu-floating {
     position: fixed;
     right: 1.25rem;
-    bottom: calc(72px + var(--safe-area-inset-bottom, 0px) + var(--timer-widget-offset, 0px));
+    /* Bottom nav is 40px tall, positioned at safe-area-inset-bottom */
+    bottom: calc(40px + env(safe-area-inset-bottom, 0px) + 1rem + var(--timer-widget-offset, 0px));
     z-index: 40;
   }
 
@@ -363,8 +376,14 @@
   }
 
   @media (min-width: 1024px) {
-    .create-menu-floating {
+    /* Desktop: no bottom nav, so position closer to bottom */
+    .create-menu-header {
       display: none;
+    }
+
+    .create-menu-floating {
+      display: inline-flex;
+      bottom: calc(1.25rem + var(--timer-widget-offset, 0px));
     }
   }
 </style>

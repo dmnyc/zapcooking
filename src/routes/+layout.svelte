@@ -7,6 +7,8 @@
   import { goto } from '$app/navigation';
   import { userPublickey, ndk } from '$lib/nostr';
   import BottomNav from '../components/BottomNav.svelte';
+  import DesktopSideNav from '../components/DesktopSideNav.svelte';
+  import NotificationSubscriber from '../components/NotificationSubscriber.svelte';
   import Footer from '../components/Footer.svelte';
   import CreateMenuButton from '../components/CreateMenuButton.svelte';
   import PostModal from '../components/PostModal.svelte';
@@ -21,6 +23,10 @@
   import { weblnConnected } from '$lib/wallet/webln';
   import { bitcoinConnectEnabled, bitcoinConnectWalletInfo } from '$lib/wallet/bitcoinConnect';
   import { postComposerOpen } from '$lib/postComposerStore';
+  import { timerWidgetOpen } from '$lib/stores/timerWidget';
+  import TimerWidget from '../components/TimerWidget.svelte';
+  import UserSidePanel from '../components/UserSidePanel.svelte';
+  import MobileSearchOverlay from '../components/MobileSearchOverlay.svelte';
   // Import sync service to initialize offline sync functionality
   import '$lib/syncService';
   // Import platform detection to initialize early
@@ -28,6 +34,8 @@
 
   // Accept props from SvelteKit to prevent warnings
   export let data: LayoutData = {} as LayoutData;
+  // Also reference it to satisfy svelte-check (it can be unused in markup)
+  $: data;
 
   // Site-wide meta tag defaults
   const siteUrl = 'https://zap.cooking';
@@ -285,21 +293,35 @@
 
 <ErrorBoundary fallback="Something went wrong with the page layout. Please refresh the page.">
   <div
-    class="h-[100%] scroll-smooth overflow-x-hidden transition-colors duration-200 safe-area-container"
+    class="h-screen scroll-smooth overflow-hidden transition-colors duration-200 safe-area-container"
   >
     <OfflineIndicator />
-    <div class="flex h-full">
-      <div class="mx-auto flex-1 pt-2 print:pt-[0] px-4 max-w-full safe-area-content">
-        <Header />
-        <div class="w-full mt-6 pb-24 lg:pb-8">
-          <slot />
+    <div class="flex flex-col h-full overflow-hidden">
+      <NotificationSubscriber />
+      <!-- Fixed sidebar -->
+      <DesktopSideNav />
+      <!-- Full-page scroll container -->
+      <div
+        id="app-scroll"
+        class="flex-1 min-h-0 overflow-y-auto lg:ml-72 xl:ml-80"
+        style="background-color: var(--color-bg-primary);"
+      >
+        <!-- Sticky header with blur -->
+        <div class="header-blur sticky top-0 z-20 py-3 px-4">
+          <Header />
         </div>
-        <Footer />
-        <CreateMenuButton variant="floating" />
-        <BottomNav />
-        <PostModal bind:open={$postComposerOpen} />
-        <WalletWelcomeModal bind:open={walletWelcomeOpen} onDismiss={markWalletWelcomeSeen} />
+        <div class="px-4 pb-24 lg:pb-8">
+          <slot />
+          <Footer />
+        </div>
       </div>
+      <CreateMenuButton variant="floating" />
+      <BottomNav />
+      <TimerWidget bind:open={$timerWidgetOpen} />
+      <UserSidePanel />
+      <MobileSearchOverlay />
+      <PostModal bind:open={$postComposerOpen} />
+      <WalletWelcomeModal bind:open={walletWelcomeOpen} onDismiss={markWalletWelcomeSeen} />
     </div>
   </div>
 </ErrorBoundary>
@@ -316,6 +338,27 @@
   @media (max-width: 1023px) {
     .safe-area-content {
       padding-bottom: env(safe-area-inset-bottom, 0px);
+    }
+  }
+
+  /* Header with frosted glass effect */
+  .header-blur {
+    background-color: color-mix(in srgb, var(--color-bg-primary) 70%, transparent);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
+
+  /* Left edge gradient for smooth transition from sidebar (desktop only) */
+  @media (min-width: 1024px) {
+    .header-blur::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 10%;
+      background: linear-gradient(to right, var(--color-bg-primary) 0%, transparent 100%);
+      pointer-events: none;
     }
   }
 </style>
