@@ -17,6 +17,7 @@
   import ShoppingCartIcon from 'phosphor-svelte/lib/ShoppingCart';
   import WalletIcon from 'phosphor-svelte/lib/Wallet';
   import TimerIcon from 'phosphor-svelte/lib/Timer';
+  import CalculatorIcon from 'phosphor-svelte/lib/Calculator';
   import { timerWidgetOpen } from '$lib/stores/timerWidget';
 
   $: pathname = $page.url.pathname;
@@ -173,20 +174,6 @@
           My Kitchen
         </h3>
         <ul class="flex flex-col gap-1">
-          <li>
-            <button
-              type="button"
-              class={linkClasses($timerWidgetOpen)}
-              style="color: var(--color-text-primary);"
-              aria-pressed={$timerWidgetOpen}
-              on:click={() => timerWidgetOpen.update((open) => !open)}
-            >
-              <span class="relative flex items-center justify-center w-9 h-9 rounded-xl">
-                <TimerIcon size={20} weight={$timerWidgetOpen ? 'fill' : 'regular'} />
-              </span>
-              <span class="font-medium">Timer</span>
-            </button>
-          </li>
           {#each kitchen as item (item.href)}
             {@const active = item.match ? item.match(pathname) : pathname === item.href}
             <li>
@@ -216,6 +203,43 @@
             </li>
           {/each}
         </ul>
+      </div>
+
+      <!-- Tools Section -->
+      <div class="mt-4">
+        <h3
+          class="px-3 pb-2 font-semibold uppercase tracking-wider"
+          style="color: var(--color-caption); font-size: 12px;"
+        >
+          Tools
+        </h3>
+        <div class="flex gap-2 px-3">
+          <button
+            type="button"
+            class="flex-1 flex flex-col items-center gap-1.5 py-3 px-2 rounded-xl transition-colors cursor-pointer {$timerWidgetOpen
+              ? 'nav-active'
+              : 'nav-hover'}"
+            style="color: var(--color-text-primary);"
+            on:click={() => timerWidgetOpen.update((open) => !open)}
+          >
+            <TimerIcon size={22} weight={$timerWidgetOpen ? 'fill' : 'regular'} />
+            <span class="text-xs font-medium">Timer</span>
+          </button>
+          <a
+            href="/unit-converter"
+            class="flex-1 flex flex-col items-center gap-1.5 py-3 px-2 rounded-xl transition-colors cursor-pointer {pathname ===
+            '/unit-converter'
+              ? 'nav-active'
+              : 'nav-hover'}"
+            style="color: var(--color-text-primary);"
+          >
+            <CalculatorIcon
+              size={22}
+              weight={pathname === '/unit-converter' ? 'fill' : 'regular'}
+            />
+            <span class="text-xs font-medium">Converter</span>
+          </a>
+        </div>
       </div>
     </nav>
   </div>

@@ -342,10 +342,16 @@
 
   /* Header with frosted glass effect */
   .header-blur {
-    padding-top: env(safe-area-inset-top, 0px);
     background-color: color-mix(in srgb, var(--color-bg-primary) 70%, transparent);
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
+  }
+
+  /* Safe area padding for header on mobile */
+  @media (max-width: 1023px) {
+    .header-blur {
+      padding-top: env(safe-area-inset-top, 0px);
+    }
   }
 
   /* Left edge gradient for smooth transition from sidebar (desktop only) */

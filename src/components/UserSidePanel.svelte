@@ -20,7 +20,7 @@
   import MoonIcon from 'phosphor-svelte/lib/Moon';
   import GearIcon from 'phosphor-svelte/lib/Gear';
   import SignOutIcon from 'phosphor-svelte/lib/SignOut';
-  import ToolboxIcon from 'phosphor-svelte/lib/Toolbox';
+  import WrenchIcon from 'phosphor-svelte/lib/Wrench';
   import CaretDownIcon from 'phosphor-svelte/lib/CaretDown';
   import CalculatorIcon from 'phosphor-svelte/lib/Calculator';
   import StorefrontIcon from 'phosphor-svelte/lib/Storefront';
@@ -125,7 +125,7 @@
     close();
   }
 
-  function toggleToolbox(e: Event) {
+  function toggleTools(e: Event) {
     e.preventDefault();
     e.stopPropagation();
     toolboxExpanded = !toolboxExpanded;
@@ -358,17 +358,17 @@
         </ul>
       </div>
 
-      <!-- Section: Toolbox -->
+      <!-- Section: Tools -->
       <div class="mb-4">
         <button
-          on:click={toggleToolbox}
+          on:click={toggleTools}
           class="w-full flex items-center justify-between px-4 py-3 rounded-xl hover:bg-opacity-50 transition-colors cursor-pointer"
           style="color: var(--color-text-primary);"
           aria-expanded={toolboxExpanded}
         >
           <div class="flex items-center gap-4">
-            <ToolboxIcon size={22} />
-            <span class="font-medium">Toolbox</span>
+            <WrenchIcon size={22} />
+            <span class="font-medium">Tools</span>
           </div>
           <CaretDownIcon
             size={18}
