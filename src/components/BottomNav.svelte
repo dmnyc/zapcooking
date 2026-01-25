@@ -3,7 +3,7 @@
   import ChatCircleDotsIcon from 'phosphor-svelte/lib/ChatCircleDots';
   import BellIcon from 'phosphor-svelte/lib/Bell';
   import CompassIcon from 'phosphor-svelte/lib/Compass';
-  import LightningIcon from 'phosphor-svelte/lib/Lightning';
+  import WalletIcon from 'phosphor-svelte/lib/Wallet';
   import { page } from '$app/stores';
   import { walletConnected } from '$lib/wallet';
   import { weblnConnected } from '$lib/wallet/webln';
@@ -45,7 +45,7 @@
   </a>
   <a href="/wallet" class="flex flex-col items-center justify-center hover:text-primary">
     <span class="relative self-center">
-      <LightningIcon size={24} />
+      <WalletIcon size={24} />
       {#if !hasWallet}
         <span
           class="absolute -top-2 -right-2 w-4 h-4 rounded-full bg-amber-500 border-2 border-input"

@@ -134,6 +134,14 @@ h3 {
   background-color: var(--color-accent-gray) !important;
 }
 
+.nav-active {
+  background-color: color-mix(in srgb, var(--color-accent-gray) 50%, transparent);
+}
+
+.nav-hover:hover {
+  background-color: color-mix(in srgb, var(--color-accent-gray) 30%, transparent);
+}
+
 .text-caption {
   color: var(--color-caption) !important;
 }

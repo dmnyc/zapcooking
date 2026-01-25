@@ -94,7 +94,9 @@
     />
   </a>
 
-  <div class="hidden sm:flex flex-1 self-center print:hidden max-w-2xl">
+  <div
+    class="hidden sm:flex flex-1 self-center print:hidden max-w-2xl min-w-[280px] lg:min-w-[320px]"
+  >
     <TagsSearchAutocomplete
       placeholderString={'Search recipes, tags, or users...'}
       action={openTag}
