@@ -39,6 +39,7 @@
   import ShareModal from './ShareModal.svelte';
   import PostActionsMenu from './PostActionsMenu.svelte';
   import NoteContent from './NoteContent.svelte';
+  import VideoPreview from './VideoPreview.svelte';
   import AuthorName from './AuthorName.svelte';
   import { generateNoteImage, generateImageFilename, extractNostrReferences, decodeNostrReference, type EngagementData as ShareEngagementData, type ReferencedNote } from '$lib/shareNoteImage';
   import { optimizeImageUrl, getOptimalFormat } from '$lib/imageOptimizer';
@@ -491,7 +492,8 @@
   let imageGenerationError: string | null = null;
   let expandedParentNotes: { [eventId: string]: boolean } = {}; // Track expanded parent notes
   let parentNoteCache: { [eventId: string]: NDKEvent | null } = {}; // Cache full parent notes
-  let foodFilterEnabled = true; // Toggle for food filtering in Following/Replies modes
+  // Toggle for food filtering - defaults to OFF for profile view (show all posts), ON for other modes
+  let foodFilterEnabled = !authorPubkey;
 
   // Modals
   let zapModal = false;
@@ -601,14 +603,16 @@
 
     switch (mode) {
       case 'initial':
-        // Initial load: last 24 hours (reduced from 7 days for faster load)
-        return { since: now - ONE_DAY_SECONDS };
+        // Initial load: last 7 days for better content discovery
+        return { since: now - SEVEN_DAYS_SECONDS };
 
       case 'pagination':
-        // Pagination: smaller window based on oldest event
+        // Pagination: larger window based on oldest event
         const oldestTime = events[events.length - 1]?.created_at || now;
+        // Extend to 30 days max for deeper pagination
+        const THIRTY_DAYS_SECONDS = 30 * 24 * 60 * 60;
         return {
-          since: Math.max(oldestTime - ONE_DAY_SECONDS, now - SEVEN_DAYS_SECONDS), // Max 7 days back
+          since: Math.max(oldestTime - SEVEN_DAYS_SECONDS, now - THIRTY_DAYS_SECONDS), // Max 30 days back
           until: oldestTime - 1
         };
 
@@ -1511,7 +1515,7 @@
             followedPubkeysForRealtime = primalFollows;
             
             const { events: primalEvents } = await fetchFeedFromPrimal($ndk, primalFollows, {
-              limit: 100,
+              limit: 300, // Increased from 100 for better initial load
               since: sevenDaysAgo(),
               includeReplies: false
             });
@@ -1582,21 +1586,27 @@
         // ═══════════════════════════════════════════════════════════════
         // OUTBOX MODEL FALLBACK - Use when Primal fails or returns too few
         // ═══════════════════════════════════════════════════════════════
-        const result: OutboxFetchResult = await fetchFollowingEvents($ndk, $userPublickey, {
+        const outboxOptions: any = {
           since: timeWindow.since,
           kinds: [1],
-          limit: 50, // Reduced since we're getting targeted results
+          limit: foodFilterEnabled ? 200 : 300, // Fetch more when showing all posts
           timeoutMs: 5000,
-          maxRelays: 10, // Top 10 relays by coverage
-          additionalFilter: {
+          maxRelays: 10 // Top 10 relays by coverage
+        };
+        
+        // Only add food hashtag filter when food filter is enabled
+        if (foodFilterEnabled) {
+          outboxOptions.additionalFilter = {
             '#t': FOOD_HASHTAGS // Server-side food filtering!
-          }
-        });
+          };
+        }
+        
+        const result: OutboxFetchResult = await fetchFollowingEvents($ndk, $userPublickey, outboxOptions);
 
         console.log('[Feed] Raw events from outbox:', result.events.length);
 
         console.log(
-          `[Feed] Outbox fetch (food-filtered): ${result.events.length} events from ${result.queriedRelays.length} relays in ${result.timing.totalMs}ms`
+          `[Feed] Outbox fetch (${foodFilterEnabled ? 'food-filtered' : 'all posts'}): ${result.events.length} events from ${result.queriedRelays.length} relays in ${result.timing.totalMs}ms`
         );
 
         if (result.failedRelays.length > 0) {
@@ -1694,7 +1704,7 @@
             followedPubkeysForRealtime = primalFollows;
             
             const { events: primalEvents } = await fetchFeedFromPrimal($ndk, primalFollows, {
-              limit: 100,
+              limit: 300, // Increased from 100 for better initial load
               since: sevenDaysAgo(),
               includeReplies: true // Include replies for this mode
             });
@@ -1764,21 +1774,27 @@
         // ═══════════════════════════════════════════════════════════════
         // OUTBOX MODEL FALLBACK - Use when Primal fails or returns too few
         // ═══════════════════════════════════════════════════════════════
-        const result: OutboxFetchResult = await fetchFollowingEvents($ndk, $userPublickey, {
+        const repliesOutboxOptions: any = {
           since: timeWindow.since,
           kinds: [1],
-          limit: 50, // Reduced since we're getting targeted results
+          limit: foodFilterEnabled ? 200 : 300, // Fetch more when showing all posts
           timeoutMs: 5000,
-          maxRelays: 10, // Top 10 relays by coverage
-          additionalFilter: {
+          maxRelays: 10 // Top 10 relays by coverage
+        };
+        
+        // Only add food hashtag filter when food filter is enabled
+        if (foodFilterEnabled) {
+          repliesOutboxOptions.additionalFilter = {
             '#t': FOOD_HASHTAGS // Server-side food filtering!
-          }
-        });
+          };
+        }
+        
+        const result: OutboxFetchResult = await fetchFollowingEvents($ndk, $userPublickey, repliesOutboxOptions);
 
         console.log('[Feed] Raw events from outbox:', result.events.length);
 
         console.log(
-          `[Feed] Outbox fetch (food-filtered replies): ${result.events.length} events from ${result.queriedRelays.length} relays in ${result.timing.totalMs}ms`
+          `[Feed] Outbox fetch (${foodFilterEnabled ? 'food-filtered' : 'all'} replies): ${result.events.length} events from ${result.queriedRelays.length} relays in ${result.timing.totalMs}ms`
         );
 
         // Cache followed pubkeys for real-time subscription (if not already from Primal)
@@ -2221,10 +2237,16 @@
       // Build filters
       const hashtagFilter: any = {
         kinds: [1],
-        '#t': FOOD_HASHTAGS,
-        limit: 50,
+        limit: authorPubkey && !foodFilterEnabled ? 100 : 50, // Fetch more for profile view when showing all posts
         since: timeWindow.since
       };
+      
+      // Only add food hashtag filter when needed
+      // For profile view: respect the toggle
+      // For global feed: always filter for food content
+      if (!authorPubkey || foodFilterEnabled) {
+        hashtagFilter['#t'] = FOOD_HASHTAGS;
+      }
 
       if (authorPubkey) {
         hashtagFilter.authors = [authorPubkey];
@@ -2378,9 +2400,12 @@
             return;
           }
 
-          if (shouldIncludeEvent(event)) {
-            handleRealtimeEvent(event);
+          // Apply food filter only when enabled (for following/replies modes)
+          if (foodFilterEnabled && !shouldIncludeEvent(event)) {
+            return;
           }
+          
+          handleRealtimeEvent(event);
         });
 
         activeSubscriptions.push(sub);
@@ -2499,13 +2524,19 @@
       return;
     }
 
-    // Global mode - default subscription
-    // Single subscription for hashtag-tagged content
+    // Global mode / Profile view - default subscription
+    // Single subscription for content (food-filtered or all posts based on context)
     const hashtagFilter: any = {
       kinds: [1],
-      '#t': FOOD_HASHTAGS,
       since
     };
+    
+    // Only add food hashtag filter when needed
+    // For profile view: respect the toggle
+    // For global feed: always filter for food content
+    if (!authorPubkey || foodFilterEnabled) {
+      hashtagFilter['#t'] = FOOD_HASHTAGS;
+    }
 
     if (authorPubkey) {
       hashtagFilter.authors = [authorPubkey];
@@ -2528,6 +2559,11 @@
           return; // Skip - belongs in Following/Notes & Replies
         }
       }
+      
+      // For profile view with food filter disabled, apply client-side filter
+      if (authorPubkey && foodFilterEnabled && !shouldIncludeEvent(event)) {
+        return;
+      }
       handleRealtimeEvent(event);
     });
 
@@ -2538,12 +2574,12 @@
     // Skip if already seen
     if (seenEventIds.has(event.id)) return;
 
-    // Validate content - apply food filter based on toggle for garden mode
-    if (filterMode === 'garden') {
-      // Garden mode: respect foodFilterEnabled toggle
+    // Validate content - apply food filter based on mode and toggle
+    if (filterMode === 'garden' || filterMode === 'following' || filterMode === 'replies') {
+      // Garden/Following/Replies: respect foodFilterEnabled toggle
       if (foodFilterEnabled && !shouldIncludeEvent(event)) return;
     } else if (filterMode !== 'members') {
-      // Other modes (except members): always apply food filter
+      // Global mode (and profile view): always apply food filter
       if (!shouldIncludeEvent(event)) return;
     }
     // Members mode: no food filter
@@ -2612,16 +2648,22 @@
       try {
         const supplementStartTime = performance.now();
         
-        const result = await fetchFollowingEvents($ndk, $userPublickey, {
+        // Build options - only include food filter when enabled
+        const supplementOptions: any = {
           since: sevenDaysAgo(),
           kinds: [1],
-          limit: 50,
+          limit: foodFilterEnabled ? 50 : 100, // Fetch more when showing all posts
           timeoutMs: 5000,
-          maxRelays: 10,
-          additionalFilter: {
+          maxRelays: 10
+        };
+        
+        if (foodFilterEnabled) {
+          supplementOptions.additionalFilter = {
             '#t': FOOD_HASHTAGS
-          }
-        });
+          };
+        }
+        
+        const result = await fetchFollowingEvents($ndk, $userPublickey, supplementOptions);
         
         // Filter based on mode
         const newEvents = result.events.filter((e) => {
@@ -2889,10 +2931,16 @@
       const timeWindow = calculateTimeWindow('initial');
       const filter: any = {
         kinds: [1],
-        '#t': FOOD_HASHTAGS,
-        limit: 50,
+        limit: authorPubkey && !foodFilterEnabled ? 100 : 50, // Fetch more for profile view when showing all posts
         since: timeWindow.since
       };
+      
+      // Only add food hashtag filter when needed
+      // For profile view: respect the toggle
+      // For global feed: always filter for food content
+      if (!authorPubkey || foodFilterEnabled) {
+        filter['#t'] = FOOD_HASHTAGS;
+      }
 
       if (authorPubkey) {
         filter.authors = [authorPubkey];
@@ -2921,8 +2969,14 @@
           if (authorKey && mutedUsers.includes(authorKey)) return false;
         }
 
-        // Apply food filter
-        if (!shouldIncludeEvent(e)) return false;
+        // Apply food filter based on context
+        // For profile view: respect the toggle
+        // For global feed: always filter for food content
+        if (authorPubkey) {
+          if (foodFilterEnabled && !shouldIncludeEvent(e)) return false;
+        } else {
+          if (!shouldIncludeEvent(e)) return false;
+        }
 
         // Exclude followed users from Global feed
         if (followedSet.size > 0) {
@@ -2973,18 +3027,24 @@
           return;
         }
 
-        // Use outbox model for Following/Replies mode with food filter
-        const result = await fetchFollowingEvents($ndk, $userPublickey, {
+        // Build options for outbox model - conditionally include food filter
+        const loadMoreOptions: any = {
           since: paginationWindow.since,
           until: paginationWindow.until,
           kinds: [1],
-          limit: 20,
+          limit: foodFilterEnabled ? 100 : 150, // Fetch more when showing all posts
           timeoutMs: 5000,
-          maxRelays: 10,
-          additionalFilter: {
+          maxRelays: 10
+        };
+        
+        // Only add food hashtag filter when food filter is enabled
+        if (foodFilterEnabled) {
+          loadMoreOptions.additionalFilter = {
             '#t': FOOD_HASHTAGS // Server-side food filtering!
-          }
-        });
+          };
+        }
+        
+        const result = await fetchFollowingEvents($ndk, $userPublickey, loadMoreOptions);
 
         olderEvents = result.events;
       } else if (filterMode === 'members') {
@@ -3008,7 +3068,7 @@
           kinds: [1],
           since: paginationWindow.since,
           until: paginationWindow.until,
-          limit: 20
+          limit: 100 // Increased from 20 for deeper pagination
         };
 
         // CRITICAL: Skip NDK cache to prevent events from other relays leaking in
@@ -3038,7 +3098,7 @@
           kinds: [1],
           since: paginationWindow.since,
           until: paginationWindow.until,
-          limit: 20
+          limit: 100 // Increased from 20 for deeper pagination
         };
 
         // Use existing pool connection (useTemporaryRelaySet = false) to avoid WebSocket errors
@@ -3050,14 +3110,20 @@
           false
         );
       } else {
-        // Global mode - use hashtag filter with timeboxing
+        // Global mode / Profile view - use hashtag filter with timeboxing
         const filter: any = {
           kinds: [1],
-          '#t': FOOD_HASHTAGS,
           since: paginationWindow.since,
           until: paginationWindow.until,
-          limit: 20
+          limit: authorPubkey && !foodFilterEnabled ? 150 : 100 // Fetch more for profile view when showing all posts
         };
+        
+        // Only add food hashtag filter when needed
+        // For profile view: respect the toggle
+        // For global feed: always filter for food content
+        if (!authorPubkey || foodFilterEnabled) {
+          filter['#t'] = FOOD_HASHTAGS;
+        }
 
         if (authorPubkey) {
           filter.authors = [authorPubkey];
@@ -3105,17 +3171,23 @@
         if (authorPubkey) {
           // Profile view: respect the toggle
           if (foodFilterEnabled && !shouldIncludeEvent(e)) return false;
-        } else {
+        } else if (filterMode === 'following' || filterMode === 'replies') {
+          // Following/Replies: respect the toggle
+          if (foodFilterEnabled && !shouldIncludeEvent(e)) return false;
+        } else if (filterMode === 'global') {
           // Global feed: always apply food filter
           if (!shouldIncludeEvent(e)) return false;
 
           // Exclude followed users from Global feed
-          if (followedSet.size > 0 && filterMode === 'global') {
+          if (followedSet.size > 0) {
             const authorKey = e.author?.hexpubkey || e.pubkey;
             if (authorKey && followedSet.has(authorKey)) {
               return false;
             }
           }
+        } else if (filterMode !== 'members') {
+          // Other modes: apply food filter based on toggle
+          if (foodFilterEnabled && !shouldIncludeEvent(e)) return false;
         }
 
         return true;
@@ -3124,10 +3196,25 @@
       if (validOlder.length > 0) {
         validOlder.forEach((e) => seenEventIds.add(e.id));
         events = [...events, ...validOlder];
-        hasMore = olderEvents.length === 20;
+        // Continue fetching if we got events and we're still within time window
+        // Check if we've reached the time limit (30 days back)
+        const THIRTY_DAYS_SECONDS = 30 * 24 * 60 * 60;
+        const now = Math.floor(Date.now() / 1000);
+        const oldestEventTime = events[events.length - 1]?.created_at || now;
+        const timeLimit = now - THIRTY_DAYS_SECONDS;
+        
+        // Continue if we got a good batch (>= 50) or if we're still within time window
+        hasMore = olderEvents.length >= 50 || oldestEventTime > timeLimit;
         await cacheEvents();
       } else {
-        hasMore = olderEvents.length === 20;
+        // No valid events - check if we've exhausted the time window
+        const THIRTY_DAYS_SECONDS = 30 * 24 * 60 * 60;
+        const now = Math.floor(Date.now() / 1000);
+        const oldestEventTime = events[events.length - 1]?.created_at || now;
+        const timeLimit = now - THIRTY_DAYS_SECONDS;
+        
+        // Stop if we've gone back 30 days or got no events
+        hasMore = oldestEventTime > timeLimit && olderEvents.length > 0;
       }
     } catch {
       // Load more failed
@@ -4079,14 +4166,18 @@
       showNewPostsButton = false;
     });
 
-    // For garden/members mode, load directly (no Primal fast path)
-    // DON'T clear events here - loadFoodstrFeed handles clearing internally and loads from cache first
-    if (filterMode === 'garden' || filterMode === 'members') {
+    // For garden/members mode OR profile view, load directly without cache
+    // Profile view needs fresh data specific to that user, not cached global feed
+    if (filterMode === 'garden' || filterMode === 'members' || authorPubkey) {
       visibleNotes = new Set();
+      seenEventIds.clear();
+      events = [];
+      loading = true;
       try {
         await loadFoodstrFeed(false);
+        console.log(`[Feed] Profile/special mode: Loaded ${events.length} events for ${authorPubkey || filterMode}`);
       } catch (err) {
-        console.error(`[Feed] Failed to load ${filterMode} feed:`, err);
+        console.error(`[Feed] Failed to load ${authorPubkey ? 'profile' : filterMode} feed:`, err);
         error = true;
         loading = false;
       }
@@ -4269,7 +4360,7 @@
 </script>
 
 <FeedErrorBoundary>
-  <div class="max-w-2xl mx-auto">
+  <div class="max-w-2xl mx-auto overflow-x-hidden">
     <!-- Note: Refresh indicator is handled by PullToRefresh component on the page -->
 
     <!-- Background loading indicator (subtle, centered at top) - only show if no new posts button -->
@@ -4406,7 +4497,7 @@
         </div>
       </div>
     {:else}
-      <div class="space-y-0">
+      <div class="space-y-0 w-full overflow-x-hidden">
         {#each events as event (event.id)}
           <!-- Get engagement info - always check cache, subscribe only when visible -->
           {@const isVisible = visibleNotes.has(event.id)}
@@ -4421,7 +4512,7 @@
             comments: { count: engagementStoreValue.comments.count }
           }}
           <article
-            class="border-b py-4 sm:py-6 first:pt-0 
+            class="border-b py-4 sm:py-6 first:pt-0 w-full overflow-x-hidden
                    {isPopular ? 'zap-popular-post' : ''} 
                    {isZapAnimating ? 'zap-bolt-animation' : ''}
                    {zapGlowTier !== 'none' ? `zap-glow-${zapGlowTier}` : ''}"
@@ -4686,17 +4777,9 @@
                                 />
                               </button>
                             {:else if isVideoUrl(imageUrl)}
-                              <video
-                                src={imageUrl}
-                                controls
-                                class="carousel-image select-none"
-                                style="touch-action: pan-y pan-x; -webkit-touch-callout: none; background-color: #1f2937;"
-                                preload="metadata"
-                                draggable="false"
-                                on:error={handleMediaError}
-                              >
-                                <track kind="captions" src="" srclang="en" label="English" />
-                              </video>
+                              <div class="carousel-image">
+                                <VideoPreview url={imageUrl} />
+                              </div>
                             {/if}
                           </div>
                         {/each}

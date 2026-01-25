@@ -1,15 +1,68 @@
-# Branta Guardrail Integration Plan
+# Branta Guardrail Integration
 
 ## Overview
-Integrate Branta Guardrail to verify Bitcoin and Lightning payment addresses/invoices displayed to users. When zapcooking generates a QR code for receiving payments, it will register that address/invoice with Branta, and display a "Verified by Branta" badge.
+Integrate Branta Guardrail to verify Bitcoin and Lightning payment addresses/invoices displayed to users. When zapcooking generates a QR code for receiving payments, it registers that address/invoice with Branta, and displays a "Verified by Branta" badge.
+
+## API Reference
+
+**Base URL:** `https://guardrail.branta.pro/v2`
+
+### Register Payment (POST /payments)
+```bash
+curl -X POST https://guardrail.branta.pro/v2/payments \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -d '{
+    "destinations": [{"value": "bc1q...", "zk": true}],
+    "ttl": 86400,
+    "description": "Payment description"
+  }'
+```
+
+**Request Body:**
+- `destinations` (array, required): Payment recipients
+  - `value` (string): The payable address (Bitcoin address or Lightning invoice/address)
+  - `zk` (boolean, optional): Zero-knowledge encryption. Use `true` for on-chain Bitcoin, `false` for Lightning
+- `ttl` (integer, required): Expiration in seconds (e.g., 86400 = 24 hours)
+- `description` (string, optional): Payment description
+- `metadata` (string, optional): Stringified JSON for user display
+
+**Response (201):**
+```json
+{
+  "destinations": [{"value": "bc1q...", "primary": true, "zk": true}],
+  "description": "Payment description",
+  "created_at": "2026-01-25T15:00:44.701Z",
+  "ttl": 86400,
+  "metadata": null,
+  "platform": "Zap Cooking",
+  "platform_logo_url": "https://guardrail.branta.pro/rails/active_storage/..."
+}
+```
+
+### Verify Payment (GET /payments/:address)
+```bash
+curl https://guardrail.branta.pro/v2/payments/bc1qzapcooking123test
+```
+
+Returns JSON with payment details if registered, 404 if not found.
+
+### View Verification Page
+Users can verify addresses at: `https://guardrail.branta.pro/v/ADDRESS`
+
+Example: https://guardrail.branta.pro/v/bc1qzapcooking123test
 
 ## Architecture
 
 **Flow:**
 1. User requests to receive payment → zapcooking generates invoice/address
-2. Server registers the payment string with Branta API (POST /payments)
+2. Server registers the payment string with Branta API (POST /v2/payments)
 3. QR code displays with verification badge
 4. Anyone scanning can verify the address is legitimate via Branta
+
+**ZK Recommendations:**
+- **On-chain Bitcoin addresses:** Use `zk: true` (zero-knowledge encryption)
+- **Lightning invoices/addresses:** Use `zk: false` (plaintext)
 
 **Why server-side:** API key must be kept secret, following existing `strikeService.server.ts` pattern.
 
@@ -29,7 +82,7 @@ interface BrantaConfig {
 function getBrantaConfig(platform?: any): BrantaConfig | null {
   const apiKey = platform?.env?.BRANTA_API_KEY || env.BRANTA_API_KEY;
   if (!apiKey) return null;
-  const baseUrl = platform?.env?.BRANTA_API_BASE_URL || env.BRANTA_API_BASE_URL || 'https://guardrail.branta.pro/v1';
+  const baseUrl = platform?.env?.BRANTA_API_BASE_URL || env.BRANTA_API_BASE_URL || 'https://guardrail.branta.pro/v2';
   return { apiKey, baseUrl };
 }
 
@@ -37,7 +90,7 @@ export function isBrantaConfigured(platform?: any): boolean
 
 export async function registerPayment(
   paymentString: string,
-  options?: { ttl?: number; description?: string },
+  options?: { ttl?: number; description?: string; zk?: boolean },
   platform?: any
 ): Promise<{ success: boolean; error?: string }>
 
@@ -52,8 +105,8 @@ POST endpoint to register payments.
 
 ```typescript
 export const POST: RequestHandler = async ({ request, platform }) => {
-  const { paymentString, ttl, description } = await request.json();
-  const result = await registerPayment(paymentString, { ttl, description }, platform);
+  const { paymentString, ttl, description, zk } = await request.json();
+  const result = await registerPayment(paymentString, { ttl, description, zk }, platform);
   return json(result);
 };
 ```
@@ -118,12 +171,12 @@ import BrantaBadge from '../../components/BrantaBadge.svelte';
 
 **B. Add registration helper:**
 ```typescript
-async function registerWithBranta(paymentString: string, description?: string) {
+async function registerWithBranta(paymentString: string, description?: string, zk?: boolean) {
   try {
     await fetch('/api/branta/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ paymentString, description, ttl: 86400 })
+      body: JSON.stringify({ paymentString, description, ttl: 86400, zk })
     });
   } catch (e) {
     console.warn('Branta registration failed:', e);
@@ -163,7 +216,7 @@ Add configuration:
 ```env
 # Branta Guardrail - Payment verification
 BRANTA_API_KEY=
-BRANTA_API_BASE_URL=https://guardrail.branta.pro/v1
+BRANTA_API_BASE_URL=https://guardrail.branta.pro/v2
 ```
 
 ## Implementation Order
