@@ -26,6 +26,7 @@
   import { timerWidgetOpen } from '$lib/stores/timerWidget';
   import TimerWidget from '../components/TimerWidget.svelte';
   import UserSidePanel from '../components/UserSidePanel.svelte';
+  import MobileSearchOverlay from '../components/MobileSearchOverlay.svelte';
   // Import sync service to initialize offline sync functionality
   import '$lib/syncService';
   // Import platform detection to initialize early
@@ -318,6 +319,7 @@
       <BottomNav />
       <TimerWidget bind:open={$timerWidgetOpen} />
       <UserSidePanel />
+      <MobileSearchOverlay />
       <PostModal bind:open={$postComposerOpen} />
       <WalletWelcomeModal bind:open={walletWelcomeOpen} onDismiss={markWalletWelcomeSeen} />
     </div>
