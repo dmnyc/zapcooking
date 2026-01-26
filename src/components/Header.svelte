@@ -5,10 +5,12 @@
   import SearchIcon from 'phosphor-svelte/lib/MagnifyingGlass';
   import CookingPotIcon from 'phosphor-svelte/lib/CookingPot';
   import TagsSearchAutocomplete from './TagsSearchAutocomplete.svelte';
+  import { page } from '$app/stores';
   import CustomAvatar from './CustomAvatar.svelte';
   import { theme } from '$lib/themeStore';
   import WalletBalance from './WalletBalance.svelte';
   import LightningIcon from 'phosphor-svelte/lib/Lightning';
+  import WalletIcon from 'phosphor-svelte/lib/Wallet';
   import { userSidePanelOpen } from '$lib/stores/userSidePanel';
   import { mobileSearchOpen } from '$lib/stores/mobileSearch';
   import { timerStore } from '$lib/timerStore';
@@ -62,11 +64,11 @@
 </script>
 
 <!-- Mobile-first layout -->
-<div class="relative flex gap-4 sm:gap-9 lg:gap-12 justify-between overflow-visible">
+<div class="relative flex gap-2 sm:gap-9 lg:gap-12 justify-between overflow-visible">
   <a href="/recent" class="flex-none lg:hidden">
     <img
       src={isDarkMode ? '/zap_cooking_logo_white.svg' : SVGNostrCookingWithText}
-      class="w-35 sm:w-40 my-3"
+      class="w-28 sm:w-40 my-2 sm:my-3"
       alt="zap.cooking Logo With Text"
     />
   </a>
@@ -80,15 +82,16 @@
     />
   </div>
   <span class="hidden lg:max-xl:flex lg:max-xl:grow"></span>
-  <div class="flex items-center gap-1.5 sm:gap-3 self-center flex-none print:hidden">
+  <div class="flex items-center gap-1 sm:gap-3 self-center flex-none print:hidden">
     <!-- Search icon (mobile/tablet only when search bar hidden) -->
     <div class="block sm:hidden">
       <button
         on:click={() => mobileSearchOpen.set(true)}
-        class="w-9 h-9 flex items-center justify-center text-caption hover:opacity-80 hover:bg-accent-gray rounded-full transition-colors cursor-pointer"
+        class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center hover:opacity-80 hover:bg-accent-gray rounded-full transition-colors cursor-pointer"
+        style="color: var(--color-text-primary)"
         aria-label="Search"
       >
-        <SearchIcon size={20} weight="bold" />
+        <SearchIcon size={18} weight="bold" class="sm:w-5 sm:h-5" />
       </button>
     </div>
 
@@ -108,12 +111,24 @@
       />
       {#if hasActiveTimers}
         <span
-          class="absolute -top-0.5 -right-0.5 w-4 h-4 bg-amber-500 text-white text-xs font-bold rounded-full flex items-center justify-center"
+          class="absolute -top-0.5 -right-0.5 w-3.5 h-3.5 sm:w-4 sm:h-4 bg-amber-500 text-white text-[10px] sm:text-xs font-bold rounded-full flex items-center justify-center"
         >
           {activeTimers.length}
         </span>
       {/if}
     </button>
+
+    <!-- Wallet button (mobile only) - shortcut to wallet page -->
+    {#if $userPublickey}
+      <a
+        href="/wallet"
+        class="sm:hidden w-8 h-8 flex items-center justify-center rounded-full transition-colors cursor-pointer hover:opacity-80 hover:bg-accent-gray"
+        style="color: var(--color-text-primary)"
+        aria-label="Open wallet"
+      >
+        <WalletIcon size={18} weight="bold" />
+      </a>
+    {/if}
 
     <!-- Wallet Balance - only show when logged in -->
     {#if $userPublickey && $navBalanceVisible}
@@ -141,12 +156,12 @@
           on:click={() => userSidePanelOpen.set(true)}
           aria-label="Open user menu"
         >
-          <CustomAvatar pubkey={$userPublickey} size={36} imageUrl={$userProfilePictureOverride} />
+          <CustomAvatar pubkey={$userPublickey} size={32} imageUrl={$userProfilePictureOverride} />
         </button>
       {:else}
         <a
           href="/login"
-          class="px-4 py-2 rounded-full border font-medium transition duration-300 text-sm signin-button"
+          class="px-3 py-1.5 sm:px-4 sm:py-2 rounded-full border font-medium transition duration-300 text-xs sm:text-sm signin-button"
           style="color: var(--color-text-primary); border-color: var(--color-input-border);"
           >Sign in</a
         >

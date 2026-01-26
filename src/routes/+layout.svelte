@@ -309,7 +309,7 @@
         <div class="header-blur sticky top-0 z-20 py-3 px-4">
           <Header />
         </div>
-        <div class="px-4 pb-24 lg:pb-8">
+        <div class="px-4 pb-16 lg:pb-8">
           <slot />
           <Footer />
         </div>
@@ -341,6 +341,8 @@
 
   /* Header with frosted glass effect */
   .header-blur {
+    /* Fallback for browsers that don't support color-mix */
+    background-color: var(--color-bg-primary);
     background-color: color-mix(in srgb, var(--color-bg-primary) 70%, transparent);
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
