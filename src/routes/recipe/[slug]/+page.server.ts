@@ -23,6 +23,8 @@ interface RecipeMetadata {
 	title: string;
 	description: string;
 	image: string;
+	created_at?: number;
+	pubkey?: string;
 }
 
 const RELAYS = [
@@ -30,6 +32,56 @@ const RELAYS = [
 	'wss://relay.damus.io',
 	'wss://nos.lol'
 ];
+
+/**
+ * Build a structured description from recipe markdown content.
+ * Extracts servings, time, and ingredients to create a social-friendly summary.
+ */
+function buildRecipeDescription(content: string, title: string): string {
+	const parts: string[] = [];
+
+	// Extract servings
+	const servingsMatch = content.match(/##\s*Servings\s*\n+([^\n#]+)/i);
+	if (servingsMatch) {
+		const servings = servingsMatch[1].trim();
+		if (servings) parts.push(servings);
+	}
+
+	// Extract cook/prep time
+	const totalMatch = content.match(/Total:\s*([^\n,]+)/i);
+	const prepMatch = content.match(/Prep:\s*([^\n,]+)/i);
+	const cookMatch = content.match(/Cook:\s*([^\n,]+)/i);
+	if (totalMatch) {
+		parts.push(`Ready in ${totalMatch[1].trim()}`);
+	} else if (prepMatch && cookMatch) {
+		parts.push(`Prep: ${prepMatch[1].trim()}, Cook: ${cookMatch[1].trim()}`);
+	}
+
+	// Count and preview ingredients
+	const ingredientsSection = content.match(/##\s*Ingredients\s*\n([\s\S]*?)(?=##|$)/i);
+	if (ingredientsSection) {
+		const ingredients = ingredientsSection[1]
+			.split('\n')
+			.filter(line => line.trim().startsWith('-') || line.trim().startsWith('*'))
+			.map(line => line.replace(/^[\s*-]+/, '').replace(/\s*\(.*?\)\s*/g, '').trim())
+			.filter(i => i.length > 0 && i.length < 80);
+
+		if (ingredients.length > 0) {
+			const preview = ingredients.slice(0, 3).join(', ');
+			if (ingredients.length > 3) {
+				parts.push(`${ingredients.length} ingredients including ${preview}`);
+			} else {
+				parts.push(`Made with ${preview}`);
+			}
+		}
+	}
+
+	if (parts.length > 0) {
+		return `${title}. ${parts.join('. ')}.`;
+	}
+
+	return `${title} - A recipe shared on zap.cooking`;
+}
 
 async function fetchFromRelay(relayUrl: string, identifier: string, pubkey: string, kind: number = 30023): Promise<RecipeMetadata | null> {
 	// Check if WebSocket is available (may not be in Node.js dev environment)
@@ -117,17 +169,15 @@ async function fetchFromRelay(relayUrl: string, identifier: string, pubkey: stri
 							.replace(/\n+/g, ' ') // Replace newlines with spaces
 							.trim();
 						
-						// Get first 200 characters, but try to end at a sentence
-						if (text.length > 200) {
-							const truncated = text.slice(0, 200);
-							const lastPeriod = truncated.lastIndexOf('.');
-							const lastExclamation = truncated.lastIndexOf('!');
-							const lastQuestion = truncated.lastIndexOf('?');
-							const lastSentence = Math.max(lastPeriod, lastExclamation, lastQuestion);
-							if (lastSentence > 100) {
+						// Get first 155 characters, but try to end at a natural boundary
+						if (text.length > 155) {
+							const truncated = text.slice(0, 155);
+							const lastSpace = truncated.lastIndexOf(' ');
+							const lastSentence = Math.max(truncated.lastIndexOf('.'), truncated.lastIndexOf('!'), truncated.lastIndexOf('?'));
+							if (lastSentence > 80) {
 								description = text.slice(0, lastSentence + 1);
 							} else {
-								description = truncated + '...';
+								description = (lastSpace > 80 ? truncated.slice(0, lastSpace) : truncated) + '...';
 							}
 						} else {
 							description = text;
@@ -135,11 +185,11 @@ async function fetchFromRelay(relayUrl: string, identifier: string, pubkey: stri
 					}
 					
 					if (!description) {
-						description = `A delicious recipe shared on zap.cooking`;
+						description = buildRecipeDescription(evt.content || '', title);
 					}
 
 					clearTimeout(timeout);
-					safeResolve({ title, description, image });
+					safeResolve({ title, description, image, created_at: evt.created_at, pubkey: evt.pubkey });
 				} else if (msg[0] === 'EOSE' && msg[1] === subId) {
 					clearTimeout(timeout);
 					safeResolve(null);
@@ -232,9 +282,11 @@ export const load: PageServerLoad = async ({ params, url }) => {
 		if (metadata) {
 			return {
 				ogMeta: {
-					title: `${metadata.title} - zap.cooking`,
+					title: metadata.title,
 					description: metadata.description || 'A delicious recipe shared on zap.cooking',
-					image: metadata.image || 'https://zap.cooking/social-share.png'
+					image: metadata.image || 'https://zap.cooking/social-share.png',
+					created_at: metadata.created_at,
+					pubkey: metadata.pubkey || pubkey
 				}
 			};
 		}

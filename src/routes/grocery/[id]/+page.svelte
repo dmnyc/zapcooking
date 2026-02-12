@@ -21,11 +21,11 @@
   import PanLoader from '../../../components/PanLoader.svelte';
   import Modal from '../../../components/Modal.svelte';
   import Button from '../../../components/Button.svelte';
-  import GroceryItemRow from '../../../components/grocery/GroceryItemRow.svelte';
+  import SortableGroceryCategory from '../../../components/grocery/SortableGroceryCategory.svelte';
   import AddItemForm from '../../../components/grocery/AddItemForm.svelte';
 
   // Get list ID from URL params
-  $: listId = $page.params.id;
+  $: listId = $page.params.id as string;
   
   // Get reactive list data
   $: listStore = getGroceryList(listId);
@@ -156,7 +156,7 @@
     <PanLoader size="md" />
   </div>
 {:else}
-  <div class="flex flex-col gap-6 max-w-2xl mx-auto">
+  <div class="flex flex-col gap-4 max-w-2xl mx-auto">
     <!-- Header -->
     <div class="flex flex-col gap-4">
       <!-- Back link and actions -->
@@ -263,10 +263,12 @@
       <!-- Progress bar -->
       {#if totalItems > 0}
         <div class="h-2 rounded-full overflow-hidden" style="background-color: var(--color-input-bg);">
-          <div 
-            class="h-full rounded-full transition-all duration-300 bg-gradient-to-r from-green-500 to-emerald-500"
-            style="width: {(checkedItems / totalItems) * 100}%"
-          />
+          {#if checkedItems > 0}
+            <div
+              class="h-full rounded-full transition-all duration-300 bg-gradient-to-r from-green-500 to-emerald-500"
+              style="width: {(checkedItems / totalItems) * 100}%"
+            />
+          {/if}
         </div>
       {/if}
     </div>
@@ -279,21 +281,13 @@
       {#each categoryOrder as category}
         {#if itemsByCategory.has(category)}
           {@const items = itemsByCategory.get(category) || []}
-          <div class="flex flex-col gap-2">
-            <!-- Category header -->
-            <h3 class="text-sm font-semibold flex items-center gap-2" style="color: var(--color-text-secondary)">
-              <span>{categoryInfo[category].emoji}</span>
-              <span>{categoryInfo[category].label}</span>
-              <span class="text-caption font-normal">({items.length})</span>
-            </h3>
-
-            <!-- Items -->
-            <div class="flex flex-col gap-1">
-              {#each items as item (item.id)}
-                <GroceryItemRow {item} {listId} />
-              {/each}
-            </div>
-          </div>
+          <SortableGroceryCategory
+            {listId}
+            {category}
+            {items}
+            categoryLabel={categoryInfo[category].label}
+            categoryEmoji={categoryInfo[category].emoji}
+          />
         {/if}
       {/each}
 

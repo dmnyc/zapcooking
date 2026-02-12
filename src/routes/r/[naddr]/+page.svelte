@@ -88,42 +88,77 @@
   $: fullPageTitle = `${pageHeading} - zap.cooking`;
   $: fullMetaTitle = `${metaTitleBase} - zap.cooking`;
 
-  // Use server-loaded metadata for initial SSR, then client data once loaded
-  // Ensure we always have fallback values for SSR
-  $: og_title = event 
-    ? fullMetaTitle 
-    : (data?.ogMeta?.title || 'Recipe - zap.cooking');
-  
-  // Better description extraction from event content
+  // OG title: raw title without site suffix (site_name handles branding)
+  $: og_title = event
+    ? metaTitleBase
+    : (data?.ogMeta?.title || 'Recipe');
+
+  // Description: prefer summary, then build from recipe metadata, then clean content
   $: og_description = event
     ? (() => {
         // Try summary tag first
         const summary = event.tags?.find((tag) => tag[0] === 'summary')?.[1];
         if (summary) return summary;
-        
-        // Clean and extract from content
+
+        // Try to build structured description from recipe metadata in content
         if (event.content) {
-          let text = event.content
-            .replace(/^#+\s+/gm, '') // Remove markdown headers
-            .replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1') // Convert links to text
-            .replace(/!\[([^\]]*)\]\([^\)]+\)/g, '') // Remove images
-            .replace(/\*\*([^\*]+)\*\*/g, '$1') // Remove bold
-            .replace(/\*([^\*]+)\*/g, '$1') // Remove italic
-            .replace(/`([^`]+)`/g, '$1') // Remove code
-            .replace(/\n+/g, ' ') // Replace newlines with spaces
-            .trim();
-          
-          if (text.length > 200) {
-            const truncated = text.slice(0, 200);
-            const lastPeriod = truncated.lastIndexOf('.');
-            const lastExclamation = truncated.lastIndexOf('!');
-            const lastQuestion = truncated.lastIndexOf('?');
-            const lastSentence = Math.max(lastPeriod, lastExclamation, lastQuestion);
-            if (lastSentence > 100) {
-              return text.slice(0, lastSentence + 1);
-            } else {
-              return truncated + '...';
+          const title = event.tags?.find((tag) => tag[0] === 'title')?.[1] || '';
+          const parts: string[] = [];
+
+          const servingsMatch = event.content.match(/##\s*Servings\s*\n+([^\n#]+)/i);
+          if (servingsMatch) {
+            const servings = servingsMatch[1].trim();
+            if (servings) parts.push(servings);
+          }
+
+          const totalMatch = event.content.match(/Total:\s*([^\n,]+)/i);
+          const prepMatch = event.content.match(/Prep:\s*([^\n,]+)/i);
+          const cookMatch = event.content.match(/Cook:\s*([^\n,]+)/i);
+          if (totalMatch) {
+            parts.push(`Ready in ${totalMatch[1].trim()}`);
+          } else if (prepMatch && cookMatch) {
+            parts.push(`Prep: ${prepMatch[1].trim()}, Cook: ${cookMatch[1].trim()}`);
+          }
+
+          const ingredientsSection = event.content.match(/##\s*Ingredients\s*\n([\s\S]*?)(?=##|$)/i);
+          if (ingredientsSection) {
+            const ingredients = ingredientsSection[1]
+              .split('\n')
+              .filter((line: string) => line.trim().startsWith('-') || line.trim().startsWith('*'))
+              .map((line: string) => line.replace(/^[\s*-]+/, '').replace(/\s*\(.*?\)\s*/g, '').trim())
+              .filter((i: string) => i.length > 0 && i.length < 80);
+
+            if (ingredients.length > 0) {
+              const preview = ingredients.slice(0, 3).join(', ');
+              if (ingredients.length > 3) {
+                parts.push(`${ingredients.length} ingredients including ${preview}`);
+              } else {
+                parts.push(`Made with ${preview}`);
+              }
             }
+          }
+
+          if (parts.length > 0) {
+            return title ? `${title}. ${parts.join('. ')}.` : parts.join('. ') + '.';
+          }
+
+          // Fall back to cleaned content extraction
+          let text = event.content
+            .replace(/^#+\s+/gm, '')
+            .replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1')
+            .replace(/!\[([^\]]*)\]\([^\)]+\)/g, '')
+            .replace(/\*\*([^\*]+)\*\*/g, '$1')
+            .replace(/\*([^\*]+)\*/g, '$1')
+            .replace(/`([^`]+)`/g, '$1')
+            .replace(/\n+/g, ' ')
+            .trim();
+
+          if (text.length > 155) {
+            const truncated = text.slice(0, 155);
+            const lastSpace = truncated.lastIndexOf(' ');
+            const lastSentence = Math.max(truncated.lastIndexOf('.'), truncated.lastIndexOf('!'), truncated.lastIndexOf('?'));
+            if (lastSentence > 80) return text.slice(0, lastSentence + 1);
+            return (lastSpace > 80 ? truncated.slice(0, lastSpace) : truncated) + '...';
           }
           return text || 'A delicious recipe shared on zap.cooking';
         }
@@ -135,6 +170,17 @@
     ? (event.tags?.find((tag) => tag[0] === 'image')?.[1] || 'https://zap.cooking/social-share.png')
     : (data?.ogMeta?.image || 'https://zap.cooking/social-share.png');
 
+  // Cap description at ~155 chars for Facebook/social preview
+  $: og_desc = (() => {
+    const d = og_description;
+    if (!d || d.length <= 155) return d;
+    const t = d.slice(0, 155);
+    const ls = Math.max(t.lastIndexOf('.'), t.lastIndexOf('!'), t.lastIndexOf('?'));
+    if (ls > 80) return d.slice(0, ls + 1);
+    const sp = t.lastIndexOf(' ');
+    return (sp > 80 ? t.slice(0, sp) : t) + '...';
+  })();
+
   // Check if this is a longform article (not a recipe) to show "Back to Reads" link
   $: isLongformArticle = event && event.kind === 30023 && !event.tags.some(
     (tag) => tag[0] === 't' && RECIPE_TAGS.includes(tag[1]?.toLowerCase() || '')
@@ -143,23 +189,28 @@
 
 <svelte:head>
   <title>{fullPageTitle || 'Recipe - zap.cooking'}</title>
-  <meta name="description" content={og_description} />
-  
+  <meta name="description" content={og_desc} />
+
   <!-- Open Graph / Facebook -->
   <meta property="og:type" content="article" />
   <meta property="og:url" content={`https://zap.cooking/r/${$page.params.naddr}`} />
   <meta property="og:title" content={og_title} />
-  <meta property="og:description" content={og_description} />
+  <meta property="og:description" content={og_desc} />
   <meta property="og:image" content={og_image} />
   <meta property="og:image:secure_url" content={og_image} />
-  <meta property="og:image:type" content="image/jpeg" />
-  <meta property="og:site_name" content="Zap Cooking" />
-  
+  <meta property="og:site_name" content="zap.cooking" />
+  {#if event?.created_at || data?.ogMeta?.created_at}
+    <meta property="article:published_time" content={new Date((event?.created_at || data?.ogMeta?.created_at) * 1000).toISOString()} />
+  {/if}
+  {#if event?.pubkey || data?.ogMeta?.pubkey}
+    <meta property="article:author" content={`https://zap.cooking/p/${event?.pubkey || data?.ogMeta?.pubkey}`} />
+  {/if}
+
   <!-- Twitter -->
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:url" content={`https://zap.cooking/r/${$page.params.naddr}`} />
   <meta name="twitter:title" content={og_title} />
-  <meta name="twitter:description" content={og_description} />
+  <meta name="twitter:description" content={og_desc} />
   <meta name="twitter:image" content={og_image} />
 </svelte:head>
 

@@ -1,103 +1,68 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
   import { browser } from '$app/environment';
   import { goto } from '$app/navigation';
-  import { profileCacheManager } from '$lib/profileCache';
   import { userPublickey } from '$lib/nostr';
-  import CustomAvatar from '../../components/CustomAvatar.svelte';
-  import CustomName from '../../components/CustomName.svelte';
-  import type { NDKUser } from '@nostr-dev-kit/ndk';
+  import { membershipStore, formatMembershipExpiry } from '$lib/membershipStore';
   
   export let data;
-  
-  interface Founder {
-    number: number;
-    pubkey: string;
-    tier: string;
-    joined: string;
-    user?: NDKUser | null;
-  }
-  
-  let founders: Founder[] = (data.founders || []).map((f: any) => ({
-    number: f.number,
-    pubkey: f.pubkey,
-    tier: f.tier,
-    joined: f.joined,
-    user: null
-  }));
-  let loading = true;
+
   let showFoundersList = false;
   let isCheckingOut = false;
-  
+
   // Genesis founders constants
   const TOTAL_GENESIS_SPOTS = 21;
-  const GENESIS_PRICE_USD = 210;
-  const GENESIS_PRICE_SATS = 210000;
-  
-  // Track actual founders count from server (before profile filtering)
+
+  // Track actual founders count from server
   const actualFoundersCount = data.founders?.length || 0;
-  
-  $: foundersCount = founders.length;
-  $: spotsTaken = actualFoundersCount; // Use actual count, not filtered count
+
+  $: spotsTaken = actualFoundersCount;
   $: spotsRemaining = TOTAL_GENESIS_SPOTS - spotsTaken;
   $: isSoldOut = spotsRemaining === 0;
   $: isLoggedIn = $userPublickey && $userPublickey.length > 0;
 
-  // Blacklist of pubkeys to exclude (add specific pubkeys here if needed)
-  const EXCLUDED_PUBKEYS = new Set<string>([
-    // Add pubkeys to exclude here, e.g.:
-    // 'abc123...'
-  ]);
+  // Current user membership info
+  $: currentMembership = $userPublickey ? membershipStore.getMembership($userPublickey) : null;
+  $: hasActiveCardMembership = currentMembership
+    && currentMembership.paymentMethod === 'card'
+    && currentMembership.expiresAt > Date.now()
+    && currentMembership.invoiceId;
 
-  // Check if a user has a valid profile (not just a generated name)
-  function hasValidProfile(user: NDKUser | null, pubkey: string): boolean {
-    // Exclude blacklisted pubkeys
-    if (EXCLUDED_PUBKEYS.has(pubkey)) return false;
-    
-    if (!user || !user.profile) return false;
-    // Check if profile has a real name (not generated)
-    const name = user.profile.displayName || user.profile.name;
-    if (!name) return false;
-    // Filter out generated names like "Sharp Culinary", "Cool Chef", etc.
-    const generatedPatterns = ['Chef', 'Cook', 'Baker', 'Foodie', 'Gourmet', 'Epicure', 'Culinary', 'Kitchen'];
-    const isGenerated = generatedPatterns.some(pattern => name.includes(pattern));
-    return !isGenerated;
-  }
+  let managingSubscription = false;
+  let manageError: string | null = null;
 
-  // Fetch Nostr profiles for all founders using existing profile cache
-  async function loadProfiles() {
-    loading = true;
-    
-    // Load profiles in parallel for better performance
-    const profilePromises = founders.map(async (founder) => {
-      try {
-        const user = await profileCacheManager.getProfile(founder.pubkey);
-        founder.user = user;
-      } catch (err) {
-        console.error(`Failed to load profile for ${founder.pubkey}:`, err);
-        founder.user = null;
+  async function handleManageSubscription() {
+    if (!currentMembership?.invoiceId || !browser) return;
+
+    managingSubscription = true;
+    manageError = null;
+
+    try {
+      const response = await fetch('/api/stripe/create-portal-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: currentMembership.invoiceId,
+          returnUrl: window.location.href,
+        }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({ error: 'Failed to open subscription portal' }));
+        throw new Error(data.error || 'Failed to open subscription portal');
       }
-    });
-    
-    await Promise.all(profilePromises);
-    
-    // Keep all founders but mark which ones have valid profiles
-    // Don't filter or re-number - keep original founder numbers from payment_id
-    founders = [...founders]; // Trigger reactivity
-    loading = false;
-  }
-  
-  // Helper to check if founder should be displayed with profile or placeholder
-  function getFounderDisplayName(founder: Founder): string {
-    if (founder.user?.profile?.displayName) return founder.user.profile.displayName;
-    if (founder.user?.profile?.name) return founder.user.profile.name;
-    // Show truncated pubkey as fallback
-    return `${founder.pubkey.substring(0, 8)}...`;
-  }
 
-  onMount(() => {
-    loadProfiles();
-  });
+      const { url } = await response.json();
+      if (url) {
+        window.location.href = url;
+      } else {
+        throw new Error('No portal URL returned');
+      }
+    } catch (err) {
+      console.error('[Membership] Portal error:', err);
+      manageError = err instanceof Error ? err.message : 'Failed to open subscription portal';
+      managingSubscription = false;
+    }
+  }
 
   async function handleClaimSpot() {
     if (!browser) return;
@@ -182,7 +147,7 @@
           </svg>
         </div>
       </div>
-      {#if !loading && spotsRemaining > 0}
+      {#if spotsRemaining > 0}
         <div class="genesis-hero-progress">
           <div class="progress-bar">
             <div 
@@ -283,43 +248,46 @@
     </section>
   {/if}
 
-  <!-- Founders Club List (Collapsible) -->
+  <!-- Founders Club Link (shown when expanded) -->
   {#if showFoundersList}
-    <section class="genesis-founders">
-      <h2>🔥 Founders Club</h2>
-      <p class="subtitle">The first believers who made this possible</p>
-    
-    {#if loading}
-      <div class="loading-state">
-        <p>Loading founders...</p>
+    <section class="genesis-founders-link">
+      <a href="/founders" class="founders-link-button">
+        View Founders Club Members
+      </a>
+    </section>
+  {/if}
+
+  <!-- Active Membership Management -->
+  {#if hasActiveCardMembership && currentMembership}
+    <section class="active-membership">
+      <div class="active-membership-card">
+        <div class="active-membership-header">
+          <h3>Your Membership</h3>
+          <span class="active-badge">Active</span>
+        </div>
+        <div class="active-membership-details">
+          <p class="membership-tier-name">
+            {currentMembership.tier === 'cook' ? 'Cook+' : 'Pro Kitchen'}
+          </p>
+          <p class="membership-expiry">
+            Expires {formatMembershipExpiry(currentMembership.expiresAt)}
+          </p>
+        </div>
+        {#if manageError}
+          <div class="manage-error">{manageError}</div>
+        {/if}
+        <button
+          class="manage-subscription-button"
+          on:click={handleManageSubscription}
+          disabled={managingSubscription}
+        >
+          {#if managingSubscription}
+            Opening portal...
+          {:else}
+            Manage Subscription
+          {/if}
+        </button>
       </div>
-    {:else if founders.length === 0}
-      <div class="empty-state">
-        <p>No founders found yet. Be the first!</p>
-  </div>
-    {:else}
-      <div class="founders-grid">
-        {#each founders as founder}
-          <div class="founder-card">
-            <div class="founder-number">#{founder.number}</div>
-            
-            <div class="founder-avatar-wrapper">
-              <CustomAvatar pubkey={founder.pubkey} size={80} className="founder-avatar-img" />
-  </div>
-
-            <div class="founder-info">
-              <div class="founder-name">
-                <CustomName pubkey={founder.pubkey} className="founder-name-text" />
-              </div>
-  </div>
-
-            <div class="founder-badge">
-              Founders Club
-            </div>
-          </div>
-        {/each}
-  </div>
-    {/if}
     </section>
   {/if}
 
@@ -838,97 +806,30 @@
     background: rgba(31, 41, 55, 0.7);
   }
 
-  /* Genesis Founders List */
-  .genesis-founders {
-    margin: 3rem 0;
-  }
-
-  .genesis-founders h2 {
+  /* Founders Club Link */
+  .genesis-founders-link {
     text-align: center;
-    margin-bottom: 0.5rem;
-    color: var(--color-text-primary);
+    margin: 1.5rem 0 2rem;
   }
 
-  .subtitle {
-    text-align: center;
-    color: var(--color-text-secondary);
-    margin-bottom: 2rem;
-  }
-
-  .loading-state,
-  .empty-state {
-    text-align: center;
-    padding: 3rem;
-    color: var(--color-text-secondary);
-  }
-
-  .founders-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-    gap: 1.5rem;
-  }
-
-  .founder-card {
-    background: var(--color-bg-secondary);
+  .founders-link-button {
+    display: inline-block;
+    padding: 0.75rem 2rem;
+    background: transparent;
     border: 2px solid var(--color-primary);
     border-radius: 12px;
-    padding: 1.5rem;
-    text-align: center;
-    position: relative;
-    color: var(--color-text-primary);
-    transition: transform 0.2s, box-shadow 0.2s;
+    color: var(--color-primary);
+    font-size: 1rem;
+    font-weight: 600;
+    text-decoration: none;
+    transition: all 0.2s ease;
   }
 
-  .founder-card:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(236, 71, 0, 0.2);
-  }
-
-  .founder-number {
-    position: absolute;
-    top: -12px;
-    left: 50%;
-    transform: translateX(-50%);
+  .founders-link-button:hover {
     background: var(--color-primary);
     color: white;
-    font-weight: bold;
-    padding: 0.25rem 0.75rem;
-    border-radius: 20px;
-    font-size: 0.85rem;
-  }
-
-  .founder-avatar-wrapper {
-    margin: 1rem auto;
-    position: relative;
-  }
-
-  .founder-avatar-img {
-    border: 3px solid var(--color-primary) !important;
-  }
-
-  .founder-info {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    margin-top: 0.5rem;
-  }
-
-  .founder-name {
-    font-weight: 600;
-    font-size: 1rem;
-  }
-
-  .founder-name-text {
-    color: var(--color-text-primary);
-  }
-
-  .founder-badge {
-    margin-top: 1rem;
-    font-size: 0.7rem;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    color: var(--color-primary);
-    font-weight: 600;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(236, 71, 0, 0.3);
   }
 
   /* Membership Tiers */
@@ -1150,15 +1051,106 @@
   }
 
   /* Dark mode adjustments */
-  html.dark .founder-card {
-    background: linear-gradient(135deg, #1f2937 0%, #111827 100%);
-  }
-
   html.dark .tier-card {
     background: var(--color-bg-secondary);
   }
 
   html.dark .tier-card.pro-kitchen {
     background: linear-gradient(180deg, #1f2937 0%, #111827 100%);
+  }
+
+  /* Active Membership Management */
+  .active-membership {
+    margin: 2rem 0 3rem 0;
+    max-width: 600px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .active-membership-card {
+    background: rgba(17, 24, 39, 0.6);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 2px solid rgba(34, 197, 94, 0.4);
+    border-radius: 16px;
+    padding: 2rem;
+  }
+
+  .active-membership-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 1rem;
+  }
+
+  .active-membership-header h3 {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: #f3f4f6;
+    margin: 0;
+  }
+
+  .active-badge {
+    background: rgba(34, 197, 94, 0.2);
+    color: #22c55e;
+    padding: 0.25rem 0.75rem;
+    border-radius: 20px;
+    font-size: 0.8rem;
+    font-weight: 600;
+  }
+
+  .active-membership-details {
+    margin-bottom: 1.5rem;
+  }
+
+  .membership-tier-name {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--color-primary);
+    margin: 0 0 0.25rem 0;
+  }
+
+  .membership-expiry {
+    color: #9ca3af;
+    font-size: 0.95rem;
+    margin: 0;
+  }
+
+  .manage-error {
+    background: rgba(220, 38, 38, 0.1);
+    border: 1px solid rgba(220, 38, 38, 0.3);
+    color: #ef4444;
+    padding: 0.75rem;
+    border-radius: 8px;
+    margin-bottom: 1rem;
+    font-size: 0.9rem;
+    text-align: center;
+  }
+
+  .manage-subscription-button {
+    width: 100%;
+    padding: 0.875rem 1.5rem;
+    background: transparent;
+    border: 2px solid var(--color-primary);
+    border-radius: 10px;
+    color: var(--color-primary);
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .manage-subscription-button:hover:not(:disabled) {
+    background: var(--color-primary);
+    color: white;
+  }
+
+  .manage-subscription-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  html.dark .active-membership-card {
+    background: rgba(31, 41, 55, 0.7);
   }
 </style>

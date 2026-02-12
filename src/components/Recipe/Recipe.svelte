@@ -76,6 +76,7 @@
   let menuOpen = false;
   let deleteConfirmOpen = false;
   let isDeleting = false;
+  let isEditingRecipe = false;
 
   // Check if current user owns this recipe
   $: isOwner = $userPublickey && $userPublickey === event.author.pubkey;
@@ -173,70 +174,83 @@
     }
   }
 
-  function handleEdit() {
+  async function handleEdit() {
+    if (isEditingRecipe) return;
+
     menuOpen = false;
+    isEditingRecipe = true;
 
-    // Extract recipe data from event tags
-    const title = event.tagValue('title') || event.tagValue('d') || '';
-    const images = event.getMatchingTags('image').map((t) => t[1]) || [];
-    const summary = event.tagValue('summary') || '';
+    try {
+      // Extract recipe data from event tags
+      const title = event.tagValue('title') || event.tagValue('d') || '';
+      const images = event.getMatchingTags('image').map((t) => t[1]) || [];
+      const summary = event.tagValue('summary') || '';
 
-    // Extract tags using same approach as TagLinks component
-    const dTag = event.tags.find((a) => a[0] === 'd')?.[1];
-    const tags: Array<{ title: string; emoji?: string }> = [];
-    let nameTagFound = false;
+      // Extract tags using same approach as TagLinks component
+      const dTag = event.tags.find((a) => a[0] === 'd')?.[1];
+      const tags: Array<{ title: string; emoji?: string }> = [];
+      let nameTagFound = false;
 
-    event.tags.forEach((t) => {
-      if (t[0] === 't' && t[1]) {
-        const tagValue = t[1];
-        const isLegacyPrefix = tagValue.startsWith('nostrcooking-');
-        const isNewPrefix = tagValue.startsWith(`${RECIPE_TAG_PREFIX_NEW}-`);
+      event.tags.forEach((t) => {
+        if (t[0] === 't' && t[1]) {
+          const tagValue = t[1];
+          const isLegacyPrefix = tagValue.startsWith('nostrcooking-');
+          const isNewPrefix = tagValue.startsWith(`${RECIPE_TAG_PREFIX_NEW}-`);
 
-        if ((isLegacyPrefix || isNewPrefix) && !nameTagFound) {
-          // First prefixed tag is the name tag - skip it
-          const tagName = isNewPrefix
-            ? tagValue.slice(RECIPE_TAG_PREFIX_NEW.length + 1)
-            : tagValue.slice('nostrcooking-'.length);
-          if (tagName === dTag) {
-            nameTagFound = true;
-          }
-        } else if (isLegacyPrefix || isNewPrefix) {
-          // Extract actual category tags
-          const tagName = isNewPrefix
-            ? tagValue.slice(RECIPE_TAG_PREFIX_NEW.length + 1)
-            : tagValue.slice('nostrcooking-'.length);
+          if ((isLegacyPrefix || isNewPrefix) && !nameTagFound) {
+            // First prefixed tag is the name tag - skip it
+            const tagName = isNewPrefix
+              ? tagValue.slice(RECIPE_TAG_PREFIX_NEW.length + 1)
+              : tagValue.slice('nostrcooking-'.length);
+            if (tagName === dTag) {
+              nameTagFound = true;
+            }
+          } else if (isLegacyPrefix || isNewPrefix) {
+            // Extract actual category tags
+            const tagName = isNewPrefix
+              ? tagValue.slice(RECIPE_TAG_PREFIX_NEW.length + 1)
+              : tagValue.slice('nostrcooking-'.length);
 
-          const matchingTag = recipeTags.find(
-            (rt) => rt.title.toLowerCase().replaceAll(' ', '-') === tagName
-          );
-          if (matchingTag) {
-            tags.push(matchingTag);
-          } else {
-            tags.push({ title: tagName.replaceAll('-', ' ') });
+            const matchingTag = recipeTags.find(
+              (rt) => rt.title.toLowerCase().replaceAll(' ', '-') === tagName
+            );
+            if (matchingTag) {
+              tags.push(matchingTag);
+            } else {
+              tags.push({ title: tagName.replaceAll('-', ' ') });
+            }
           }
         }
-      }
-    });
+      });
 
-    // Parse markdown content to extract structured data (use lenient parser for editing)
-    const info = parseMarkdownForEditing(event.content);
+      // Parse markdown content to extract structured data (use lenient parser for editing)
+      const info = parseMarkdownForEditing(event.content);
 
-    const draftData = {
-      title,
-      images,
-      tags,
-      summary,
-      chefsnotes: info.chefNotes || '',
-      preptime: info.information?.prepTime || '',
-      cooktime: info.information?.cookTime || '',
-      servings: info.information?.servings || '',
-      ingredients: info.ingredients,
-      directions: info.directions,
-      additionalMarkdown: info.additionalMarkdown || ''
-    };
+      const draftData = {
+        title,
+        images,
+        tags,
+        summary,
+        chefsnotes: info.chefNotes || '',
+        preptime: info.information?.prepTime || '',
+        cooktime: info.information?.cookTime || '',
+        servings: info.information?.servings || '',
+        ingredients: info.ingredients,
+        directions: info.directions,
+        additionalMarkdown: info.additionalMarkdown || ''
+      };
 
-    const draftId = saveDraft(draftData);
-    goto(`/create?draft=${draftId}`);
+      // Save draft - returns the saved draft directly, no need to wait
+      const { draftId } = saveDraft(draftData, undefined, false);
+
+      // Navigate to edit page
+      goto(`/create?draft=${draftId}`);
+    } catch (error) {
+      console.error('[Recipe] Failed to prepare edit:', error);
+      alert('Failed to open recipe for editing. Please try again.');
+    } finally {
+      isEditingRecipe = false;
+    }
   }
 
   async function handleDelete() {
@@ -368,6 +382,28 @@
     (e) => e.title.toLowerCase().replaceAll(' ', '-') == event.getMatchingTags("t").filter((t) => t[1].slice(13)[0])[0][1].slice(13)
   );*/
 
+  // Carousel: track element and current index for dots/arrows
+  let carouselEl: HTMLDivElement;
+  let carouselIndex = 0;
+  function updateCarouselIndex() {
+    if (!carouselEl || uniqueImages.length <= 1) return;
+    const width = carouselEl.clientWidth;
+    if (width <= 0) return;
+    const index = Math.round(carouselEl.scrollLeft / width);
+    const clamped = Math.min(index, uniqueImages.length - 1);
+    if (clamped !== carouselIndex) carouselIndex = clamped;
+  }
+  function carouselPrev() {
+    if (!carouselEl || uniqueImages.length <= 1) return;
+    const width = carouselEl.clientWidth;
+    carouselEl.scrollBy({ left: -width, behavior: 'smooth' });
+  }
+  function carouselNext() {
+    if (!carouselEl || uniqueImages.length <= 1) return;
+    const width = carouselEl.clientWidth;
+    carouselEl.scrollBy({ left: width, behavior: 'smooth' });
+  }
+
   // Deduplicate image tags by URL, use placeholder if no images or all images are empty
   $: uniqueImages = (() => {
     const images = event.tags
@@ -490,45 +526,114 @@
           </div>
         </div>
       </div>
-      {#each uniqueImages as image, i}
-        {#if i === 0}
-          <!-- First image - clickable to open modal -->
-          <div class="rounded-3xl overflow-hidden">
-            <button
-              on:click={() =>
-                openImageModal(
-                  image[1],
-                  uniqueImages.map((img) => img[1]),
-                  i
-                )}
-              class="w-full cursor-pointer"
-            >
-              <img
-                class="rounded-3xl aspect-video object-cover w-full"
-                src={image[1]}
-                alt="Recipe image {i + 1}"
-              />
-            </button>
-          </div>
-        {:else}
-          <!-- Other images - clickable to open modal -->
-          <button
-            on:click={() =>
-              openImageModal(
-                image[1],
-                uniqueImages.map((img) => img[1]),
-                i
-              )}
-            class="w-full cursor-pointer"
+      <!-- Image carousel: same style as community feed for consistency -->
+      {#if uniqueImages.length > 0}
+        <div class="recipe-carousel-wrapper relative rounded-3xl overflow-hidden">
+          <div
+            bind:this={carouselEl}
+            on:scroll={updateCarouselIndex}
+            class="recipe-image-carousel flex overflow-x-auto overflow-y-hidden snap-x snap-mandatory -mx-1 scrollbar-hide"
+            style="touch-action: pan-y pan-x; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch;"
+            role="region"
+            aria-label="Recipe images"
           >
-            <img
-              class="rounded-3xl aspect-video object-cover w-full"
-              src={image[1]}
-              alt="Recipe image {i + 1}"
-            />
-          </button>
-        {/if}
-      {/each}
+            {#each uniqueImages as image, i}
+              <div
+                class="recipe-carousel-slide flex-shrink-0 w-full min-w-full snap-center flex items-center justify-center"
+              >
+                <button
+                  on:click={() =>
+                    openImageModal(
+                      image[1],
+                      uniqueImages.map((img) => img[1]),
+                      i
+                    )}
+                  class="block w-full cursor-pointer rounded-3xl overflow-hidden focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
+                  type="button"
+                >
+                  <img
+                    class="rounded-3xl aspect-video object-cover w-full"
+                    src={image[1]}
+                    alt="Recipe image {i + 1}"
+                  />
+                </button>
+              </div>
+            {/each}
+          </div>
+          {#if uniqueImages.length > 1}
+            <!-- Arrows: hidden on mobile, visible on sm+ (match community feed) -->
+            <button
+              type="button"
+              on:click={(e) => {
+                e.stopPropagation();
+                carouselPrev();
+              }}
+              class="hidden sm:block absolute left-2 top-1/2 -translate-y-1/2 bg-black/50 hover:bg-black/70 text-white rounded-full p-2 transition-colors z-10"
+              aria-label="Previous image"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M15 19l-7-7 7-7"
+                />
+              </svg>
+            </button>
+            <button
+              type="button"
+              on:click={(e) => {
+                e.stopPropagation();
+                carouselNext();
+              }}
+              class="hidden sm:block absolute right-2 top-1/2 -translate-y-1/2 bg-black/50 hover:bg-black/70 text-white rounded-full p-2 transition-colors z-10"
+              aria-label="Next image"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M9 5l7 7-7 7"
+                />
+              </svg>
+            </button>
+            <!-- Slide counter (match community feed) -->
+            <div
+              class="absolute top-2 right-2 bg-black/50 text-white text-xs px-2 py-1 rounded z-10"
+            >
+              {carouselIndex + 1} / {uniqueImages.length}
+            </div>
+            <!-- Dot indicators: only when ≤5 images (match community feed) -->
+            {#if uniqueImages.length <= 5}
+              <div
+                class="absolute bottom-2 left-1/2 -translate-x-1/2 flex space-x-1.5 z-10"
+                aria-hidden="true"
+              >
+                {#each uniqueImages as _, i}
+                  <button
+                    type="button"
+                    class="w-2 h-2 rounded-full transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-1 focus-visible:ring-offset-transparent {carouselIndex ===
+                    i
+                      ? 'bg-white'
+                      : 'bg-white/50'}"
+                    on:click={(e) => {
+                      e.stopPropagation();
+                      if (carouselEl) {
+                        carouselEl.scrollTo({
+                          left: carouselEl.clientWidth * i,
+                          behavior: 'smooth'
+                        });
+                      }
+                    }}
+                    aria-label="Go to image {i + 1}"
+                  />
+                {/each}
+              </div>
+            {/if}
+          {/if}
+        </div>
+      {/if}
       <!-- Reactions and actions -->
       <div class="flex flex-col gap-1 print:hidden -mt-2">
         <RecipeReactionPills {event} />
@@ -582,12 +687,20 @@
               >
                 {#if isOwner}
                   <button
-                    class="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm hover:bg-accent-gray transition-colors"
+                    class="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm hover:bg-accent-gray transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     style="color: var(--color-text-primary);"
                     on:click={handleEdit}
+                    disabled={isEditingRecipe}
                   >
-                    <PencilSimpleIcon size={18} />
-                    Edit Recipe
+                    {#if isEditingRecipe}
+                      <div class="animate-spin">
+                        <PencilSimpleIcon size={18} />
+                      </div>
+                      Preparing...
+                    {:else}
+                      <PencilSimpleIcon size={18} />
+                      Edit Recipe
+                    {/if}
                   </button>
                 {/if}
                 <button
@@ -922,5 +1035,18 @@
 
   :global(.prose tbody tr) {
     border-bottom-color: var(--color-input-border);
+  }
+
+  /* Recipe image carousel: horizontal scroll, one image at a time */
+  .recipe-image-carousel {
+    scroll-behavior: smooth;
+    -webkit-overflow-scrolling: touch;
+  }
+  .recipe-image-carousel::-webkit-scrollbar {
+    display: none;
+  }
+  .recipe-carousel-slide {
+    scroll-snap-align: start;
+    scroll-snap-stop: always;
   }
 </style>
