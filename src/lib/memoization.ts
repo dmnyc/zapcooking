@@ -65,16 +65,17 @@ export function memoize<T extends (...args: any[]) => any>(
 
 /**
  * Create a memoized reactive statement for Svelte
+ * Note: This function captures dependencies at creation time. For dynamic dependencies,
+ * recreate the memoized function when dependencies change.
  */
 export function createMemoizedReactive<T>(
   computeFn: () => T,
   dependencies: any[],
   maxCacheSize: number = 50
 ): () => T {
-  const memoized = memoize(computeFn, maxCacheSize);
+  const memoized = memoize((...deps: any[]) => computeFn(), maxCacheSize);
   
   return () => {
-    // Use dependencies as cache key
     return memoized(...dependencies);
   };
 }
@@ -149,7 +150,9 @@ export function debouncedMemoize<T extends (...args: any[]) => any>(
       // Implement LRU eviction
       if (cache.size > maxCacheSize) {
         const firstKey = cache.keys().next().value;
-        cache.delete(firstKey);
+        if (firstKey !== undefined) {
+          cache.delete(firstKey);
+        }
       }
       
       timeouts.delete(key);
@@ -182,8 +185,8 @@ export function memoizeAsync<T extends (...args: any[]) => Promise<any>>(
   fn: T,
   maxCacheSize: number = 50
 ): MemoizedFunction<T> {
-  const cache = new Map<string, Promise<ReturnType<T>>>();
-  const resolvedCache = new Map<string, ReturnType<T>>();
+  const cache = new Map<string, ReturnType<T>>();
+  const resolvedCache = new Map<string, Awaited<ReturnType<T>>>();
   
   const memoized = (...args: Parameters<T>): ReturnType<T> => {
     const key = args.map(arg => {
@@ -207,18 +210,20 @@ export function memoizeAsync<T extends (...args: any[]) => Promise<any>>(
     }
     
     // Create new promise
-    const promise = fn(...args).then(result => {
+    const promise = fn(...args).then((result: Awaited<ReturnType<T>>) => {
       resolvedCache.set(key, result);
       
       // Implement LRU eviction
       if (resolvedCache.size > maxCacheSize) {
         const firstKey = resolvedCache.keys().next().value;
-        resolvedCache.delete(firstKey);
-        cache.delete(firstKey);
+        if (firstKey !== undefined) {
+          resolvedCache.delete(firstKey);
+          cache.delete(firstKey);
+        }
       }
       
       return result;
-    });
+    }) as ReturnType<T>;
     
     cache.set(key, promise);
     return promise;

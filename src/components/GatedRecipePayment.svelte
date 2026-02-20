@@ -1,21 +1,12 @@
 <script lang="ts">
   import { userPublickey, ndk } from '$lib/nostr';
   import { browser } from '$app/environment';
-  import { requestPayment, fetchSecret, createKeyNote, checkAccess } from '$lib/nip108/client';
+  import { requestPayment, checkAccess } from '$lib/nip108/client';
   import type { GatedRecipeMetadata } from '$lib/nip108/types';
   import { sendPayment } from '$lib/wallet/walletManager';
-  import { lightningService } from '$lib/lightningService';
   import LightningIcon from 'phosphor-svelte/lib/Lightning';
   import LockIcon from 'phosphor-svelte/lib/Lock';
-  import CheckCircleIcon from 'phosphor-svelte/lib/CheckCircle';
-  import WrenchIcon from 'phosphor-svelte/lib/Wrench';
 
-  // TODO: Premium recipe unlock is temporarily disabled due to backend issues.
-  // The payment endpoint returns 404 because gated content is not being stored/retrieved properly.
-  // See: src/routes/api/nip108/payment/+server.ts - getGatedContent() returns null
-  // See: src/lib/nip108/server-store.ts - storage mechanism needs investigation
-  // All underlying functionality is preserved - just need to fix the server-side storage.
-  const PREMIUM_UNLOCK_ENABLED = false;
   import type { NDKEvent } from '@nostr-dev-kit/ndk';
   import { onMount } from 'svelte';
 
@@ -58,34 +49,55 @@
     error = null;
 
     try {
-      // Request payment
+      // Request payment (GET → 402 with invoice, or 200 if already paid)
       const paymentRequest = await requestPayment(
         gatedMetadata.endpoint,
         gatedNoteId,
         $userPublickey
       );
 
+      if (paymentRequest.paid) {
+        // Already paid — refresh access
+        const recipe = await checkAccess(gatedNoteId, $userPublickey, $ndk);
+        if (recipe) {
+          unlockedRecipe = recipe;
+          onUnlocked(recipe);
+        }
+        return;
+      }
+
       if (paymentRequest.pr) {
-        // Pay invoice
+        let paymentPreimage = '';
+
+        // Real Lightning invoice: pay using wallet
         const paymentResult = await sendPayment(paymentRequest.pr, {
-          amount: gatedMetadata.cost / 1000, // Convert mSats to sats
+          amount: gatedMetadata.cost, // cost is in sats
           description: `Unlock gated recipe`
         });
 
         if (!paymentResult.success) {
           throw new Error(paymentResult.error || 'Payment failed');
         }
+        paymentPreimage = paymentResult.preimage || '';
 
-        // Fetch secret after payment
-        const secret = await fetchSecret(
-          gatedMetadata.endpoint,
+        // Mark payment on server (preimage optional — some wallets don't return it)
+        const markBody: Record<string, string> = {
           gatedNoteId,
-          $userPublickey,
-          paymentResult.preimage || ''
-        );
+          userPubkey: $userPublickey
+        };
+        if (paymentPreimage) {
+          markBody.preimage = paymentPreimage;
+        }
+        const markResponse = await fetch('/api/nip108/payment', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(markBody)
+        });
 
-        // Create key note for future access
-        await createKeyNote(gatedNoteId, secret, $userPublickey, $ndk);
+        if (!markResponse.ok) {
+          const markError = await markResponse.json().catch(() => ({ error: 'Unknown error' }));
+          throw new Error(markError.error || 'Failed to record payment');
+        }
 
         // Decrypt and unlock recipe
         const recipe = await checkAccess(gatedNoteId, $userPublickey, $ndk);
@@ -104,13 +116,8 @@
     }
   }
 
-  function formatCost(costMsats: number): string {
-    const sats = costMsats / 1000;
-    if (sats >= 1) {
-      return `${sats.toFixed(0)} sats`;
-    }
-    // For sub-sat amounts, show decimal
-    return `${sats} sats`;
+  function formatCost(sats: number): string {
+    return `${sats.toLocaleString()} sats`;
   }
 </script>
 
@@ -121,6 +128,35 @@
 {:else if hasAccess && unlockedRecipe}
   <!-- Recipe is unlocked - show it -->
   <slot name="unlocked" {unlockedRecipe} />
+{:else if gatedMetadata.serverHasData === false}
+  <!-- Server store unavailable - cannot process payment -->
+  <div
+    class="flex flex-col gap-4 p-6 rounded-xl border"
+    style="border-color: var(--color-input-border); background-color: var(--color-input-bg);"
+  >
+    <div class="flex items-center gap-3">
+      <LockIcon size={24} class="text-gray-400" />
+      <div class="flex-1">
+        <h3 class="font-semibold text-lg">Premium Recipe</h3>
+        <p class="text-sm text-caption">This recipe is gated behind a Lightning payment</p>
+      </div>
+    </div>
+
+    {#if gatedMetadata.preview}
+      <div class="p-4 rounded-lg bg-input">
+        <p class="text-sm text-caption italic">"{gatedMetadata.preview}"</p>
+      </div>
+    {/if}
+
+    <div
+      class="flex flex-col items-center gap-3 p-4 rounded-lg bg-gray-50 dark:bg-gray-900/20 border border-gray-200 dark:border-gray-800"
+    >
+      <p class="text-sm font-medium" style="color: var(--color-text-secondary);">Content Unavailable</p>
+      <p class="text-xs text-center" style="color: var(--color-text-secondary);">
+        The encrypted recipe data is currently unavailable on the server. Please try again later.
+      </p>
+    </div>
+  </div>
 {:else}
   <!-- Gated content - show payment UI -->
   <div
@@ -161,37 +197,23 @@
       </div>
     {/if}
 
-    {#if PREMIUM_UNLOCK_ENABLED}
-      <button
-        on:click={handlePurchase}
-        disabled={loading || !$userPublickey}
-        class="w-full px-6 py-3 rounded-lg bg-orange-500 hover:bg-orange-600 text-white font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-      >
-        {#if loading}
-          <span>Processing...</span>
-        {:else if !$userPublickey}
-          <span>Log in to Purchase</span>
-        {:else}
-          <LightningIcon size={20} />
-          <span>Unlock Recipe ({formatCost(gatedMetadata.cost)})</span>
-        {/if}
-      </button>
+    <button
+      on:click={handlePurchase}
+      disabled={loading || !$userPublickey}
+      class="w-full px-6 py-3 rounded-lg bg-orange-500 hover:bg-orange-600 text-white font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+    >
+      {#if loading}
+        <span>Processing...</span>
+      {:else if !$userPublickey}
+        <span>Log in to Purchase</span>
+      {:else}
+        <LightningIcon size={20} />
+        <span>Unlock Recipe ({formatCost(gatedMetadata.cost)})</span>
+      {/if}
+    </button>
 
-      <p class="text-xs text-caption text-center">
-        After payment, you'll have permanent access to this recipe
-      </p>
-    {:else}
-      <!-- Temporarily disabled - coming soon -->
-      <div
-        class="w-full px-6 py-3 rounded-lg bg-gray-400 text-white font-semibold flex items-center justify-center gap-2"
-      >
-        <WrenchIcon size={20} />
-        <span>Coming Soon</span>
-      </div>
-
-      <p class="text-xs text-caption text-center">
-        Premium recipe unlock is temporarily unavailable
-      </p>
-    {/if}
+    <p class="text-xs text-caption text-center">
+      After payment, you'll have permanent access to this recipe
+    </p>
   </div>
 {/if}

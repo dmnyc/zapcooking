@@ -4,6 +4,8 @@
   import SVGNostrCookingWithText from '../assets/nostr.cooking-withtext.svg';
   import SearchIcon from 'phosphor-svelte/lib/MagnifyingGlass';
   import CookingPotIcon from 'phosphor-svelte/lib/CookingPot';
+  import SparkleIcon from 'phosphor-svelte/lib/Sparkle';
+  import RobotIcon from 'phosphor-svelte/lib/Robot';
   import TagsSearchAutocomplete from './TagsSearchAutocomplete.svelte';
   import { page } from '$app/stores';
   import CustomAvatar from './CustomAvatar.svelte';
@@ -94,6 +96,24 @@
         <SearchIcon size={18} weight="bold" class="sm:w-5 sm:h-5" />
       </button>
     </div>
+
+    <!-- Sous Chef & Zappy icons (logged in) -->
+    {#if $userPublickey}
+      <a
+        href="/extract"
+        class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center rounded-full transition-colors cursor-pointer hover:bg-accent-gray"
+        aria-label="Sous Chef"
+      >
+        <SparkleIcon size={18} weight="fill" class="text-primary sm:w-5 sm:h-5" />
+      </a>
+      <a
+        href="/zappy"
+        class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center rounded-full transition-colors cursor-pointer hover:bg-accent-gray"
+        aria-label="Zappy"
+      >
+        <RobotIcon size={18} weight="fill" class="text-yellow-500 sm:w-5 sm:h-5" />
+      </a>
+    {/if}
 
     <!-- Cooking Tools toggle (timer + converter) -->
     <button

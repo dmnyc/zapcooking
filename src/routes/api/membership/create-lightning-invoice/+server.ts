@@ -10,7 +10,7 @@
  * {
  *   pubkey: string,
  *   tier: 'cook' | 'pro',
- *   period: 'annual' | '2year',
+ *   period: 'annual' | 'monthly',
  * }
  * 
  * Returns:
@@ -35,11 +35,11 @@ import { storeInvoiceMetadata } from '$lib/invoiceMetadataStore.server';
 const PRICING_USD = {
   cook: {
     annual: 49, // $49/year
-    '2year': 83.30, // $83.30/2years
+    monthly: 4.99, // $4.99/month
   },
   pro: {
     annual: 89, // $89/year
-    '2year': 152.40, // $152.40/2years
+    monthly: 8.99, // $8.99/month
   },
 };
 
@@ -71,9 +71,9 @@ export const POST: RequestHandler = async ({ request, platform }) => {
       );
     }
     
-    if (!period || !['annual', '2year'].includes(period)) {
+    if (!period || !['annual', 'monthly'].includes(period)) {
       return json(
-        { error: 'Invalid period. Must be "annual" or "2year"' },
+        { error: 'Invalid period. Must be "annual" or "monthly"' },
         { status: 400 }
       );
     }
@@ -116,7 +116,7 @@ export const POST: RequestHandler = async ({ request, platform }) => {
     // Create invoice description with USD price for display
     // Note: Full pubkey is passed separately for payment verification
     const tierName = tier === 'cook' ? 'Cook+' : 'Pro Kitchen';
-    const periodLabel = period === 'annual' ? '1 Year' : '2 Years';
+    const periodLabel = period === 'annual' ? '1 Year' : '1 Month';
     const usdDisplay = discountedUsdAmount.toFixed(2);
     const description = `zap.cooking ${tierName} (${periodLabel}) - $${usdDisplay} USD`;
     
@@ -160,9 +160,19 @@ export const POST: RequestHandler = async ({ request, platform }) => {
     });
 
     // Store invoice metadata so webhook and verify endpoints can match payment to user
-    storeInvoiceMetadata(
+    const kv = platform?.env?.GATED_CONTENT ?? null;
+    // In production, require the GATED_CONTENT KV binding to avoid falling back to in-memory storage
+    if (!kv && env.NODE_ENV === 'production') {
+      console.error('[Membership Lightning] GATED_CONTENT KV binding is missing in production');
+      return json(
+        { error: 'Service temporarily unavailable' },
+        { status: 503 }
+      );
+    }
+    await storeInvoiceMetadata(
+      kv,
       receiveRequestId,
-      { pubkey, tier: tier as 'cook' | 'pro', period: period as 'annual' | '2year' },
+      { pubkey, tier: tier as 'cook' | 'pro', period: period as 'annual' | 'monthly' },
       paymentHash
     );
     

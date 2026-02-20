@@ -17,10 +17,24 @@
   import TrendingRecipeCard from '../../components/TrendingRecipeCard.svelte';
   import PullToRefresh from '../../components/PullToRefresh.svelte';
   import LongformFoodFeed from '../../components/LongformFoodFeed.svelte';
+  import MeshHeroOverlay from '../../components/mesh/MeshHeroOverlay.svelte';
   import type { NDKEvent } from '@nostr-dev-kit/ndk';
   import { nip19 } from 'nostr-tools';
   import { init, markOnce } from '$lib/perf/explorePerf';
   import { userPublickey } from '$lib/nostr';
+  import { fetchMeshRecipes, fetchMeshEngagement, buildMeshGraph, type EngagementMap } from '$lib/meshUtils';
+  import type { MeshNode, MeshEdge } from '$lib/mesh/meshTypes';
+  import { getCachedLayout, applyCachedLayout } from '$lib/mesh/meshLayout';
+  import {
+    forceSimulation,
+    forceLink,
+    forceManyBody,
+    forceCenter,
+    forceCollide,
+    forceX,
+    forceY
+  } from 'd3-force';
+  import type { SimulationNodeDatum, SimulationLinkDatum } from 'd3-force';
   import { cookingToolsOpen, cookingToolsStore } from '$lib/stores/cookingToolsWidget';
   import { browser } from '$app/environment';
   import type { PageData } from './$types';
@@ -114,6 +128,11 @@
   let loadingDiscover = true;
   let cultureExpanded = false;
 
+  // Mesh hero state
+  let heroNodes: MeshNode[] = [];
+  let heroEdges: MeshEdge[] = [];
+  let heroReady = false;
+
   // Compute section references reactively
   $: intentSection = CURATED_TAG_SECTIONS.find((s) => s.title === 'Why are you cooking?');
   $: cultureSection = CURATED_TAG_SECTIONS.find((s) => s.title === 'Explore by culture');
@@ -166,6 +185,67 @@
       });
       loadingPopular = false;
     });
+
+    // Load mesh hero data (non-blocking, in parallel)
+    loadMeshHero();
+  }
+
+  async function loadMeshHero() {
+    try {
+      const meshRecipes = await fetchMeshRecipes();
+      if (meshRecipes.length === 0) return;
+
+      const meshEngagement = await fetchMeshEngagement(meshRecipes);
+
+      // Use a reduced set for the hero (top 40 recipes)
+      const topRecipes = meshRecipes.slice(0, 40);
+      const graph = buildMeshGraph(topRecipes, meshEngagement);
+
+      // Check for cached layout
+      const nodeIds = graph.nodes.map((n) => n.id);
+      const cached = getCachedLayout(nodeIds, graph.edges.length);
+      if (cached) {
+        applyCachedLayout(graph.nodes, cached);
+        heroNodes = graph.nodes;
+        heroEdges = graph.edges;
+        heroReady = true;
+        return;
+      }
+
+      // Quick simulation for hero positions — non-blocking
+      const simNodes = graph.nodes as (MeshNode & SimulationNodeDatum)[];
+      const sim = forceSimulation(simNodes)
+        .force('link', forceLink(graph.edges as any[]).id((d: any) => d.id).distance(70).strength(0.3))
+        .force('charge', forceManyBody().strength(-30))
+        .force('center', forceCenter(300, 250))
+        .force('collide', forceCollide().radius(25))
+        .stop();
+
+      // Settle in batches to avoid blocking the main thread
+      const BATCH = 50;
+      await new Promise<void>((resolve) => {
+        function tickBatch() {
+          let ticked = 0;
+          while (sim.alpha() > 0.001 && ticked < BATCH) {
+            sim.tick();
+            ticked++;
+          }
+          if (sim.alpha() > 0.001) {
+            setTimeout(tickBatch, 0);
+          } else {
+            resolve();
+          }
+        }
+        tickBatch();
+      });
+
+      heroNodes = simNodes;
+      heroEdges = graph.edges;
+      heroReady = true;
+    } catch (err) {
+      // Mesh hero is non-critical — if it fails, just don't show it
+      console.warn('[MeshHero] Failed to load:', err);
+    }
   }
 
   async function handleRefresh() {
@@ -179,12 +259,23 @@
     }
   }
 
-  onMount(async () => {
+  onMount(() => {
+    let cleanup: (() => void) | undefined;
+    void (async () => {
     syncTipPointer();
     await loadExploreData();
 
     if (browser) {
-      const handleLayoutChange = () => syncTipPointer();
+      let ticking = false;
+      const handleLayoutChange = () => {
+        if (!ticking) {
+          ticking = true;
+          requestAnimationFrame(() => {
+            syncTipPointer();
+            ticking = false;
+          });
+        }
+      };
       const scrollContainer = document.getElementById('app-scroll');
       window.addEventListener('resize', handleLayoutChange);
       scrollContainer?.addEventListener('scroll', handleLayoutChange, { passive: true });
@@ -193,6 +284,13 @@
         scrollContainer?.removeEventListener('scroll', handleLayoutChange);
       };
     }
+    })().then((result) => {
+      cleanup = result;
+    });
+
+    return () => {
+      cleanup?.();
+    };
   });
 
   function navigateToTag(tag: recipeTagSimple) {
@@ -224,6 +322,10 @@
 
     return showAll ? allTags : allTags.slice(0, 10);
   }
+
+  $: allCultureTags = getCultureTags(true);
+  $: visibleCultureTags = cultureExpanded ? allCultureTags : allCultureTags.slice(0, 10);
+  $: hasMoreCultures = allCultureTags.length > 10;
 </script>
 
 <svelte:head>
@@ -263,8 +365,19 @@
 
     <!-- Explore Content -->
     <div class="flex flex-col gap-8">
+      <!-- Mesh Hero -->
+      {#if heroReady || heroNodes.length > 0}
+        <section>
+          <MeshHeroOverlay
+            nodes={heroNodes}
+            edges={heroEdges}
+            ready={heroReady}
+          />
+        </section>
+      {/if}
+
       <!-- Fresh from the Kitchen -->
-      <section class="flex flex-col gap-4">
+      <section class="flex flex-col gap-4" data-section="fresh-kitchen">
         <h2 class="text-2xl font-bold flex items-center gap-2">
           <span>🍳</span>
           <span>Fresh from the Kitchen</span>
@@ -302,7 +415,7 @@
           <span>Popular Cooks</span>
         </h2>
         {#if loadingCooks}
-          <div class="flex gap-4 overflow-x-auto overflow-y-visible py-2 -mx-4 px-4">
+          <div class="flex gap-4 overflow-x-auto pt-8 pb-4 -mt-6 -mx-4 px-4">
             {#each Array(6) as _}
               <div class="flex-shrink-0 w-20 flex flex-col items-center gap-2">
                 <div class="w-16 h-16 rounded-full animate-pulse skeleton-bg"></div>
@@ -312,7 +425,7 @@
           </div>
         {:else if popularCooks.length > 0}
           <div
-            class="flex gap-4 overflow-x-auto overflow-y-visible py-2 -mx-4 px-4 scrollbar-hide touch-pan-x"
+            class="flex gap-4 overflow-x-auto pt-8 pb-4 -mt-6 -mx-4 px-4 scrollbar-hide touch-pan-x"
           >
             {#each popularCooks as cook}
               <ProfileAvatar pubkey={cook.pubkey} showZapIndicator={false} />
@@ -424,7 +537,7 @@
                   <span>{cultureSection.title}</span>
                 </h2>
               </div>
-              {#if getCultureTags(false).length < getCultureTags(true).length}
+              {#if hasMoreCultures}
                 <button
                   on:click={() => (cultureExpanded = !cultureExpanded)}
                   type="button"
@@ -435,7 +548,7 @@
               {/if}
             </div>
             <div class="flex flex-wrap gap-2 transition-all duration-300">
-              {#each getCultureTags(cultureExpanded) as tag (tag.title)}
+              {#each visibleCultureTags as tag (tag.title)}
                 <TagChip {tag} onClick={() => navigateToTag(tag)} />
               {/each}
             </div>

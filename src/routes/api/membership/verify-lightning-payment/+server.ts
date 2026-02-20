@@ -12,7 +12,7 @@
  *   paymentHash: string,       // Payment hash (fallback lookup)
  *   pubkey: string,
  *   tier: 'cook' | 'pro',
- *   period: 'annual' | '2year',
+ *   period: 'annual' | 'monthly',
  * }
  */
 
@@ -54,9 +54,9 @@ export const POST: RequestHandler = async ({ request, platform }) => {
       );
     }
 
-    if (!['annual', '2year'].includes(period)) {
+    if (!['annual', 'monthly'].includes(period)) {
       return json(
-        { error: 'Invalid period. Must be "annual" or "2year"' },
+        { error: 'Invalid period. Must be "annual" or "monthly"' },
         { status: 400 }
       );
     }
@@ -70,9 +70,20 @@ export const POST: RequestHandler = async ({ request, platform }) => {
     }
 
     // Look up stored metadata to verify the request matches what was created
+    const kv = platform?.env?.GATED_CONTENT ?? null;
+    if (!kv && env.NODE_ENV === 'production') {
+      console.error('[Verify Lightning] GATED_CONTENT KV binding is missing in production environment');
+      return json(
+        {
+          error: 'Service unavailable',
+          message: 'GATED_CONTENT KV namespace is not configured'
+        },
+        { status: 503 }
+      );
+    }
     const metadata = receiveRequestId
-      ? getInvoiceMetadata(receiveRequestId)
-      : getInvoiceMetadataByPaymentHash(paymentHash);
+      ? await getInvoiceMetadata(kv, receiveRequestId)
+      : await getInvoiceMetadataByPaymentHash(kv, paymentHash);
 
     if (!metadata) {
       return json(
@@ -117,11 +128,11 @@ export const POST: RequestHandler = async ({ request, platform }) => {
       );
     }
 
-    // Register member using shared idempotent logic
+    // Register member using authoritative tier/period from invoice metadata
     const result = await registerMember({
       pubkey,
-      tier: tier as 'cook' | 'pro',
-      period: period as 'annual' | '2year',
+      tier: (metadata.tier || tier) as 'cook' | 'pro',
+      period: (metadata.period || period) as 'annual' | 'monthly',
       paymentMethod: 'lightning_strike',
       apiSecret: API_SECRET,
     });

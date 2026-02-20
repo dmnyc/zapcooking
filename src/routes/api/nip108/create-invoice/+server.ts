@@ -21,7 +21,12 @@
  */
 
 import { json, type RequestHandler } from '@sveltejs/kit';
-import { getGatedContent } from '$lib/nip108/server-store';
+import { getGatedContent, type GatedKV } from '$lib/nip108/server-store';
+import { decode } from '@gandlaf21/bolt11-decode';
+
+function getKV(platform: App.Platform | undefined): GatedKV {
+  return (platform?.env?.GATED_CONTENT as GatedKV) || null;
+}
 
 /**
  * Resolve a Lightning address (lud16) to LNURL pay parameters
@@ -60,7 +65,9 @@ async function fetchLnurlInvoice(
   amountMsats: number, 
   comment?: string
 ): Promise<{ invoice: string; paymentHash?: string }> {
-  let url = `${callback}?amount=${amountMsats}`;
+  // Handle callbacks that may already contain query parameters
+  const separator = callback.includes('?') ? '&' : '?';
+  let url = `${callback}${separator}amount=${amountMsats}`;
   if (comment) {
     url += `&comment=${encodeURIComponent(comment)}`;
   }
@@ -84,18 +91,36 @@ async function fetchLnurlInvoice(
   };
 }
 
-export const POST: RequestHandler = async ({ request }) => {
+/**
+ * Some LNURL providers omit paymentHash in callback responses.
+ * Recover it from the BOLT11 invoice so downstream verification still works.
+ */
+function extractPaymentHashFromInvoice(invoice: string): string {
+  try {
+    const decoded = decode(invoice);
+    const paymentHashSection = decoded.sections?.find((section: { name?: string }) => section.name === 'payment_hash');
+    const value = paymentHashSection?.value;
+    return typeof value === 'string' ? value.toLowerCase() : '';
+  } catch (error) {
+    console.warn('[NIP-108] Failed to decode invoice for payment hash extraction:', error);
+    return '';
+  }
+}
+
+export const POST: RequestHandler = async ({ request, platform }) => {
+  const kv = getKV(platform);
+
   try {
     const body = await request.json();
     const { amountMsats, description, metadata } = body;
-    
+
     if (!amountMsats || !description) {
       return json(
         { error: 'amountMsats and description are required' },
         { status: 400 }
       );
     }
-    
+
     const gatedNoteId = metadata?.gatedNoteId;
     if (!gatedNoteId) {
       return json(
@@ -103,9 +128,9 @@ export const POST: RequestHandler = async ({ request }) => {
         { status: 400 }
       );
     }
-    
+
     // Get the gated content to find the author's Lightning address
-    const gatedContent = getGatedContent(gatedNoteId);
+    const gatedContent = await getGatedContent(kv, gatedNoteId);
     if (!gatedContent) {
       return json(
         { error: 'Gated content not found' },
@@ -116,22 +141,12 @@ export const POST: RequestHandler = async ({ request }) => {
     const authorLightningAddress = gatedContent.authorLightningAddress;
     
     if (!authorLightningAddress) {
-      // No Lightning address - return mock invoice for testing
-      console.log('[NIP-108] No Lightning address for author, using mock invoice');
-      
-      const paymentHash = Array.from(crypto.getRandomValues(new Uint8Array(32)))
-        .map(b => b.toString(16).padStart(2, '0'))
-        .join('');
-      
       return json({
-        invoice: `lnbc${Math.floor(amountMsats / 1000)}u1p${paymentHash.substring(0, 20)}...mock`,
-        paymentHash,
-        isMock: true
-      });
+        error: 'Author has no Lightning address configured'
+      }, { status: 400 });
     }
     
     // Resolve the Lightning address and create a real invoice
-    console.log(`[NIP-108] Creating invoice for ${amountMsats} msats to ${authorLightningAddress}`);
     
     try {
       const lnurlInfo = await resolveLightningAddress(authorLightningAddress);
@@ -160,12 +175,11 @@ export const POST: RequestHandler = async ({ request }) => {
       
       // Fetch the invoice
       const invoiceResult = await fetchLnurlInvoice(lnurlInfo.callback, amountMsats, comment);
-      
-      console.log(`[NIP-108] Created real invoice for ${authorLightningAddress}:`, invoiceResult.invoice.substring(0, 50) + '...');
+      const paymentHash = (invoiceResult.paymentHash || extractPaymentHashFromInvoice(invoiceResult.invoice) || '').toLowerCase();
       
       return json({
         invoice: invoiceResult.invoice,
-        paymentHash: invoiceResult.paymentHash || '',
+        paymentHash,
         isMock: false
       });
       

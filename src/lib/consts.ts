@@ -158,6 +158,7 @@ export const recipeTags: recipeTagSimple[] = [
   { title: 'Shrimp', emoji: '🦐' },
   { title: 'Side' },
   { title: 'Slowcooked', emoji: '⏳' },
+  { title: 'Smoothie', emoji: '🥤' },
   { title: 'Snack', emoji: '🍿' },
   { title: 'Somali', emoji: '🇸🇴' },
   { title: 'Soup', emoji: '🍲' },
@@ -214,6 +215,7 @@ export const CURATED_TAGS: string[] = [
   'Dessert',
   'Snack',
   'Drinks',
+  'Smoothie',
   // Cuisines
   'American',
   'Asian',
@@ -372,7 +374,7 @@ export const CURATED_TAG_SECTIONS: TagSection[] = [
   {
     emoji: '🍳',
     title: 'Meals',
-    tags: ['Pizza', 'Pasta', 'Soup', 'Salad', 'Sandwich', 'Breakfast', 'Lunch', 'Supper']
+    tags: ['Pizza', 'Pasta', 'Soup', 'Salad', 'Sandwich', 'Smoothie', 'Breakfast', 'Lunch', 'Supper']
   },
   {
     emoji: '🔥',

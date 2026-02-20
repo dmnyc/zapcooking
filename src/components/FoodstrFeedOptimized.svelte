@@ -34,7 +34,7 @@
     isThreadMuted
   } from '$lib/mutableIntegration';
   import { formatDistanceToNow } from 'date-fns';
-  import CustomAvatar from './CustomAvatar.svelte';
+  import Avatar from './Avatar.svelte';
   import type { NDKEvent, NDKSubscription } from '@nostr-dev-kit/ndk';
   import { NDKSubscriptionCacheUsage } from '@nostr-dev-kit/ndk';
   import NoteTotalLikes from './NoteTotalLikes.svelte';
@@ -1462,6 +1462,7 @@
         // Check for stale results after async operation
         if (isStaleResult(loadGeneration)) {
           console.log('[Feed] Discarding stale cache results');
+          loadInProgress = false;
           return;
         }
 
@@ -1489,6 +1490,7 @@
             } catch {
               // Non-critical
             }
+            loadInProgress = false;
             return;
           }
         }
@@ -1497,6 +1499,7 @@
       // Check for stale results before proceeding
       if (isStaleResult(loadGeneration)) {
         console.log('[Feed] Discarding stale results (before relay fetch)');
+        loadInProgress = false;
         return;
       }
 
@@ -1510,11 +1513,13 @@
         // Check for stale results after async operation
         if (isStaleResult(loadGeneration)) {
           console.log('[Feed] Discarding stale compressed cache results');
+          loadInProgress = false;
           return;
         }
         loading = false;
         error = false;
         setTimeout(() => fetchFreshData(), 100);
+        loadInProgress = false;
         return;
       }
 
@@ -1529,6 +1534,7 @@
         console.error('[Feed] NDK not initialized');
         loading = false;
         error = true;
+        loadInProgress = false;
         return;
       }
 
@@ -1539,12 +1545,14 @@
         console.error('[Feed] Failed to ensure NDK connection:', err);
         loading = false;
         error = true;
+        loadInProgress = false;
         return;
       }
 
       // Check for stale results after waiting for connection
       if (isStaleResult(loadGeneration)) {
         console.log('[Feed] Discarding stale results (after connection wait)');
+        loadInProgress = false;
         return;
       }
 
@@ -1558,6 +1566,7 @@
           loading = false;
           error = false;
           events = [];
+          loadInProgress = false;
           return;
         }
 
@@ -1616,6 +1625,7 @@
               // Check for stale results
               if (isStaleResult(loadGeneration)) {
                 console.log('[Feed] Discarding stale Primal results');
+                loadInProgress = false;
                 return;
               }
 
@@ -1641,6 +1651,7 @@
               supplementWithOutbox('following');
 
               console.log(`[Feed] Primal SUCCESS: ${events.length} events displayed`);
+              loadInProgress = false;
               return;
             } else {
               console.log('[Feed] Primal: Not enough food events, falling back to outbox');
@@ -1729,6 +1740,7 @@
         // Check for stale results before applying events
         if (isStaleResult(loadGeneration)) {
           console.log('[Feed] Discarding stale following results');
+          loadInProgress = false;
           return;
         }
 
@@ -1746,6 +1758,7 @@
         } catch {
           // Subscription setup failed - non-critical, events already loaded
         }
+        loadInProgress = false;
         return;
       }
 
@@ -1756,6 +1769,7 @@
           loading = false;
           error = false;
           events = [];
+          loadInProgress = false;
           return;
         }
 
@@ -1812,6 +1826,7 @@
               // Check for stale results
               if (isStaleResult(loadGeneration)) {
                 console.log('[Feed] Discarding stale Primal replies results');
+                loadInProgress = false;
                 return;
               }
 
@@ -1839,6 +1854,7 @@
               supplementWithOutbox('replies');
 
               console.log(`[Feed] Primal (replies) SUCCESS: ${events.length} events displayed`);
+              loadInProgress = false;
               return;
             } else {
               console.log(
@@ -1939,6 +1955,7 @@
         } catch {
           // Subscription setup failed - non-critical, events already loaded
         }
+        loadInProgress = false;
         return;
       }
 
@@ -1948,6 +1965,7 @@
           loading = false;
           error = false;
           events = [];
+          loadInProgress = false;
           return;
         }
 
@@ -1958,6 +1976,7 @@
           error = false;
           events = [];
           console.warn('[Feed] User does not have active membership');
+          loadInProgress = false;
           return;
         }
 
@@ -2022,6 +2041,7 @@
         // Check for stale results before applying events
         if (isStaleResult(loadGeneration)) {
           console.log('[Feed] Discarding stale members results');
+          loadInProgress = false;
           return;
         }
 
@@ -2039,6 +2059,7 @@
         } catch {
           // Subscription setup failed - non-critical, events already loaded
         }
+        loadInProgress = false;
         return;
       }
 
@@ -2084,6 +2105,7 @@
             // Check for stale results
             if (isStaleResult(loadGeneration)) {
               console.log('[Feed] Discarding stale garden cache results');
+              loadInProgress = false;
               return;
             }
 
@@ -2102,6 +2124,7 @@
               } catch {
                 // Non-critical
               }
+              loadInProgress = false;
               return;
             }
 
@@ -2133,6 +2156,7 @@
           } catch {
             // Non-critical
           }
+          loadInProgress = false;
           return;
         }
 
@@ -2167,6 +2191,7 @@
         if (isStaleResult(loadGeneration)) {
           console.log('[Feed] Discarding stale garden relay results');
           gardenCacheStatus.update((s) => ({ ...s, isLoading: false }));
+          loadInProgress = false;
           return;
         }
 
@@ -2222,6 +2247,7 @@
         } catch {
           // Subscription setup failed - non-critical, events already loaded
         }
+        loadInProgress = false;
         return;
       }
 
@@ -2290,6 +2316,7 @@
             // Check for stale results
             if (isStaleResult(loadGeneration)) {
               console.log('[Feed] Discarding stale Primal global results');
+              loadInProgress = false;
               return;
             }
 
@@ -2311,6 +2338,7 @@
             }
 
             console.log(`[Feed] Primal global SUCCESS: ${events.length} events displayed`);
+            loadInProgress = false;
             return;
           } else {
             console.log(
@@ -2420,6 +2448,7 @@
       // Check for stale results before applying events
       if (isStaleResult(loadGeneration)) {
         console.log('[Feed] Discarding stale global results');
+        loadInProgress = false;
         return;
       }
 
@@ -3338,6 +3367,16 @@
 
     error = true;
     loading = false;
+  }
+
+  function unmuteAuthor(pubkey: string): void {
+    const mutedUsers = JSON.parse(localStorage.getItem('mutedUsers') || '[]') as string[];
+    const updated = mutedUsers.filter((pk) => pk !== pubkey);
+    localStorage.setItem('mutedUsers', JSON.stringify(updated));
+    invalidateMutedUsersCache();
+    muteListStore.invalidate();
+    muteListStore.load(true);
+    void retryWithDelay();
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -4410,6 +4449,14 @@
     // Clean up zap animation timeouts
     cleanupZapAnimationTimeouts();
 
+    // Clear pending cleanup timers to prevent stale callbacks after navigation
+    pendingCleanupTimers.forEach((timer) => clearTimeout(timer));
+    pendingCleanupTimers.clear();
+
+    // Unsubscribe all engagement store subscriptions
+    engagementSubscriptions.forEach((unsub) => unsub());
+    engagementSubscriptions.clear();
+
     cleanupInfiniteScroll();
     await cleanup();
   });
@@ -4643,13 +4690,7 @@
             <button
               on:click={() => {
                 if (authorPubkey) {
-                  const mutedUsers = JSON.parse(localStorage.getItem('mutedUsers') || '[]');
-                  const updated = mutedUsers.filter((pk) => pk !== authorPubkey);
-                  localStorage.setItem('mutedUsers', JSON.stringify(updated));
-                  invalidateMutedUsersCache();
-                  muteListStore.invalidate();
-                  muteListStore.load(true);
-                  retryWithDelay();
+                  unmuteAuthor(authorPubkey);
                 }
               }}
               class="px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors"
@@ -4721,7 +4762,7 @@
                     href="/user/{nip19.npubEncode(event.author?.hexpubkey || event.pubkey)}"
                     class="flex-shrink-0"
                   >
-                    <CustomAvatar
+                    <Avatar
                       className="cursor-pointer"
                       pubkey={event.author?.hexpubkey || event.pubkey}
                       size={40}
@@ -4784,7 +4825,7 @@
                       >
                         <div class="parent-quote-header">
                           {#if context.authorPubkey}
-                            <CustomAvatar pubkey={context.authorPubkey} size={16} />
+                            <Avatar pubkey={context.authorPubkey} size={16} />
                           {/if}
                           <span class="parent-quote-author">
                             {#if context.error === 'deleted'}
@@ -4877,7 +4918,7 @@
                       >
                         <div class="parent-quote-header">
                           {#if context.authorPubkey}
-                            <CustomAvatar pubkey={context.authorPubkey} size={16} />
+                            <Avatar pubkey={context.authorPubkey} size={16} />
                           {/if}
                           <span class="parent-quote-author">
                             {#if context.error === 'deleted'}

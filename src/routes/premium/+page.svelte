@@ -12,6 +12,7 @@
   import PlusIcon from 'phosphor-svelte/lib/Plus';
   import CrownIcon from 'phosphor-svelte/lib/Crown';
   import { nip19 } from 'nostr-tools';
+  import CustomName from '../../components/CustomName.svelte';
 
   // Pull-to-refresh refs
   let pullToRefreshEl: PullToRefresh;
@@ -194,7 +195,36 @@
 </svelte:head>
 
 <PullToRefresh bind:this={pullToRefreshEl} on:refresh={handleRefresh}>
-<div class="flex flex-col gap-6 max-w-full md:max-w-none">
+<div class="flex flex-col gap-4 max-w-full md:max-w-none">
+  <!-- Tabs (shared with /recent) -->
+  <div class="flex flex-col gap-3">
+    <div class="flex items-center justify-between gap-4">
+      <div class="flex gap-1 border-b" style="border-color: var(--color-input-border)">
+        <a
+          href="/recent"
+          class="px-4 py-2 text-sm font-medium transition-colors relative cursor-pointer"
+          style="color: var(--color-text-secondary)"
+        >
+          Recent
+        </a>
+        <a
+          href="/recent"
+          class="px-4 py-2 text-sm font-medium transition-colors relative cursor-pointer"
+          style="color: var(--color-text-secondary)"
+        >
+          All
+        </a>
+        <button
+          class="px-4 py-2 text-sm font-medium transition-colors relative cursor-pointer"
+          style="color: var(--color-text-primary)"
+        >
+          Premium ⚡️
+          <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-orange-500 to-amber-500"></span>
+        </button>
+      </div>
+    </div>
+  </div>
+
   <!-- Header -->
   <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
     <div class="flex items-center gap-3">
@@ -208,7 +238,7 @@
         </p>
       </div>
     </div>
-    
+
     {#if $userPublickey}
       <button
         on:click={() => goto('/create/gated')}
@@ -337,10 +367,13 @@
                 {summary}
               </p>
             {/if}
+            <p class="text-xs" style="color: var(--color-text-secondary)">
+              by <CustomName pubkey={event.pubkey} />
+            </p>
           </div>
         </a>
       {/each}
-      
+
       <!-- Server-stored recipes (not yet on relays) -->
       {#each sortedServerRecipes as recipe (recipe.gatedNoteId)}
         {@const recipeLink = recipe.naddr ? `/premium/recipe/${recipe.naddr}` : `/premium/recipe/${recipe.gatedNoteId}`}
@@ -388,6 +421,11 @@
             {#if recipe.preview}
               <p class="text-sm line-clamp-2" style="color: var(--color-text-secondary)">
                 {recipe.preview}
+              </p>
+            {/if}
+            {#if recipe.authorPubkey}
+              <p class="text-xs" style="color: var(--color-text-secondary)">
+                by <CustomName pubkey={recipe.authorPubkey} />
               </p>
             {/if}
           </div>

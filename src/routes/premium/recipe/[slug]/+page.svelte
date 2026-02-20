@@ -9,13 +9,13 @@
   import Recipe from '../../../../components/Recipe/Recipe.svelte';
   import PanLoader from '../../../../components/PanLoader.svelte';
   import { GATED_RECIPE_KIND } from '$lib/consts';
-  import { checkIfGated, checkAccess } from '$lib/nip108/client';
+  import { checkIfGated, checkAccess, backfillGatedRecipe } from '$lib/nip108/client';
   import type { GatedRecipeMetadata } from '$lib/nip108/types';
   import LightningIcon from 'phosphor-svelte/lib/Lightning';
   import LockIcon from 'phosphor-svelte/lib/Lock';
   import LockOpenIcon from 'phosphor-svelte/lib/LockOpen';
-  import UserIcon from 'phosphor-svelte/lib/User';
-  import ClockIcon from 'phosphor-svelte/lib/Clock';
+  import CustomAvatar from '../../../../components/CustomAvatar.svelte';
+  import CustomName from '../../../../components/CustomName.svelte';
   import { requestPayment } from '$lib/nip108/client';
   import { sendPayment } from '$lib/wallet/walletManager';
 
@@ -32,7 +32,6 @@
   let purchasing = false;
   let purchaseError: string | null = null;
   let isAuthor = false;
-  let serverStoreAvailable = true;
 
   $: {
     if (browser && $page.params.slug) {
@@ -68,32 +67,64 @@
         });
         
         // Fetch the recipe event
-        const fetchPromise = $ndk.fetchEvent({
+        const fetchPromise: Promise<NDKEvent | null> = $ndk.fetchEvent({
           '#d': [b.identifier],
           authors: [b.pubkey],
           kinds: [recipeKind as number]
         });
-        const timeoutPromise = new Promise((_, reject) => 
+        const timeoutPromise = new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error('Recipe loading timeout')), 10000)
         );
         
-        let e = await Promise.race([fetchPromise, timeoutPromise]);
+        const e = await Promise.race<NDKEvent | null>([fetchPromise, timeoutPromise]);
         if (e) {
           event = e;
           
           // Check if it's gated
-          const metadata = await checkIfGated(e, $ndk);
+          let metadata = await checkIfGated(e, $ndk);
           if (metadata) {
             gatedMetadata = metadata;
-            
+
             // Check if current user is the author
             isAuthor = $userPublickey === e.pubkey;
-            
+
             // If user is the author, auto-unlock (they created it)
             if (isAuthor) {
               hasAccess = true;
-              unlockedRecipe = e; // Show their own recipe
-            } else if ($userPublickey) {
+              unlockedRecipe = e;
+            }
+
+            // Backfill: if server store is empty but relay has full content,
+            // re-encrypt and store so the payment flow works for everyone
+            if (!metadata.serverHasData && e.content && e.content.includes('## Ingredients')) {
+              const backfilled = await backfillGatedRecipe(e, $ndk, metadata.gatedNoteId, metadata.cost);
+              if (backfilled) {
+                // Re-fetch metadata now that server has the data
+                const refreshed = await checkIfGated(e, $ndk);
+                if (refreshed && refreshed.serverHasData) {
+                  gatedMetadata = refreshed;
+                  metadata = refreshed;
+                }
+              }
+            }
+
+            if (!isAuthor && !metadata.serverHasData) {
+              // Server store still unavailable after backfill attempt —
+              // try checkAccess defensively as a last resort
+              if ($userPublickey) {
+                checkingAccess = true;
+                try {
+                  const recipe = await checkAccess(metadata.gatedNoteId, $userPublickey, $ndk);
+                  if (recipe) {
+                    hasAccess = true;
+                    unlockedRecipe = recipe;
+                  }
+                } catch (err) {
+                  // Access check also failed — user will see locked state
+                }
+                checkingAccess = false;
+              }
+            } else if (!isAuthor && $userPublickey) {
               // Check if user has purchased access
               checkingAccess = true;
               try {
@@ -107,14 +138,7 @@
               }
               checkingAccess = false;
             }
-            
-            // Check if server store is available for payments
-            try {
-              const storeCheck = await fetch(`/api/nip108/store-gated?id=${encodeURIComponent(metadata.gatedNoteId)}`);
-              serverStoreAvailable = storeCheck.ok;
-            } catch {
-              serverStoreAvailable = false;
-            }
+
           }
           
           loading = false;
@@ -160,51 +184,36 @@
       }
 
       if (paymentRequest.pr) {
-        // Check if it's a mock/test invoice (not a real Lightning invoice)
-        // Real Lightning invoices start with lnbc/lnbt and are typically 200+ chars
-        const invoice = paymentRequest.pr;
-        const isMockInvoice = invoice.includes('mock') || 
-                              invoice.includes('...') || 
-                              invoice.length < 100 ||
-                              !invoice.startsWith('lnbc');
-        
         let paymentPreimage = '';
-        
-        if (isMockInvoice) {
-          // For testing: simulate payment with confirmation
-          const confirmed = confirm(
-            `💰 Test Payment\n\nThis would charge ${gatedMetadata.cost} sats to unlock "${recipeTitle}".\n\nClick OK to simulate successful payment.`
-          );
-          if (!confirmed) {
-            throw new Error('Payment cancelled');
-          }
-          paymentPreimage = `test_preimage_${Date.now()}`;
-        } else {
-          // Real Lightning invoice: Pay using wallet
-          const paymentResult = await sendPayment(invoice, {
-            amount: gatedMetadata.cost,
-            description: `Unlock premium recipe: ${recipeTitle}`
-          });
 
-          if (!paymentResult.success) {
-            throw new Error(paymentResult.error || 'Payment failed');
-          }
-          paymentPreimage = paymentResult.preimage || '';
+        // Real Lightning invoice: Pay using wallet
+        const paymentResult = await sendPayment(paymentRequest.pr, {
+          amount: gatedMetadata.cost,
+          description: `Unlock premium recipe: ${recipeTitle}`
+        });
+
+        if (!paymentResult.success) {
+          throw new Error(paymentResult.error || 'Payment failed');
         }
+        paymentPreimage = paymentResult.preimage || '';
 
-        // Mark payment on server
+        // Mark payment on server (preimage optional — some wallets don't return it)
+        const markBody: Record<string, string> = {
+          gatedNoteId: gatedMetadata.gatedNoteId,
+          userPubkey: $userPublickey
+        };
+        if (paymentPreimage) {
+          markBody.preimage = paymentPreimage;
+        }
         const markResponse = await fetch('/api/nip108/payment', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            gatedNoteId: gatedMetadata.gatedNoteId,
-            userPubkey: $userPublickey,
-            preimage: paymentPreimage
-          })
+          body: JSON.stringify(markBody)
         });
 
         if (!markResponse.ok) {
-          throw new Error('Failed to record payment');
+          const markError = await markResponse.json().catch(() => ({ error: 'Unknown error' }));
+          throw new Error(markError.error || 'Failed to record payment');
         }
 
         // Refresh to get unlocked content
@@ -264,7 +273,7 @@
           <img 
             src={recipeImage} 
             alt={recipeTitle}
-            class="w-full h-full object-cover blur-sm scale-105"
+            class="w-full h-full object-cover"
           />
           <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent"></div>
         </div>
@@ -301,19 +310,42 @@
 
       <!-- Author Info -->
       <div class="p-6 border-b flex items-center gap-4" style="border-color: var(--color-input-border);">
-        <div class="w-12 h-12 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center">
-          <UserIcon size={24} class="text-white" />
-        </div>
-        <div>
-          <p class="text-sm" style="color: var(--color-text-secondary);">Created by</p>
-          <p class="font-medium" style="color: var(--color-text-primary);">
-            {authorPubkey ? nip19.npubEncode(authorPubkey).slice(0, 16) + '...' : 'Unknown'}
-          </p>
-        </div>
+        {#if authorPubkey}
+          <CustomAvatar pubkey={authorPubkey} size={48} />
+          <div>
+            <p class="text-sm" style="color: var(--color-text-secondary);">Created by</p>
+            <p class="font-medium" style="color: var(--color-text-primary);">
+              <CustomName pubkey={authorPubkey} />
+            </p>
+          </div>
+        {:else}
+          <div>
+            <p class="text-sm" style="color: var(--color-text-secondary);">Created by</p>
+            <p class="font-medium" style="color: var(--color-text-primary);">Unknown</p>
+          </div>
+        {/if}
       </div>
 
       <!-- Payment Section -->
       <div class="p-6">
+        {#if !gatedMetadata.serverHasData}
+          <!-- Server store unavailable -->
+          <div class="flex flex-col items-center gap-4 p-6 rounded-xl bg-gradient-to-br from-gray-500/10 to-gray-600/10 border border-gray-500/30">
+            <LockIcon size={32} class="text-gray-400" />
+            <div class="text-center">
+              <p class="font-semibold text-lg" style="color: var(--color-text-primary);">Content Unavailable</p>
+              <p class="text-sm mt-1" style="color: var(--color-text-secondary);">
+                The encrypted recipe data is currently unavailable. Please try again later.
+              </p>
+            </div>
+            <button
+              on:click={() => loadData()}
+              class="px-6 py-3 rounded-xl bg-gray-500 hover:bg-gray-600 text-white font-semibold transition-colors"
+            >
+              Try Again
+            </button>
+          </div>
+        {:else}
         <div class="flex flex-col md:flex-row items-center justify-between gap-6 p-6 rounded-xl bg-gradient-to-br from-amber-500/10 to-orange-500/10 border border-amber-500/30">
           <div class="text-center md:text-left">
             <p class="text-sm font-medium mb-1" style="color: var(--color-text-secondary);">
@@ -326,43 +358,36 @@
               </span>
             </div>
           </div>
-          
+
           <div class="flex flex-col gap-3 w-full md:w-auto">
             {#if purchaseError}
               <div class="px-4 py-2 rounded-lg bg-red-500/10 border border-red-500/30 text-red-600 dark:text-red-400 text-sm">
                 {purchaseError}
               </div>
             {/if}
-            
-            {#if !serverStoreAvailable}
-              <div class="px-4 py-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-400 text-sm">
-                <p class="font-medium">Payment temporarily unavailable</p>
-                <p class="text-xs mt-1 opacity-80">This recipe's payment data is being synced. Please try again later or contact the recipe author.</p>
-              </div>
-            {:else}
-              <button
-                on:click={handlePurchase}
-                disabled={purchasing || !$userPublickey || checkingAccess}
-                class="px-8 py-4 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-bold text-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3 shadow-lg hover:shadow-xl"
-              >
-                {#if checkingAccess}
-                  <span>Checking access...</span>
-                {:else if purchasing}
-                  <div class="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent"></div>
-                  <span>Processing...</span>
-                {:else if !$userPublickey}
-                  <LockIcon size={22} />
-                  <span>Sign in to Unlock</span>
-                {:else}
-                  <LightningIcon size={22} weight="fill" />
-                  <span>Pay & Unlock Recipe</span>
-                {/if}
-              </button>
-            {/if}
-            
+
+            <button
+              on:click={handlePurchase}
+              disabled={purchasing || !$userPublickey || checkingAccess}
+              class="px-8 py-4 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-bold text-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3 shadow-lg hover:shadow-xl"
+            >
+              {#if checkingAccess}
+                <span>Checking access...</span>
+              {:else if purchasing}
+                <div class="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent"></div>
+                <span>Processing...</span>
+              {:else if !$userPublickey}
+                <LockIcon size={22} />
+                <span>Sign in to Unlock</span>
+              {:else}
+                <LightningIcon size={22} weight="fill" />
+                <span>Pay & Unlock Recipe</span>
+              {/if}
+            </button>
+
             {#if !$userPublickey}
-              <a 
-                href="/login" 
+              <a
+                href="/login"
                 class="text-center text-sm text-amber-600 dark:text-amber-400 hover:underline"
               >
                 Sign in with Nostr →
@@ -375,6 +400,7 @@
           <LockOpenIcon size={16} class="inline mr-1" />
           One-time payment. Permanent access to the full recipe.
         </p>
+        {/if}
       </div>
     </div>
 

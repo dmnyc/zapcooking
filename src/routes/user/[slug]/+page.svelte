@@ -8,7 +8,7 @@
   import { validateMarkdownTemplate } from '$lib/parser';
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
-  import CustomAvatar from '../../../components/CustomAvatar.svelte';
+  import Avatar from '../../../components/Avatar.svelte';
   import CustomName from '../../../components/CustomName.svelte';
   import Button from '../../../components/Button.svelte';
   import LightningIcon from 'phosphor-svelte/lib/Lightning';
@@ -37,6 +37,7 @@
   import { profileCacheManager } from '$lib/profileCache';
   import { RECIPE_TAGS } from '$lib/consts';
   import ArticleFeed from '../../../components/ArticleFeed.svelte';
+  import MembershipBeltBadge from '../../../components/MembershipBeltBadge.svelte';
 
   export const data: PageData = {} as PageData;
 
@@ -87,8 +88,8 @@
 
   // Profile picture upload state
   let uploadingPicture = false;
-  let pictureInputEl: HTMLInputElement;
-  let avatarRefreshKey = 0; // Used to force CustomAvatar to remount after picture change
+  let pictureInputEl: HTMLInputElement | null = null;
+  let avatarRefreshKey = 0; // Used to force Avatar remount after picture change
 
   // Profile edit modal state
   let profileEditModal = false;
@@ -967,7 +968,7 @@
         userProfilePictureOverride.set(newPictureUrl);
         console.log('[Profile Upload] Store value after set:', $userProfilePictureOverride);
 
-        // Force CustomAvatar to remount with fresh data
+        // Force Avatar to remount with fresh data
         avatarRefreshKey++;
 
         // Reload profile data with force refresh
@@ -1169,7 +1170,7 @@
             >{profile.lud16 || profile.lud06}</span
           >
           <button
-            on:click={() => copyLightningAddress(profile.lud16 || profile.lud06)}
+            on:click={() => copyLightningAddress(profile?.lud16 || profile?.lud06 || '')}
             class="text-caption hover:text-primary transition-colors cursor-pointer flex-shrink-0"
             title="Copy lightning address"
           >
@@ -1300,11 +1301,11 @@
         title="View profile details"
       >
         {#key `${hexpubkey}-${avatarRefreshKey}`}
-          <CustomAvatar
+          <Avatar
             className="cursor-pointer"
             pubkey={hexpubkey || ''}
             size={80}
-            imageUrl={$userPublickey === hexpubkey ? $userProfilePictureOverride : null}
+            src={$userPublickey === hexpubkey ? $userProfilePictureOverride : null}
           />
         {/key}
       </button>
@@ -1322,7 +1323,10 @@
       <div class="flex items-start justify-between gap-3">
         <div class="flex items-center gap-3 min-w-0">
           <button class="hover:opacity-80 transition-opacity" on:click={() => (qrModal = true)}>
-            <h1 class="text-xl font-bold truncate"><CustomName pubkey={hexpubkey || ''} /></h1>
+            <h1 class="text-xl font-bold truncate flex items-center gap-1.5">
+              <CustomName pubkey={hexpubkey || ''} />
+              <MembershipBeltBadge pubkey={hexpubkey || ''} size={20} />
+            </h1>
           </button>
           {#if user?.npub}
             <button

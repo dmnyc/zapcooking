@@ -51,8 +51,9 @@
   import DirectionsPhases from './DirectionsPhases.svelte';
   import AddToListModal from '../grocery/AddToListModal.svelte';
   import GatedRecipePayment from '../GatedRecipePayment.svelte';
-  import { checkIfGated } from '$lib/nip108/client';
+  import { checkIfGated, backfillGatedRecipe } from '$lib/nip108/client';
   import type { GatedRecipeMetadata } from '$lib/nip108/types';
+  import { GATED_RECIPE_KIND } from '$lib/consts';
 
   export let event: NDKEvent;
   export let isPremium = false;
@@ -117,16 +118,103 @@
     }
     authorLightningCheckComplete = true;
 
-    // Check if recipe is gated
-    try {
-      checkingGated = true;
-      const metadata = await checkIfGated(event, $ndk);
-      if (metadata) {
-        gatedMetadata = metadata;
+    // Check if recipe is gated (skip if parent already handled access)
+    if (!isPremium) {
+      const isAuthorOfRecipe = $userPublickey && $userPublickey === event.author.pubkey;
+
+      try {
+        checkingGated = true;
+        let metadata = await checkIfGated(event, $ndk);
+
+        // Backfill: if server store is empty but relay has full content,
+        // re-encrypt and store so the payment flow works for everyone
+        if (metadata && !metadata.serverHasData && event.content?.includes('## Ingredients')) {
+          const backfilled = await backfillGatedRecipe(event, $ndk, metadata.gatedNoteId, metadata.cost);
+          if (backfilled) {
+            const refreshed = await checkIfGated(event, $ndk);
+            if (refreshed && refreshed.serverHasData) {
+              metadata = refreshed;
+            }
+          }
+        }
+
+        if (metadata) {
+          // Author sees their own recipe without gating
+          if (isAuthorOfRecipe) {
+            // Don't set gatedMetadata — let recipe render normally
+          } else {
+            gatedMetadata = metadata;
+          }
+        } else if (event.kind === GATED_RECIPE_KIND && event.getMatchingTags('gated').length > 0) {
+          // Kind 35000 event with a gated tag but checkIfGated returned null
+          const gatedTag = event.getMatchingTags('gated')[0];
+          const noteId = gatedTag[1] || '';
+          const cost = parseInt(gatedTag[2] || '0', 10);
+
+          // Try backfill if relay has full content
+          if (noteId && event.content?.includes('## Ingredients')) {
+            const backfilled = await backfillGatedRecipe(event, $ndk, noteId, cost);
+            if (backfilled) {
+              const refreshed = await checkIfGated(event, $ndk);
+              if (refreshed) {
+                if (!isAuthorOfRecipe) {
+                  gatedMetadata = refreshed;
+                }
+              }
+            }
+          }
+
+          // If backfill failed or no full content, show fallback gated state
+          if (!gatedMetadata && !isAuthorOfRecipe) {
+            gatedMetadata = {
+              gatedNoteId: noteId,
+              announcementNoteId: noteId,
+              cost,
+              endpoint: '/api/nip108/payment',
+              iv: '',
+              authorPubkey: event.pubkey,
+              serverHasData: false
+            };
+          }
+        }
+      } catch (error) {
+        console.warn('Failed to check if recipe is gated:', error);
+        if (event.kind === GATED_RECIPE_KIND && event.getMatchingTags('gated').length > 0) {
+          const gatedTag = event.getMatchingTags('gated')[0];
+          const noteId = gatedTag[1] || '';
+          const cost = parseInt(gatedTag[2] || '0', 10);
+
+          // Try backfill even in error case
+          if (noteId && event.content?.includes('## Ingredients')) {
+            try {
+              const backfilled = await backfillGatedRecipe(event, $ndk, noteId, cost);
+              if (backfilled) {
+                const refreshed = await checkIfGated(event, $ndk);
+                if (refreshed && !isAuthorOfRecipe) {
+                  gatedMetadata = refreshed;
+                }
+              }
+            } catch {
+              // Backfill also failed
+            }
+          }
+
+          if (!gatedMetadata && !isAuthorOfRecipe) {
+            gatedMetadata = {
+              gatedNoteId: noteId,
+              announcementNoteId: noteId,
+              cost,
+              endpoint: '/api/nip108/payment',
+              iv: '',
+              authorPubkey: event.pubkey,
+              serverHasData: false
+            };
+          }
+        }
+      } finally {
+        checkingGated = false;
       }
-    } catch (error) {
-      console.warn('Failed to check if recipe is gated:', error);
-    } finally {
+    } else {
       checkingGated = false;
     }
   });
@@ -462,6 +550,12 @@
 
   let markdownBeforeDirections = '';
   let markdownAfterDirections = '';
+
+  let parsedBeforeDirections = '';
+  let parsedAfterDirections = '';
+  // Parse markdown once and reuse in template (avoids 3x redundant parsing per section)
+  $: parsedBeforeDirections = markdownBeforeDirections ? parseMarkdown(markdownBeforeDirections) : '';
+  $: parsedAfterDirections = markdownAfterDirections ? parseMarkdown(markdownAfterDirections) : '';
 </script>
 
 <svelte:window on:keydown={handleImageModalKeydown} />
@@ -555,6 +649,8 @@
                     class="rounded-3xl aspect-video object-cover w-full"
                     src={image[1]}
                     alt="Recipe image {i + 1}"
+                    loading={i === 0 ? 'eager' : 'lazy'}
+                    decoding="async"
                   />
                 </button>
               </div>
@@ -796,7 +892,7 @@
 
       <!-- Recipe Summary -->
       {#if event.tags.find((e) => e[0] === 'summary')?.[1]}
-        <p class="text-lg text-caption leading-relaxed">
+        <p class="text-lg text-caption leading-relaxed whitespace-pre-line">
           {event.tags.find((e) => e[0] === 'summary')?.[1]}
         </p>
       {/if}
@@ -805,12 +901,12 @@
       {#if markdownBeforeDirections}
         <div class="prose">
           {#if $translateOption.lang}
-            {#await translate($translateOption, parseMarkdown(markdownBeforeDirections))}
+            {#await translate($translateOption, parsedBeforeDirections)}
               ...
             {:then result}
               {#if result !== ''}
                 {#if result.from.language.iso === $translateOption.lang}
-                  {@html parseMarkdown(markdownBeforeDirections)}
+                  {@html parsedBeforeDirections}
                 {:else}
                   <hr />
                   <p class="font-medium">
@@ -832,7 +928,7 @@
               </p>
             {/await}
           {:else}
-            {@html parseMarkdown(markdownBeforeDirections)}
+            {@html parsedBeforeDirections}
           {/if}
         </div>
       {/if}
@@ -846,12 +942,12 @@
       {#if markdownAfterDirections}
         <div class="prose">
           {#if $translateOption.lang}
-            {#await translate($translateOption, parseMarkdown(markdownAfterDirections))}
+            {#await translate($translateOption, parsedAfterDirections)}
               ...
             {:then result}
               {#if result !== ''}
                 {#if result.from.language.iso === $translateOption.lang}
-                  {@html parseMarkdown(markdownAfterDirections)}
+                  {@html parsedAfterDirections}
                 {:else}
                   <hr />
                   <p class="font-medium">
@@ -873,7 +969,7 @@
               </p>
             {/await}
           {:else}
-            {@html parseMarkdown(markdownAfterDirections)}
+            {@html parsedAfterDirections}
           {/if}
         </div>
       {/if}

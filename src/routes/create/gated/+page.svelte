@@ -126,10 +126,11 @@
       additionalMarkdown
     };
     
-    currentDraftId = saveDraft(draftData, currentDraftId || undefined);
+    const saveResult = saveDraft(draftData, currentDraftId || undefined);
+    currentDraftId = saveResult.draftId;
     draftSaveMessage = 'Draft saved!';
     
-    if (browser) {
+    if (browser && currentDraftId) {
       const url = new URL(window.location.href);
       url.searchParams.set('draft', currentDraftId);
       window.history.replaceState({}, '', url.toString());
@@ -215,11 +216,14 @@
         );
         
         resultMessage = 'Publishing recipe...';
-        
+
         // Add gated tag to recipe with gatedNoteId and cost in sats (human readable)
         event.tags.push(['gated', gatedResult.gatedNoteId, gateCostSats.toString()]);
-        
-        // Publish the recipe with gated tag
+
+        // Replace content with preview-only for relay (full content is encrypted on server)
+        event.content = gatePreview || summary || 'This is a premium recipe. Visit zap.cooking to unlock.';
+
+        // Publish the recipe with gated tag (content is now preview-only)
         await event.publish();
         
         const naddr = nip19.naddrEncode({
