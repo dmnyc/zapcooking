@@ -51,12 +51,15 @@
 		if (!browser) return;
 		if (!$userPublickey) return;
 
-		// Always fetch groups so non-members can see public groups
-		if (!$groupsInitialized && !$groupsLoading) {
-			await initGroupSubscription($ndk, $userPublickey);
-		}
+		// Run group init and membership check in parallel — they are independent
+		const promises: Promise<void>[] = [];
 
-		await checkMembership();
+		if (!$groupsInitialized && !$groupsLoading) {
+			promises.push(initGroupSubscription($ndk, $userPublickey));
+		}
+		promises.push(checkMembership());
+
+		await Promise.all(promises);
 	});
 
 	onDestroy(() => {
@@ -106,7 +109,7 @@
 {:else}
 	<!-- Groups UI -->
 	<div
-		class="flex h-[calc(100vh-8rem)] lg:h-[calc(100vh-6rem)] -mx-4 rounded-xl overflow-hidden border"
+		class="flex h-[calc(100vh-8rem)] lg:h-[calc(100vh-6rem)] rounded-xl overflow-hidden border"
 		style="border-color: var(--color-input-border); background-color: var(--color-bg-secondary);"
 	>
 		<!-- Group List (left panel) -->
