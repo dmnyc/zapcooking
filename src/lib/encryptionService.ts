@@ -20,6 +20,77 @@ import { nip19 } from 'nostr-tools';
 
 export type EncryptionMethod = 'nip44' | 'nip04' | null;
 
+// ═══════════════════════════════════════════════════════════════
+// DECRYPT CACHE & SEQUENTIAL QUEUE
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * In-memory cache for decrypted content.
+ * Prevents re-decrypting the same ciphertext (which hits browser signers).
+ * Keyed by "method:senderPubkey:ciphertext" to avoid collisions across methods.
+ */
+const decryptCache = new Map<string, string>();
+const DECRYPT_CACHE_MAX = 500;
+
+/** Sentinel stored in cache when the signer denied a decrypt request. */
+const DECRYPT_DENIED = '\x00__DENIED__';
+
+// ── Circuit breaker ──────────────────────────────────────────
+// After SIGNER_DENIAL_THRESHOLD consecutive user denials, stop
+// sending any further decrypt requests for the rest of the session.
+let signerDenialCount = 0;
+let signerCircuitBroken = false;
+const SIGNER_DENIAL_THRESHOLD = 2;
+
+function getDecryptCacheKey(method: EncryptionMethod, senderPubkey: string, ciphertext: string): string {
+  return `${method}:${senderPubkey}:${ciphertext}`;
+}
+
+function getCachedDecrypt(method: EncryptionMethod, senderPubkey: string, ciphertext: string): string | undefined {
+  return decryptCache.get(getDecryptCacheKey(method, senderPubkey, ciphertext));
+}
+
+function setCachedDecrypt(method: EncryptionMethod, senderPubkey: string, ciphertext: string, plaintext: string): void {
+  if (decryptCache.size >= DECRYPT_CACHE_MAX) {
+    // Evict oldest half
+    const keys = Array.from(decryptCache.keys());
+    for (let i = 0; i < keys.length / 2; i++) {
+      decryptCache.delete(keys[i]);
+    }
+  }
+  decryptCache.set(getDecryptCacheKey(method, senderPubkey, ciphertext), plaintext);
+}
+
+/** Clear the decrypt cache and reset the circuit breaker (call on logout). */
+export function clearDecryptCache(): void {
+  decryptCache.clear();
+  signerDenialCount = 0;
+  signerCircuitBroken = false;
+}
+
+/**
+ * Sequential queue for decrypt operations.
+ * Browser signers (like Nostash) can only handle one request at a time.
+ * Without this, parallel decrypt calls flood the signer with popups.
+ */
+let decryptQueuePromise: Promise<void> = Promise.resolve();
+
+function enqueueDecrypt<T>(fn: () => Promise<T>): Promise<T> {
+  const result = decryptQueuePromise.then(fn, fn);
+  // Update the chain (swallow errors so the queue doesn't stall)
+  decryptQueuePromise = result.then(() => {}, () => {});
+  return result;
+}
+
+/**
+ * Detect whether a signer error is a user denial (clicked "No" / "Cancel").
+ * Browser signers throw with varied messages; match common patterns.
+ */
+function isUserDenial(error: unknown): boolean {
+  const msg = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  return /reject|denied|cancel|refused|declined|abort|dismissed/.test(msg);
+}
+
 type SignerWithEncryption = {
   nip44Encrypt?: (recipient: NDKUser, plaintext: string) => Promise<string>;
   nip04Encrypt?: (recipient: NDKUser, plaintext: string) => Promise<string>;
@@ -359,6 +430,9 @@ export async function encrypt(
  * Decrypt data using the specified method, with fallback to alternative method.
  * Prioritizes window.nostr for NIP-07 extensions (more reliable across signers),
  * then falls back to NDK signer methods.
+ *
+ * Uses an in-memory cache so the same ciphertext is never sent to the signer twice,
+ * and a sequential queue so browser signers only see one request at a time.
  */
 export async function decrypt(
   senderPubkey: string,
@@ -373,7 +447,116 @@ export async function decrypt(
     throw new Error('Encryption method not specified');
   }
 
-  // Try primary method first, then fallback to alternative
+  // Check cache first — avoids hitting the signer entirely
+  const cached = getCachedDecrypt(method, senderPubkey, ciphertext);
+  if (cached !== undefined) {
+    if (cached === DECRYPT_DENIED) {
+      throw new Error('Decryption was previously denied by signer');
+    }
+    return cached;
+  }
+
+  // Private-key decryption is local (no signer popup), skip the queue
+  const privateKey = getPrivateKey();
+  if (privateKey) {
+    const result = await decryptWithPrivateKey(privateKey, senderPubkey, ciphertext, method);
+    if (result !== null) {
+      setCachedDecrypt(method, senderPubkey, ciphertext, result);
+      return result;
+    }
+  }
+
+  // Circuit breaker: stop sending requests after repeated user denials
+  if (signerCircuitBroken) {
+    throw new Error('Signer decrypt requests disabled after repeated denials');
+  }
+
+  // For signer-based decryption, queue sequentially to avoid flooding
+  return enqueueDecrypt(async () => {
+    // Re-check cache (another queued call may have populated it)
+    const cached2 = getCachedDecrypt(method, senderPubkey, ciphertext);
+    if (cached2 !== undefined) {
+      if (cached2 === DECRYPT_DENIED) {
+        throw new Error('Decryption was previously denied by signer');
+      }
+      return cached2;
+    }
+
+    // Re-check circuit breaker (may have tripped while waiting in queue)
+    if (signerCircuitBroken) {
+      throw new Error('Signer decrypt requests disabled after repeated denials');
+    }
+
+    try {
+      const result = await decryptViaSigner(senderPubkey, ciphertext, method);
+      // Success resets the denial counter
+      signerDenialCount = 0;
+      setCachedDecrypt(method, senderPubkey, ciphertext, result);
+      return result;
+    } catch (e) {
+      if (isUserDenial(e)) {
+        // Cache the denial so this ciphertext is never retried
+        setCachedDecrypt(method, senderPubkey, ciphertext, DECRYPT_DENIED);
+        // Increment circuit breaker counter
+        signerDenialCount++;
+        if (signerDenialCount >= SIGNER_DENIAL_THRESHOLD) {
+          signerCircuitBroken = true;
+          console.warn(
+            '[Encryption] Circuit breaker tripped: signer denied',
+            signerDenialCount,
+            'consecutive decrypt requests. No further decrypt popups this session.'
+          );
+        }
+      }
+      throw e;
+    }
+  });
+}
+
+/**
+ * Try decrypting with local private key (no signer interaction).
+ * Returns null if private key decryption isn't possible/fails.
+ */
+async function decryptWithPrivateKey(
+  privateKey: string,
+  senderPubkey: string,
+  ciphertext: string,
+  method: EncryptionMethod
+): Promise<string | null> {
+  const methods: EncryptionMethod[] = method === 'nip44' ? ['nip44', 'nip04'] : ['nip04', 'nip44'];
+
+  for (const tryMethod of methods) {
+    try {
+      if (tryMethod === 'nip44') {
+        const privateKeyBytes = new Uint8Array(
+          privateKey.match(/.{1,2}/g)!.map((byte) => parseInt(byte, 16))
+        );
+        const conversationKey = nip44.v2.utils.getConversationKey(
+          privateKeyBytes,
+          senderPubkey
+        );
+        const result = nip44.v2.decrypt(ciphertext, conversationKey);
+        if (result !== null && result !== undefined) return result;
+      } else if (tryMethod === 'nip04') {
+        const result = await nip04.decrypt(privateKey, senderPubkey, ciphertext);
+        if (result !== null && result !== undefined) return result;
+      }
+    } catch (e) {
+      console.warn(`[Encryption] Direct ${tryMethod} decryption failed:`, (e as Error)?.message || e);
+    }
+  }
+  return null;
+}
+
+/**
+ * Decrypt via browser signer (window.nostr) or NDK signer (NIP-46).
+ * Called inside the sequential queue so only one request hits the signer at a time.
+ */
+async function decryptViaSigner(
+  senderPubkey: string,
+  ciphertext: string,
+  method: EncryptionMethod
+): Promise<string> {
   const methods: EncryptionMethod[] = method === 'nip44' ? ['nip44', 'nip04'] : ['nip04', 'nip44'];
   let lastError: Error | null = null;
 
@@ -383,42 +566,11 @@ export async function decrypt(
       const nostr = (window as any).nostr;
       if (tryMethod === 'nip44' && nostr?.nip44?.decrypt) {
         const result = await nostr.nip44.decrypt(senderPubkey, ciphertext);
-        if (result) return result;
+        if (result != null) return result;
       }
       if (tryMethod === 'nip04' && nostr?.nip04?.decrypt) {
         const result = await nostr.nip04.decrypt(senderPubkey, ciphertext);
-        if (result) return result;
-      }
-
-      // Try direct decryption with private key if available
-      const privateKey = getPrivateKey();
-      if (privateKey) {
-        try {
-          if (tryMethod === 'nip44') {
-            // Convert hex private key to Uint8Array for NIP-44
-            const privateKeyBytes = new Uint8Array(
-              privateKey.match(/.{1,2}/g)!.map((byte) => parseInt(byte, 16))
-            );
-            const conversationKey = nip44.v2.utils.getConversationKey(
-              privateKeyBytes,
-              senderPubkey
-            );
-            const result = nip44.v2.decrypt(ciphertext, conversationKey);
-            if (result) return result;
-          } else if (tryMethod === 'nip04') {
-            const result = await nip04.decrypt(privateKey, senderPubkey, ciphertext);
-            if (result) return result;
-          }
-        } catch (e) {
-          const errorMsg = e instanceof Error ? e.message : String(e);
-          const errorStack = e instanceof Error ? e.stack : undefined;
-          console.warn(`[Encryption] Direct ${tryMethod} decryption failed:`, {
-            message: errorMsg,
-            stack: errorStack,
-            error: e
-          });
-          // Continue to try NDK signer
-        }
+        if (result != null) return result;
       }
 
       // Fallback to NDK signer (for NIP-46 remote signers, etc.)
@@ -429,16 +581,19 @@ export async function decrypt(
 
         if (tryMethod === 'nip44' && typeof signer.nip44Decrypt === 'function') {
           const result = await signer.nip44Decrypt(sender, ciphertext);
-          if (result) return result;
+          if (result != null) return result;
         } else if (tryMethod === 'nip04' && typeof signer.nip04Decrypt === 'function') {
           const result = await signer.nip04Decrypt(sender, ciphertext);
-          if (result) return result;
+          if (result != null) return result;
         }
       }
     } catch (e) {
-      console.warn(`[Encryption] ${tryMethod} decryption failed, trying next method...`, e);
       lastError = e instanceof Error ? e : new Error(String(e));
-      // Continue to next method
+      // If the user denied, don't try the fallback method — one popup is enough
+      if (isUserDenial(e)) {
+        throw lastError;
+      }
+      console.warn(`[Encryption] ${tryMethod} decryption failed, trying next method...`, e);
     }
   }
 
