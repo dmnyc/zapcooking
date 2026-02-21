@@ -28,6 +28,7 @@ const RELAYS = [
 
 // Image detection patterns (matching NoteContent.svelte)
 const IMAGE_EXTENSIONS = /\.(jpg|jpeg|png|gif|webp|svg|bmp|avif)(\?.*)?$/i;
+const VIDEO_EXTENSIONS = /\.(mp4|webm|mov|avi|mkv|ogv)(\?.*)?$/i;
 const IMAGE_HOSTS = [
 	'image.nostr.build',
 	'nostr.build',
@@ -45,6 +46,8 @@ function extractFirstImageUrl(content: string): string | null {
 	for (const url of urls) {
 		try {
 			const urlObj = new URL(url);
+			// Skip video URLs
+			if (VIDEO_EXTENSIONS.test(urlObj.pathname)) continue;
 			if (IMAGE_EXTENSIONS.test(urlObj.pathname)) return url;
 			if (IMAGE_HOSTS.some(host => urlObj.hostname.includes(host))) return url;
 		} catch {
