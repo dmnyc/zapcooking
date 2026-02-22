@@ -5,21 +5,21 @@
 	import { hasEncryptionSupport } from '$lib/encryptionService';
 	import {
 		backupFollows,
-		fetchFollowsBackup,
+		listFollowsBackups,
 		restoreFollowsFromBackup,
 		backupMuteList,
-		fetchMuteListBackup,
+		listMuteListBackups,
 		restoreMuteListFromBackup,
 		checkBackupRelayStatus,
 		BACKUP_D_TAGS,
 		type BackupType,
 		type FollowsBackupData,
 		type MuteBackupData,
+		type BackupInfo,
 		type RelayBackupStatus
 	} from '$lib/nostrBackup';
 	import {
 		backupProfile,
-		fetchProfileBackup,
 		restoreProfileFromBackup,
 		listProfileBackups,
 		type ProfileBackupData
@@ -31,6 +31,11 @@
 	import CloudArrowDownIcon from 'phosphor-svelte/lib/CloudArrowDown';
 	import CaretDownIcon from 'phosphor-svelte/lib/CaretDown';
 	import ArrowClockwiseIcon from 'phosphor-svelte/lib/ArrowClockwise';
+	import ClockCounterClockwiseIcon from 'phosphor-svelte/lib/ClockCounterClockwise';
+	import WalletIcon from 'phosphor-svelte/lib/Wallet';
+	import { activeWallet } from '$lib/wallet/walletStore';
+	import { checkRelayBackups as checkSparkRelayBackups } from '$lib/spark';
+	import { checkRelayBackups as checkNwcRelayBackups } from '$lib/wallet/nwcBackup';
 
 	// ── State ──
 
@@ -40,13 +45,14 @@
 		relayStatuses: RelayBackupStatus[];
 		loading: boolean;
 		error: string | null;
+		backupCount: number;
 		itemCount?: number;
 	}
 
 	let statuses: Record<BackupType, BackupStatus> = {
-		follows: { exists: false, timestamp: null, relayStatuses: [], loading: false, error: null },
-		mute: { exists: false, timestamp: null, relayStatuses: [], loading: false, error: null },
-		profile: { exists: false, timestamp: null, relayStatuses: [], loading: false, error: null }
+		follows: { exists: false, timestamp: null, relayStatuses: [], loading: false, error: null, backupCount: 0 },
+		mute: { exists: false, timestamp: null, relayStatuses: [], loading: false, error: null, backupCount: 0 },
+		profile: { exists: false, timestamp: null, relayStatuses: [], loading: false, error: null, backupCount: 0 }
 	};
 
 	let backingUp: Record<BackupType, boolean> = { follows: false, mute: false, profile: false };
@@ -57,11 +63,25 @@
 		profile: null
 	};
 	let expandedType: BackupType | null = null;
+	let versionsExpanded: Record<BackupType, boolean> = { follows: false, mute: false, profile: false };
 
-	// Cached backup data for restore
-	let followsBackup: FollowsBackupData | null = null;
-	let muteBackup: MuteBackupData | null = null;
-	let profileBackup: ProfileBackupData | null = null;
+	// Wallet backup state (view-only) — check both types independently
+	interface WalletBackupInfo {
+		loading: boolean;
+		exists: boolean;
+		timestamp: number | null;
+		relayStatuses: RelayBackupStatus[];
+		error: string | null;
+	}
+	const emptyWalletStatus: WalletBackupInfo = { loading: false, exists: false, timestamp: null, relayStatuses: [], error: null };
+	let sparkBackupStatus: WalletBackupInfo = { ...emptyWalletStatus };
+	let nwcBackupStatus: WalletBackupInfo = { ...emptyWalletStatus };
+	let walletRelaysExpanded: Record<string, boolean> = { spark: false, nwc: false };
+
+	// Cached backup lists for version picker
+	let followsBackups: BackupInfo<FollowsBackupData>[] = [];
+	let muteBackups: BackupInfo<MuteBackupData>[] = [];
+	let profileBackups: Array<{ timestamp: number; eventId: string; createdAt: number; data?: ProfileBackupData }> = [];
 
 	$: canEncrypt = browser ? hasEncryptionSupport() : false;
 
@@ -75,7 +95,7 @@
 	// ── Status Checks ──
 
 	async function checkAllStatuses() {
-		await Promise.all([checkFollowsStatus(), checkMuteStatus(), checkProfileStatus()]);
+		await Promise.all([checkFollowsStatus(), checkMuteStatus(), checkProfileStatus(), checkWalletStatus()]);
 	}
 
 	async function checkFollowsStatus() {
@@ -84,23 +104,23 @@
 		statuses = statuses;
 
 		try {
-			// Fetch backup data
-			followsBackup = await fetchFollowsBackup($ndk, $userPublickey);
+			followsBackups = await listFollowsBackups($ndk, $userPublickey);
+			const newest = followsBackups.length > 0 && followsBackups[0].data ? followsBackups[0].data : null;
 
-			// Check per-relay status
 			const relayStatuses = await checkBackupRelayStatus(
 				$ndk,
 				$userPublickey,
-				BACKUP_D_TAGS.follows
+				BACKUP_D_TAGS.follows as unknown as string[]
 			);
 
 			statuses.follows = {
-				exists: followsBackup !== null,
-				timestamp: followsBackup?.timestamp || null,
+				exists: followsBackups.length > 0,
+				timestamp: newest?.timestamp || null,
 				relayStatuses,
 				loading: false,
 				error: null,
-				itemCount: followsBackup?.follows.length
+				backupCount: followsBackups.length,
+				itemCount: newest?.follows.length
 			};
 		} catch (e: any) {
 			statuses.follows.loading = false;
@@ -115,27 +135,29 @@
 		statuses = statuses;
 
 		try {
-			muteBackup = await fetchMuteListBackup($ndk, $userPublickey);
+			muteBackups = await listMuteListBackups($ndk, $userPublickey);
+			const newest = muteBackups.length > 0 && muteBackups[0].data ? muteBackups[0].data : null;
 
 			const relayStatuses = await checkBackupRelayStatus(
 				$ndk,
 				$userPublickey,
-				BACKUP_D_TAGS.mute
+				BACKUP_D_TAGS.mute as unknown as string[]
 			);
 
-			const itemCount = muteBackup
-				? muteBackup.muteList.pubkeys.length +
-					muteBackup.muteList.words.length +
-					muteBackup.muteList.tags.length +
-					muteBackup.muteList.threads.length
+			const itemCount = newest
+				? newest.muteList.pubkeys.length +
+					newest.muteList.words.length +
+					newest.muteList.tags.length +
+					newest.muteList.threads.length
 				: undefined;
 
 			statuses.mute = {
-				exists: muteBackup !== null,
-				timestamp: muteBackup?.timestamp || null,
+				exists: muteBackups.length > 0,
+				timestamp: newest?.timestamp || null,
 				relayStatuses,
 				loading: false,
 				error: null,
+				backupCount: muteBackups.length,
 				itemCount
 			};
 		} catch (e: any) {
@@ -151,9 +173,7 @@
 		statuses = statuses;
 
 		try {
-			// List all profile backups (rotating slots)
-			const backups = await listProfileBackups($ndk, $userPublickey);
-			profileBackup = backups.length > 0 && backups[0].data ? backups[0].data : null;
+			profileBackups = await listProfileBackups($ndk, $userPublickey);
 
 			const relayStatuses = await checkBackupRelayStatus(
 				$ndk,
@@ -162,18 +182,50 @@
 			);
 
 			statuses.profile = {
-				exists: backups.length > 0,
-				timestamp: backups.length > 0 ? backups[0].timestamp : null,
+				exists: profileBackups.length > 0,
+				timestamp: profileBackups.length > 0 ? profileBackups[0].timestamp : null,
 				relayStatuses,
 				loading: false,
 				error: null,
-				itemCount: backups.length
+				backupCount: profileBackups.length
 			};
 		} catch (e: any) {
 			statuses.profile.loading = false;
 			statuses.profile.error = e.message || 'Failed to check profile backup';
 		}
 		statuses = statuses;
+	}
+
+	async function checkWalletStatus() {
+		await Promise.all([checkSparkBackupStatus(), checkNwcBackupStatus()]);
+	}
+
+	async function checkSingleWalletBackup(
+		checkFn: (pubkey: string) => Promise<RelayBackupStatus[]>
+	): Promise<WalletBackupInfo> {
+		try {
+			const relayStatuses = await checkFn($userPublickey);
+			const hasBackup = relayStatuses.some((r) => r.hasBackup);
+			let latestTimestamp: number | null = null;
+			for (const r of relayStatuses) {
+				if (r.hasBackup && r.timestamp && (!latestTimestamp || r.timestamp > latestTimestamp)) {
+					latestTimestamp = r.timestamp;
+				}
+			}
+			return { loading: false, exists: hasBackup, timestamp: latestTimestamp, relayStatuses, error: null };
+		} catch (e: any) {
+			return { loading: false, exists: false, timestamp: null, relayStatuses: [], error: e.message || 'Check failed' };
+		}
+	}
+
+	async function checkSparkBackupStatus() {
+		sparkBackupStatus = { ...emptyWalletStatus, loading: true };
+		sparkBackupStatus = await checkSingleWalletBackup(checkSparkRelayBackups);
+	}
+
+	async function checkNwcBackupStatus() {
+		nwcBackupStatus = { ...emptyWalletStatus, loading: true };
+		nwcBackupStatus = await checkSingleWalletBackup(checkNwcRelayBackups);
 	}
 
 	// ── Backup Actions ──
@@ -204,7 +256,6 @@
 				}
 			}
 			messages[type] = { text: 'Backup created successfully', type: 'success' };
-			// Refresh status for this type
 			switch (type) {
 				case 'follows':
 					await checkFollowsStatus();
@@ -225,13 +276,14 @@
 
 	// ── Restore Actions ──
 
-	async function handleRestore(type: BackupType) {
+	async function handleRestore(type: BackupType, index: number = 0) {
 		const labels: Record<BackupType, string> = {
 			follows: 'follow list',
 			mute: 'mute list',
 			profile: 'profile'
 		};
-		if (!confirm(`Restore your ${labels[type]} from backup? This will replace your current ${labels[type]}.`))
+		const versionLabel = index > 0 ? ` from backup #${index + 1}` : '';
+		if (!confirm(`Restore your ${labels[type]}${versionLabel}? This will replace your current ${labels[type]}.`))
 			return;
 
 		restoring[type] = true;
@@ -239,36 +291,33 @@
 
 		try {
 			switch (type) {
-				case 'follows':
-					if (!followsBackup) {
-						followsBackup = await fetchFollowsBackup($ndk, $userPublickey);
-					}
-					if (followsBackup) {
-						await restoreFollowsFromBackup($ndk, $userPublickey, followsBackup);
+				case 'follows': {
+					const backup = followsBackups[index]?.data;
+					if (backup) {
+						await restoreFollowsFromBackup($ndk, $userPublickey, backup);
 					} else {
-						throw new Error('No backup found to restore');
+						throw new Error('No backup data available to restore');
 					}
 					break;
-				case 'mute':
-					if (!muteBackup) {
-						muteBackup = await fetchMuteListBackup($ndk, $userPublickey);
-					}
-					if (muteBackup) {
-						await restoreMuteListFromBackup($ndk, $userPublickey, muteBackup);
+				}
+				case 'mute': {
+					const backup = muteBackups[index]?.data;
+					if (backup) {
+						await restoreMuteListFromBackup($ndk, $userPublickey, backup);
 					} else {
-						throw new Error('No backup found to restore');
+						throw new Error('No backup data available to restore');
 					}
 					break;
-				case 'profile':
-					if (!profileBackup) {
-						profileBackup = await fetchProfileBackup($ndk, $userPublickey);
-					}
-					if (profileBackup) {
-						await restoreProfileFromBackup($ndk, $userPublickey, profileBackup);
+				}
+				case 'profile': {
+					const backup = profileBackups[index]?.data;
+					if (backup) {
+						await restoreProfileFromBackup($ndk, $userPublickey, backup);
 					} else {
-						throw new Error('No backup found to restore');
+						throw new Error('No backup data available to restore');
 					}
 					break;
+				}
 			}
 			messages[type] = { text: 'Restored successfully', type: 'success' };
 		} catch (e: any) {
@@ -284,9 +333,12 @@
 		expandedType = expandedType === type ? null : type;
 	}
 
+	function toggleVersions(type: BackupType) {
+		versionsExpanded[type] = !versionsExpanded[type];
+	}
+
 	function formatTimestamp(ts: number | null): string {
 		if (!ts) return '';
-		const date = new Date(ts);
 		const now = Date.now();
 		const diff = now - ts;
 
@@ -294,7 +346,12 @@
 		if (diff < 60 * 60 * 1000) return `${Math.floor(diff / 60000)}m ago`;
 		if (diff < 24 * 60 * 60 * 1000) return `${Math.floor(diff / 3600000)}h ago`;
 		if (diff < 7 * 24 * 60 * 60 * 1000) return `${Math.floor(diff / 86400000)}d ago`;
-		return date.toLocaleDateString();
+		return new Date(ts).toLocaleDateString();
+	}
+
+	function formatFullTimestamp(ts: number): string {
+		const date = new Date(ts);
+		return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 	}
 
 	function formatRelayTimestamp(ts: number | undefined): string {
@@ -314,10 +371,40 @@
 		return statuses.filter((r) => r.hasBackup).length;
 	}
 
-	const typeLabels: Record<BackupType, { label: string; kind: string; description: string }> = {
-		follows: { label: 'Follows', kind: 'kind:3', description: 'Your contact list' },
-		mute: { label: 'Mute List', kind: 'kind:10000', description: 'Muted users, words, and tags' },
-		profile: { label: 'Profile', kind: 'kind:0', description: 'Display name, bio, picture, etc.' }
+	function getVersionSummary(type: BackupType, index: number): string {
+		switch (type) {
+			case 'follows': {
+				const b = followsBackups[index]?.data;
+				return b ? `${b.follows.length} follows` : '';
+			}
+			case 'mute': {
+				const b = muteBackups[index]?.data;
+				if (!b) return '';
+				const count = b.muteList.pubkeys.length + b.muteList.words.length + b.muteList.tags.length + b.muteList.threads.length;
+				return `${count} items`;
+			}
+			case 'profile':
+				return '';
+			default:
+				return '';
+		}
+	}
+
+	function getBackupList(type: BackupType): Array<{ timestamp: number; data?: any }> {
+		switch (type) {
+			case 'follows':
+				return followsBackups;
+			case 'mute':
+				return muteBackups;
+			case 'profile':
+				return profileBackups;
+		}
+	}
+
+	const typeLabels: Record<BackupType, { label: string; kind: string }> = {
+		follows: { label: 'Follows', kind: 'kind:3' },
+		mute: { label: 'Mute List', kind: 'kind:10000' },
+		profile: { label: 'Profile', kind: 'kind:0' }
 	};
 
 	const types: BackupType[] = ['follows', 'mute', 'profile'];
@@ -346,6 +433,7 @@
 		{@const info = typeLabels[type]}
 		{@const hasRelays = status.relayStatuses.length > 0}
 		{@const backupRelays = relayBackupCount(status.relayStatuses)}
+		{@const backupList = getBackupList(type)}
 
 		<div
 			class="rounded-lg border overflow-hidden"
@@ -375,12 +463,9 @@
 					{:else if status.exists}
 						<CheckCircleIcon size={14} class="text-green-500" weight="fill" />
 						<span class="text-xs text-caption">
-							{#if type === 'profile' && status.itemCount}
-								{status.itemCount} backup{status.itemCount !== 1 ? 's' : ''}
-							{:else if status.itemCount !== undefined}
-								{status.itemCount} items backed up
-							{:else}
-								Backed up
+							{status.backupCount} backup{status.backupCount !== 1 ? 's' : ''}
+							{#if status.itemCount !== undefined}
+								&middot; {status.itemCount} items
 							{/if}
 							{#if status.timestamp}
 								&middot; {formatTimestamp(status.timestamp)}
@@ -396,7 +481,7 @@
 				</div>
 
 				<!-- Actions -->
-				<div class="flex items-center gap-2">
+				<div class="flex items-center gap-2 flex-wrap">
 					<button
 						class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors disabled:opacity-50"
 						style="background-color: var(--color-primary); color: #ffffff;"
@@ -431,6 +516,23 @@
 						{/if}
 					</button>
 
+					{#if status.backupCount > 1}
+						<button
+							class="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs transition-colors hover:bg-[var(--color-bg-secondary)]"
+							style="color: var(--color-caption);"
+							on:click={() => toggleVersions(type)}
+						>
+							<ClockCounterClockwiseIcon size={12} />
+							<CaretDownIcon
+								size={10}
+								class="transition-transform duration-200 {versionsExpanded[type]
+									? 'rotate-180'
+									: ''}"
+							/>
+							Versions
+						</button>
+					{/if}
+
 					{#if hasRelays}
 						<button
 							class="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs transition-colors hover:bg-[var(--color-bg-secondary)]"
@@ -462,6 +564,40 @@
 					</div>
 				{/if}
 			</div>
+
+			<!-- Version List (expandable) -->
+			{#if versionsExpanded[type] && backupList.length > 0}
+				<div
+					class="px-4 pb-3 pt-2 border-t flex flex-col gap-1.5"
+					style="border-color: var(--color-input-border);"
+				>
+					{#each backupList as backup, i}
+						<div
+							class="flex items-center justify-between text-xs p-2 rounded-lg"
+							style="background-color: var(--color-bg-secondary);"
+						>
+							<div class="flex items-center gap-2 min-w-0">
+								<span class="text-caption flex-shrink-0">#{i + 1}</span>
+								<span class="truncate" style="color: var(--color-text-primary);">
+									{formatFullTimestamp(backup.timestamp)}
+								</span>
+								{#if getVersionSummary(type, i)}
+									<span class="text-caption flex-shrink-0">&middot; {getVersionSummary(type, i)}</span>
+								{/if}
+							</div>
+							<button
+								class="flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors hover:opacity-80 flex-shrink-0 ml-2"
+								style="color: var(--color-primary);"
+								disabled={!backup.data || restoring[type]}
+								on:click={() => handleRestore(type, i)}
+							>
+								<CloudArrowDownIcon size={12} />
+								Restore
+							</button>
+						</div>
+					{/each}
+				</div>
+			{/if}
 
 			<!-- Relay Details (expandable) -->
 			{#if expandedType === type && hasRelays}
@@ -497,6 +633,104 @@
 				</div>
 			{/if}
 		</div>
+	{/each}
+
+	<!-- Wallet Backups (view-only) — show each type that has a backup -->
+	{#each [{ key: 'spark', label: 'Spark Wallet', status: sparkBackupStatus }, { key: 'nwc', label: 'NWC Wallet', status: nwcBackupStatus }] as wallet (wallet.key)}
+		{#if wallet.status.loading || wallet.status.exists}
+			<div
+				class="rounded-lg border overflow-hidden"
+				style="border-color: var(--color-input-border); background-color: var(--color-bg-primary);"
+			>
+				<div class="px-4 py-3">
+					<div class="flex items-center justify-between mb-1">
+						<div class="flex items-center gap-2">
+							<span class="text-sm font-medium" style="color: var(--color-text-primary);"
+								>{wallet.label}</span
+							>
+						</div>
+					</div>
+
+					<!-- Status line -->
+					<div class="flex items-center gap-1.5 mb-3">
+						{#if wallet.status.loading}
+							<div
+								class="w-3 h-3 border-2 border-primary-color border-t-transparent rounded-full animate-spin"
+							></div>
+							<span class="text-xs text-caption">Checking...</span>
+						{:else if wallet.status.error}
+							<WarningIcon size={14} class="text-amber-500" />
+							<span class="text-xs text-amber-500">{wallet.status.error}</span>
+						{:else if wallet.status.exists}
+							<CheckCircleIcon size={14} class="text-green-500" weight="fill" />
+							<span class="text-xs text-caption">
+								Backed up
+								{#if wallet.status.timestamp}
+									&middot; {formatTimestamp(wallet.status.timestamp)}
+								{/if}
+								&middot; {relayBackupCount(wallet.status.relayStatuses)}/{wallet.status.relayStatuses.length} relays
+							</span>
+						{/if}
+					</div>
+
+					<!-- Info + relay toggle -->
+					<div class="flex items-center gap-2 flex-wrap">
+						<span class="text-xs text-caption flex items-center gap-1.5">
+							<WalletIcon size={14} />
+							Manage in Wallet
+						</span>
+
+						{#if wallet.status.relayStatuses.length > 0}
+							<button
+								class="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs transition-colors hover:bg-[var(--color-bg-secondary)]"
+								style="color: var(--color-caption);"
+								on:click={() => (walletRelaysExpanded[wallet.key] = !walletRelaysExpanded[wallet.key])}
+							>
+								<CaretDownIcon
+									size={12}
+									class="transition-transform duration-200 {walletRelaysExpanded[wallet.key] ? 'rotate-180' : ''}"
+								/>
+								Relays
+							</button>
+						{/if}
+					</div>
+				</div>
+
+				<!-- Relay Details (expandable) -->
+				{#if walletRelaysExpanded[wallet.key] && wallet.status.relayStatuses.length > 0}
+					<div
+						class="px-4 pb-3 pt-2 border-t flex flex-col gap-1.5"
+						style="border-color: var(--color-input-border);"
+					>
+						{#each wallet.status.relayStatuses as relay}
+							<div class="flex items-center justify-between text-xs">
+								<div class="flex items-center gap-1.5 min-w-0">
+									{#if relay.hasBackup}
+										<CheckCircleIcon size={12} class="text-green-500 flex-shrink-0" weight="fill" />
+									{:else if relay.error}
+										<WarningIcon size={12} class="text-amber-500 flex-shrink-0" weight="fill" />
+									{:else}
+										<XCircleIcon size={12} class="text-caption flex-shrink-0" />
+									{/if}
+									<span class="truncate font-mono text-caption"
+										>{getRelayDisplayName(relay.relay)}</span
+									>
+								</div>
+								<span class="text-caption flex-shrink-0 ml-2">
+									{#if relay.hasBackup && relay.timestamp}
+										{formatRelayTimestamp(relay.timestamp)}
+									{:else if relay.error}
+										<span class="text-amber-500">{relay.error}</span>
+									{:else}
+										—
+									{/if}
+								</span>
+							</div>
+						{/each}
+					</div>
+				{/if}
+			</div>
+		{/if}
 	{/each}
 
 	<!-- Refresh all -->

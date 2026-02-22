@@ -4,8 +4,10 @@
  * Backup/restore follows (kind:3), mute list (kind:10000), and profile (kind:0)
  * using NIP-78 (kind:30078) encrypted addressable events on Nostr relays.
  *
- * Profile backup reuses existing profileBackup.ts (rotating 3-slot system).
- * Follows and mute list use single replaceable events with fixed d-tags.
+ * All backup types use rotating 3-slot systems with d-tags:
+ * - zapcooking:follows-backup:0/1/2
+ * - zapcooking:mute-backup:0/1/2
+ * - zapcooking:profile-backup:0/1/2 (managed by profileBackup.ts)
  */
 
 import type NDK from '@nostr-dev-kit/ndk';
@@ -26,15 +28,29 @@ import { resetCache as resetFollowListCache } from '$lib/followListCache';
 // NIP-78 event kind
 const APP_DATA_KIND = 30078;
 
-// D-tag constants
-const D_TAG_FOLLOWS = 'zapcooking:follows-backup';
-const D_TAG_MUTE = 'zapcooking:mute-backup';
+// D-tag base constants
+const D_TAG_FOLLOWS_BASE = 'zapcooking:follows-backup';
+const D_TAG_MUTE_BASE = 'zapcooking:mute-backup';
 
-// Re-export profile backup d-tags for relay status checking
+// Number of backup slots
+const MAX_BACKUP_SLOTS = 3;
+
+// Generate d-tag for a specific slot
+function getSlotDTag(base: string, slot: number): string {
+	return `${base}:${slot}`;
+}
+
+// Get all d-tags for a backup type (includes legacy non-slotted tag)
+function getAllDTags(base: string): string[] {
+	const tags = Array.from({ length: MAX_BACKUP_SLOTS }, (_, i) => getSlotDTag(base, i));
+	tags.push(base); // Include legacy for backwards compatibility
+	return tags;
+}
+
+// Re-export d-tags for relay status checking
 export const BACKUP_D_TAGS = {
-	follows: D_TAG_FOLLOWS,
-	mute: D_TAG_MUTE,
-	// Profile uses rotating slots — checked separately via listProfileBackups
+	follows: getAllDTags(D_TAG_FOLLOWS_BASE),
+	mute: getAllDTags(D_TAG_MUTE_BASE),
 	profile: [
 		'zapcooking:profile-backup:0',
 		'zapcooking:profile-backup:1',
@@ -64,6 +80,13 @@ export interface MuteBackupData {
 		tags: Array<{ value: string; reason?: string; private: boolean }>;
 		threads: Array<{ value: string; reason?: string; private: boolean }>;
 	};
+}
+
+export interface BackupInfo<T> {
+	timestamp: number;
+	createdAt: number;
+	eventId: string;
+	data?: T;
 }
 
 export interface RelayBackupStatus {
@@ -126,6 +149,46 @@ async function publishBackupEvent(
 	return publishedRelays.size > 0;
 }
 
+/**
+ * Find the best slot to use for the next backup.
+ * Returns the first empty slot, or the oldest slot if all are used.
+ */
+async function findNextBackupSlot(
+	ndkInstance: NDK,
+	pubkey: string,
+	dTagBase: string
+): Promise<number> {
+	const dTags = Array.from({ length: MAX_BACKUP_SLOTS }, (_, i) => getSlotDTag(dTagBase, i));
+
+	const events = await ndkInstance.fetchEvents({
+		kinds: [APP_DATA_KIND],
+		authors: [pubkey],
+		'#d': dTags
+	});
+
+	const usedSlots = new Set<number>();
+	const slotTimestamps: Array<{ slot: number; timestamp: number }> = [];
+
+	for (const event of events) {
+		const dTag = event.tags.find((t) => t[0] === 'd')?.[1];
+		if (!dTag) continue;
+		const slotMatch = dTag.match(/:(\d+)$/);
+		if (!slotMatch) continue;
+		const slot = parseInt(slotMatch[1], 10);
+		usedSlots.add(slot);
+		slotTimestamps.push({ slot, timestamp: event.created_at || 0 });
+	}
+
+	// Use first empty slot
+	for (let i = 0; i < MAX_BACKUP_SLOTS; i++) {
+		if (!usedSlots.has(i)) return i;
+	}
+
+	// All used — overwrite oldest
+	slotTimestamps.sort((a, b) => a.timestamp - b.timestamp);
+	return slotTimestamps[0]?.slot ?? 0;
+}
+
 function getRelayUrls(): string[] {
 	const relays = getCurrentRelays();
 	return Array.isArray(relays) && relays.length > 0 ? relays : standardRelays;
@@ -137,7 +200,6 @@ export async function backupFollows(
 	ndkInstance: NDK,
 	pubkey: string
 ): Promise<boolean> {
-	// Fetch current kind:3
 	const event = await ndkInstance.fetchEvent({
 		kinds: [3],
 		authors: [pubkey]
@@ -147,7 +209,6 @@ export async function backupFollows(
 		throw new Error('No follow list found to back up');
 	}
 
-	// Extract follows and relay hints
 	const follows: string[] = [];
 	const relayHints: Record<string, string> = {};
 
@@ -168,28 +229,59 @@ export async function backupFollows(
 		kind3Content: event.content || undefined
 	};
 
-	// Encrypt and publish
+	const slot = await findNextBackupSlot(ndkInstance, pubkey, D_TAG_FOLLOWS_BASE);
+	const dTag = getSlotDTag(D_TAG_FOLLOWS_BASE, slot);
+
 	const { content, method } = await encryptBackupData(backupData, pubkey);
-	return publishBackupEvent(ndkInstance, D_TAG_FOLLOWS, content, true, method);
+	return publishBackupEvent(ndkInstance, dTag, content, true, method);
+}
+
+export async function listFollowsBackups(
+	ndkInstance: NDK,
+	pubkey: string
+): Promise<BackupInfo<FollowsBackupData>[]> {
+	const events = await ndkInstance.fetchEvents({
+		kinds: [APP_DATA_KIND],
+		authors: [pubkey],
+		'#d': getAllDTags(D_TAG_FOLLOWS_BASE)
+	});
+
+	if (!events || events.size === 0) return [];
+
+	const backups: BackupInfo<FollowsBackupData>[] = [];
+
+	for (const event of events) {
+		try {
+			const data = await decryptBackupEvent<FollowsBackupData>(event);
+			if (data) {
+				backups.push({
+					timestamp: data.timestamp,
+					createdAt: event.created_at || 0,
+					eventId: event.id || '',
+					data
+				});
+			} else {
+				backups.push({
+					timestamp: (event.created_at || 0) * 1000,
+					createdAt: event.created_at || 0,
+					eventId: event.id || ''
+				});
+			}
+		} catch {
+			// Skip unparseable events
+		}
+	}
+
+	backups.sort((a, b) => b.timestamp - a.timestamp);
+	return backups.slice(0, MAX_BACKUP_SLOTS);
 }
 
 export async function fetchFollowsBackup(
 	ndkInstance: NDK,
 	pubkey: string
 ): Promise<FollowsBackupData | null> {
-	const events = await ndkInstance.fetchEvents({
-		kinds: [APP_DATA_KIND],
-		authors: [pubkey],
-		'#d': [D_TAG_FOLLOWS]
-	});
-
-	if (!events || events.size === 0) return null;
-
-	const latest = Array.from(events).sort(
-		(a, b) => (b.created_at || 0) - (a.created_at || 0)
-	)[0];
-
-	return decryptBackupEvent<FollowsBackupData>(latest);
+	const backups = await listFollowsBackups(ndkInstance, pubkey);
+	return backups.length > 0 && backups[0].data ? backups[0].data : null;
 }
 
 export async function restoreFollowsFromBackup(
@@ -212,7 +304,6 @@ export async function restoreFollowsFromBackup(
 	const publishedRelays = await event.publish();
 
 	if (publishedRelays.size > 0) {
-		// Invalidate follow list cache
 		resetFollowListCache();
 		return true;
 	}
@@ -225,7 +316,6 @@ export async function backupMuteList(
 	ndkInstance: NDK,
 	pubkey: string
 ): Promise<boolean> {
-	// Fetch current kind:10000
 	const event = await fetchMuteList(pubkey);
 	if (!event) {
 		throw new Error('No mute list found to back up');
@@ -260,27 +350,59 @@ export async function backupMuteList(
 		}
 	};
 
+	const slot = await findNextBackupSlot(ndkInstance, pubkey, D_TAG_MUTE_BASE);
+	const dTag = getSlotDTag(D_TAG_MUTE_BASE, slot);
+
 	const { content, method } = await encryptBackupData(backupData, pubkey);
-	return publishBackupEvent(ndkInstance, D_TAG_MUTE, content, true, method);
+	return publishBackupEvent(ndkInstance, dTag, content, true, method);
+}
+
+export async function listMuteListBackups(
+	ndkInstance: NDK,
+	pubkey: string
+): Promise<BackupInfo<MuteBackupData>[]> {
+	const events = await ndkInstance.fetchEvents({
+		kinds: [APP_DATA_KIND],
+		authors: [pubkey],
+		'#d': getAllDTags(D_TAG_MUTE_BASE)
+	});
+
+	if (!events || events.size === 0) return [];
+
+	const backups: BackupInfo<MuteBackupData>[] = [];
+
+	for (const event of events) {
+		try {
+			const data = await decryptBackupEvent<MuteBackupData>(event);
+			if (data) {
+				backups.push({
+					timestamp: data.timestamp,
+					createdAt: event.created_at || 0,
+					eventId: event.id || '',
+					data
+				});
+			} else {
+				backups.push({
+					timestamp: (event.created_at || 0) * 1000,
+					createdAt: event.created_at || 0,
+					eventId: event.id || ''
+				});
+			}
+		} catch {
+			// Skip unparseable events
+		}
+	}
+
+	backups.sort((a, b) => b.timestamp - a.timestamp);
+	return backups.slice(0, MAX_BACKUP_SLOTS);
 }
 
 export async function fetchMuteListBackup(
 	ndkInstance: NDK,
 	pubkey: string
 ): Promise<MuteBackupData | null> {
-	const events = await ndkInstance.fetchEvents({
-		kinds: [APP_DATA_KIND],
-		authors: [pubkey],
-		'#d': [D_TAG_MUTE]
-	});
-
-	if (!events || events.size === 0) return null;
-
-	const latest = Array.from(events).sort(
-		(a, b) => (b.created_at || 0) - (a.created_at || 0)
-	)[0];
-
-	return decryptBackupEvent<MuteBackupData>(latest);
+	const backups = await listMuteListBackups(ndkInstance, pubkey);
+	return backups.length > 0 && backups[0].data ? backups[0].data : null;
 }
 
 export async function restoreMuteListFromBackup(
@@ -292,7 +414,6 @@ export async function restoreMuteListFromBackup(
 	event.kind = 10000;
 	event.tags = [];
 
-	// Public items go in tags
 	const privateItems: {
 		pubkeys?: Array<{ type: string; value: string; reason?: string }>;
 		words?: Array<{ type: string; value: string; reason?: string }>;
@@ -344,7 +465,6 @@ export async function restoreMuteListFromBackup(
 		}
 	}
 
-	// Private items go encrypted in content
 	const hasPrivateItems = Object.values(privateItems).some((arr) => arr && arr.length > 0);
 	if (hasPrivateItems && hasEncryptionSupport()) {
 		const { ciphertext } = await encrypt(pubkey, JSON.stringify(privateItems), 'nip04');
@@ -357,7 +477,6 @@ export async function restoreMuteListFromBackup(
 	const publishedRelays = await event.publish();
 
 	if (publishedRelays.size > 0) {
-		// Invalidate mute list store — import dynamically to avoid circular deps
 		const { muteListStore } = await import('$lib/muteListStore');
 		muteListStore.load(true);
 		return true;
