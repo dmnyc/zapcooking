@@ -44,6 +44,7 @@
   import { onMount } from 'svelte';
   import { get } from 'svelte/store';
   import MembershipBadge from '../../components/MembershipBadge.svelte';
+  import NostrBackupSection from '../../components/NostrBackupSection.svelte';
   import type { MembershipTier } from '$lib/membershipStore';
 
   // Relays state
@@ -986,6 +987,11 @@
           </div>
         </div>
       </div>
+    </Accordion>
+
+    <!-- Nostr Backup Section -->
+    <Accordion title="Nostr Backup" open={false}>
+      <NostrBackupSection />
     </Accordion>
 
     <!-- Security Section -->
