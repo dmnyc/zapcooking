@@ -1,12 +1,13 @@
 {
   "name": "zap.cooking",
   "license": "MIT",
-  "version": "4.2.0",
+  "version": "4.2.1",
   "private": true,
   "scripts": {
     "dev": "vite dev",
     "build": "vite build",
     "build:mobile": "SKIP_ENV_VALIDATION=1 ADAPTER=static vite build",
+    "build:android": "SKIP_ENV_VALIDATION=1 CAPACITOR=true vite build",
     "preview": "vite preview",
     "dev:cloudflare": "pnpm build && wrangler pages dev .svelte-kit/cloudflare --compatibility-date=2025-01-01 --compatibility-flags=nodejs_compat",
     "test:og": "pnpm build && wrangler pages dev .svelte-kit/cloudflare --compatibility-date=2025-01-01 --compatibility-flags=nodejs_compat",
@@ -16,7 +17,8 @@
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
     "lint": "prettier --plugin-search-dir . --check . && eslint .",
-    "format": "prettier --plugin-search-dir . --write ."
+    "format": "prettier --plugin-search-dir . --write .",
+    "prepare": "cp scripts/bump-version.sh .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit"
   },
   "type": "module",
   "engines": {
@@ -42,7 +44,6 @@
     "@nostr-dev-kit/ndk-cache-dexie": "^2.2.5",
     "@nostr-dev-kit/ndk-svelte-components": "^2.3.4",
     "@svelte-put/qr": "^1.2.1",
-    "@sveltejs/adapter-static": "^3.0.10",
     "@tiptap/core": "^3.17.1",
     "@tiptap/extension-character-count": "^3.17.1",
     "@tiptap/extension-image": "^3.17.1",
@@ -83,6 +84,7 @@
     "@capacitor/assets": "^3.0.5",
     "@sveltejs/adapter-auto": "^3.0.0",
     "@sveltejs/adapter-cloudflare": "^7.2.4",
+    "@sveltejs/adapter-static": "^3.0.10",
     "@sveltejs/adapter-vercel": "^6.2.0",
     "@sveltejs/kit": "^2.49.5",
     "@sveltejs/vite-plugin-svelte": "^3.1.2",

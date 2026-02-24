@@ -3,6 +3,8 @@
 	import { createGroup } from '$lib/nip29';
 	import { setGroupMetadata } from '$lib/stores/groups';
 	import { createEventDispatcher } from 'svelte';
+	import GlobeSimpleIcon from 'phosphor-svelte/lib/GlobeSimple';
+	import LockIcon from 'phosphor-svelte/lib/Lock';
 
 	const dispatch = createEventDispatcher<{
 		created: { groupId: string };
@@ -12,12 +14,14 @@
 
 	let name = '';
 	let about = '';
+	let visibility: 'public' | 'private' = 'public';
 	let creating = false;
 	let error = '';
 
 	function cleanup() {
 		name = '';
 		about = '';
+		visibility = 'public';
 		creating = false;
 		error = '';
 	}
@@ -29,7 +33,7 @@
 		error = '';
 
 		try {
-			const groupId = await createGroup(name.trim(), about.trim() || undefined);
+			const groupId = await createGroup(name.trim(), about.trim() || undefined, visibility);
 
 			// Add to local store immediately
 			setGroupMetadata({
@@ -37,9 +41,9 @@
 				name: name.trim(),
 				picture: '',
 				about: about.trim(),
-				isPrivate: false,
+				isPrivate: visibility === 'private',
 				isClosed: false,
-				isRestricted: false
+				isRestricted: visibility === 'private'
 			});
 
 			dispatch('created', { groupId });
@@ -96,6 +100,44 @@
 				maxlength="300"
 				disabled={creating}
 			></textarea>
+		</div>
+
+		<div>
+			<span
+				class="block text-sm font-medium mb-2"
+				style="color: var(--color-text-primary);"
+			>
+				Access Level
+			</span>
+			<div class="flex flex-col gap-2">
+				<label
+					class="flex items-center gap-3 p-2.5 rounded-xl cursor-pointer transition-colors"
+					style="border: 1px solid {visibility === 'public' ? 'var(--color-primary)' : 'var(--color-input-border)'}; background-color: {visibility === 'public' ? 'color-mix(in srgb, var(--color-primary) 8%, transparent)' : 'transparent'};"
+				>
+					<input type="radio" bind:group={visibility} value="public" class="sr-only" disabled={creating} />
+					<span style="color: {visibility === 'public' ? 'var(--color-primary)' : 'var(--color-caption)'};">
+						<GlobeSimpleIcon size={18} />
+					</span>
+					<div class="flex-1 min-w-0">
+						<span class="text-sm font-medium block" style="color: var(--color-text-primary);">Public</span>
+						<span class="text-xs" style="color: var(--color-caption);">Anyone can join and read</span>
+					</div>
+				</label>
+
+				<label
+					class="flex items-center gap-3 p-2.5 rounded-xl cursor-pointer transition-colors"
+					style="border: 1px solid {visibility === 'private' ? 'var(--color-primary)' : 'var(--color-input-border)'}; background-color: {visibility === 'private' ? 'color-mix(in srgb, var(--color-primary) 8%, transparent)' : 'transparent'};"
+				>
+					<input type="radio" bind:group={visibility} value="private" class="sr-only" disabled={creating} />
+					<span style="color: {visibility === 'private' ? 'var(--color-primary)' : 'var(--color-caption)'};">
+						<LockIcon size={18} />
+					</span>
+					<div class="flex-1 min-w-0">
+						<span class="text-sm font-medium block" style="color: var(--color-text-primary);">Private</span>
+						<span class="text-xs" style="color: var(--color-caption);">Only invited members can join</span>
+					</div>
+				</label>
+			</div>
 		</div>
 
 		{#if error}

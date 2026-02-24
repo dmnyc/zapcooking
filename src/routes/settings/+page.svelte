@@ -1216,10 +1216,10 @@
       <div class="text-xs" style="color: var(--color-text-primary);">
         <p class="font-medium text-red-500 mb-1">You will be signed out of zap.cooking</p>
         <p class="text-caption">
-          {#if authMethod === 'nip07'}
-            Your private key remains safe in your browser extension. You can sign back in anytime.
-          {:else if authMethod === 'nip46'}
+          {#if authMethod === 'nip46'}
             Your private key remains safe in your remote signer. You can reconnect anytime.
+          {:else}
+            Your private key remains safe in your Nostr signer (for example, your browser extension). You can sign back in anytime.
           {/if}
         </p>
       </div>
@@ -1238,11 +1238,15 @@
         type="button"
         class="flex-1 flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl text-sm font-medium transition-colors bg-red-500 hover:bg-red-600 text-white disabled:opacity-50"
         disabled={disconnectingSession || disconnectingBunker}
-        on:click={() => {
-          if (authMethod === 'nip46') {
-            disconnectBunker();
-          } else {
-            disconnectSession();
+        on:click={async () => {
+          try {
+            if (authMethod === 'nip46') {
+              await disconnectBunker();
+            } else {
+              await disconnectSession();
+            }
+          } finally {
+            showDisconnectConfirm = false;
           }
         }}
       >
