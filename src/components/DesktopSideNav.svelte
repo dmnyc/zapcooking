@@ -21,7 +21,7 @@
   import ShoppingCartIcon from 'phosphor-svelte/lib/ShoppingCart';
   import WalletIcon from 'phosphor-svelte/lib/Wallet';
   import CrownSimpleIcon from 'phosphor-svelte/lib/CrownSimple';
-
+  import HandshakeIcon from 'phosphor-svelte/lib/Handshake';
   import { totalUnreadCount } from '$lib/stores/messages';
   import { userSidePanelOpen } from '$lib/stores/userSidePanel';
 
@@ -108,6 +108,12 @@
       label: 'Membership',
       icon: CrownSimpleIcon,
       match: (p) => p.startsWith('/membership')
+    },
+    {
+      href: '/sponsors',
+      label: 'Sponsors',
+      icon: HandshakeIcon,
+      match: (p) => p.startsWith('/sponsors')
     }
   ];
 
@@ -119,7 +125,7 @@
       'items-center',
       'gap-3',
       'px-3',
-      'py-2.5',
+      'py-1.5',
       'rounded-xl',
       'transition-colors',
       'cursor-pointer',
@@ -149,11 +155,11 @@
   class:opacity-0={$userSidePanelOpen}
   class:pointer-events-none={$userSidePanelOpen}
 >
-  <div class="h-full overflow-y-auto p-3" style="background-color: var(--color-bg-primary);">
+  <div class="h-full overflow-y-auto scrollbar-hide p-3" style="background-color: var(--color-bg-primary);">
     <!-- Logo aligned with header position -->
     <button
       on:click={handleLogoClick}
-      class="block pl-2 py-3 cursor-pointer transition-transform duration-150 active:scale-95 active:opacity-80"
+      class="block pl-2 py-2 cursor-pointer transition-transform duration-150 active:scale-95 active:opacity-80"
     >
       <img
         src={isDarkMode ? '/zap_cooking_logo_white.svg' : SVGNostrCookingWithText}
@@ -161,7 +167,7 @@
         alt="Zap Cooking"
       />
     </button>
-    <nav class="flex flex-col gap-4 mt-4">
+    <nav class="flex flex-col gap-3 mt-3">
       <div>
         <h3
           class="px-3 pb-2 font-semibold uppercase tracking-wider"
@@ -220,7 +226,7 @@
         </ul>
       </div>
 
-      <div class="mt-2">
+      <div class="mt-1">
         <h3
           class="px-3 pb-2 font-semibold uppercase tracking-wider"
           style="color: var(--color-caption); font-size: 12px;"

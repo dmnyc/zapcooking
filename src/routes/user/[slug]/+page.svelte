@@ -19,6 +19,7 @@
   import SpeakerSlashIcon from 'phosphor-svelte/lib/SpeakerSlash';
   import SpeakerSimpleSlashIcon from 'phosphor-svelte/lib/SpeakerSimpleSlash';
   import SealCheckIcon from 'phosphor-svelte/lib/SealCheck';
+  import UsersIcon from 'phosphor-svelte/lib/Users';
   import PencilSimpleIcon from 'phosphor-svelte/lib/PencilSimple';
   import SpinnerIcon from 'phosphor-svelte/lib/SpinnerGap';
   import { mutedPubkeys } from '$lib/muteListStore';
@@ -31,6 +32,8 @@
   import FoodstrFeedOptimized from '../../../components/FoodstrFeedOptimized.svelte';
   import FloppyDiskIcon from 'phosphor-svelte/lib/FloppyDisk';
   import BookOpenIcon from 'phosphor-svelte/lib/BookOpen';
+  import ImageSquareIcon from 'phosphor-svelte/lib/ImageSquare';
+  import PlayIcon from 'phosphor-svelte/lib/Play';
   import type { PageData } from './$types';
   import { onMount, onDestroy } from 'svelte';
   import { Fetch } from 'hurdak';
@@ -38,6 +41,7 @@
   import { RECIPE_TAGS } from '$lib/consts';
   import ArticleFeed from '../../../components/ArticleFeed.svelte';
   import MembershipBeltBadge from '../../../components/MembershipBeltBadge.svelte';
+  import { fetchUserStatsFromPrimal, getPrimalCache, type PrimalUserStats } from '$lib/primalCache';
 
   export let data: PageData;
 
@@ -49,9 +53,9 @@
   let zapModal = false;
   let isZapping = false;
 
-  // Tab state: 'recipes' | 'posts' | 'reads' | 'drafts'
+  // Tab state: 'recipes' | 'posts' | 'media' | 'reads' | 'following' | 'drafts'
   // Default to 'posts' tab for a more social-first experience
-  let activeTab: 'recipes' | 'posts' | 'reads' | 'drafts' = 'posts';
+  let activeTab: 'recipes' | 'posts' | 'media' | 'reads' | 'following' | 'drafts' = 'posts';
 
   // Reads tab state (longform articles)
   let readsEvents: NDKEvent[] = [];
@@ -60,6 +64,36 @@
   let hasMoreReads = true;
   let oldestReadsTime: number | null = null;
   let readsSentinel: HTMLElement;
+
+  // Media tab state
+  type MediaItem = {
+    event: NDKEvent;
+    url: string;
+    type: 'image' | 'video';
+  };
+  let mediaItems: MediaItem[] = [];
+  let mediaLoaded = false;
+  let loadingMoreMedia = false;
+  let hasMoreMedia = true;
+  let oldestMediaTime: number | null = null;
+  let mediaSentinel: HTMLElement;
+
+  // Profile stats from Primal
+  let profileStats: PrimalUserStats | null = null;
+
+  // Following tab state
+  type FollowingProfile = {
+    pubkey: string;
+    npub: string;
+    name: string;
+    picture?: string;
+    nip05?: string;
+    about?: string;
+  };
+  let followingProfiles: FollowingProfile[] = [];
+  let followingLoaded = false;
+  let followingLoading = false;
+  let followingCount: number | null = null;
 
   // Infinite scroll state for recipes
   let hasMoreRecipes = true;
@@ -71,6 +105,7 @@
   let recipeObserver: IntersectionObserver | null = null;
   let postsObserver: IntersectionObserver | null = null;
   let readsObserver: IntersectionObserver | null = null;
+  let mediaObserver: IntersectionObserver | null = null;
 
   // Bio expand/collapse state
   let bioExpanded = false;
@@ -104,7 +139,7 @@
   // Handle ?tab= query parameter for direct tab navigation
   $: {
     const tabParam = $page.url.searchParams.get('tab');
-    const allowedTabs = new Set(['recipes', 'posts', 'reads', 'drafts']);
+    const allowedTabs = new Set(['recipes', 'posts', 'media', 'reads', 'following', 'drafts']);
 
     if (tabParam && allowedTabs.has(tabParam)) {
       // Only allow "drafts" tab for the profile owner
@@ -144,8 +179,25 @@
       readsLoaded = false;
       hasMoreReads = true;
       oldestReadsTime = null;
+      // Reset media state
+      mediaItems = [];
+      mediaLoaded = false;
+      loadingMoreMedia = false;
+      hasMoreMedia = true;
+      oldestMediaTime = null;
+      if (mediaObserver) {
+        mediaObserver.disconnect();
+        mediaObserver = null;
+      }
       // Reset bio expanded state
       bioExpanded = false;
+      // Reset profile stats
+      profileStats = null;
+      // Reset following tab state
+      followingProfiles = [];
+      followingLoaded = false;
+      followingLoading = false;
+      followingCount = null;
       // Reset mute state
       isMuted = false;
       mutedUsers = [];
@@ -213,6 +265,7 @@
         });
 
         subscription.on('eose', () => {
+          subscription.stop();
           loaded = true;
           // Sort events by created_at and set oldestRecipeTime for pagination
           if (events.length > 0) {
@@ -231,6 +284,14 @@
           checkFollowStatus();
           checkMuteStatus();
         }
+
+        // Fetch profile stats (follower/following counts) from Primal
+        const requestedHexpubkey = hexpubkey;
+        fetchUserStatsFromPrimal(requestedHexpubkey).then((stats) => {
+          if (stats && requestedHexpubkey === hexpubkey) {
+            profileStats = stats;
+          }
+        });
       }
     } catch (error) {
       console.error('Error in loadData:', error);
@@ -766,9 +827,383 @@
     loadReads();
   }
 
+  // ── Media tab ──────────────────────────────────────────────────
+  const IMAGE_EXTENSIONS = /\.(jpg|jpeg|png|gif|webp|svg|avif)(\?.*)?$/i;
+  const VIDEO_EXTENSIONS = /\.(mp4|webm|mov)(\?.*)?$/i;
+  const URL_REGEX = /https?:\/\/[^\s<)"\]]+/g;
+
+  function isMediaImageUrl(url: string): boolean {
+    try {
+      const u = new URL(url);
+      if (IMAGE_EXTENSIONS.test(u.pathname)) return true;
+      if (u.hostname.includes('image.nostr.build')) return true;
+      if (u.hostname.includes('nostr.build') && u.pathname.includes('/i/')) return true;
+      if (u.hostname.includes('imgur.com')) return true;
+      if (u.hostname.includes('primal.b-cdn.net')) return true;
+      if (u.hostname.includes('i.ibb.co')) return true;
+      if (u.hostname.includes('void.cat')) return true;
+      return false;
+    } catch { return false; }
+  }
+
+  function isMediaVideoUrl(url: string): boolean {
+    try {
+      return VIDEO_EXTENSIONS.test(new URL(url).pathname);
+    } catch { return false; }
+  }
+
+  function extractMediaFromEvent(event: NDKEvent): MediaItem[] {
+    const items: MediaItem[] = [];
+    const seen = new Set<string>();
+
+    // Check imeta tags first (NIP-92)
+    for (const tag of event.tags) {
+      if (tag[0] === 'imeta') {
+        for (const part of tag.slice(1)) {
+          if (part.startsWith('url ')) {
+            const url = part.substring(4).trim();
+            if (!seen.has(url)) {
+              seen.add(url);
+              items.push({ event, url, type: isMediaVideoUrl(url) ? 'video' : 'image' });
+            }
+          }
+        }
+      }
+    }
+
+    // Check image tags
+    for (const tag of event.tags) {
+      if (tag[0] === 'image' && tag[1] && !seen.has(tag[1])) {
+        seen.add(tag[1]);
+        items.push({ event, url: tag[1], type: 'image' });
+      }
+    }
+
+    // Parse content for media URLs
+    const urls = event.content?.match(URL_REGEX) || [];
+    for (const url of urls) {
+      const clean = url.replace(/[.,;:!?)]+$/, ''); // Strip trailing punctuation
+      if (seen.has(clean)) continue;
+      if (isMediaImageUrl(clean)) {
+        seen.add(clean);
+        items.push({ event, url: clean, type: 'image' });
+      } else if (isMediaVideoUrl(clean)) {
+        seen.add(clean);
+        items.push({ event, url: clean, type: 'video' });
+      }
+    }
+
+    return items;
+  }
+
+  async function loadMedia() {
+    if (!hexpubkey || mediaLoaded) return;
+
+    try {
+      const filter: NDKFilter = {
+        authors: [hexpubkey],
+        kinds: [1],
+        limit: 100
+      };
+
+      const subscription = $ndk.subscribe(filter);
+      const fetchedItems: MediaItem[] = [];
+      const seenEventIds = new Set<string>();
+      let latestOldest: number | null = null;
+
+      await new Promise<void>((resolve) => {
+        let resolved = false;
+
+        subscription.on('event', (ev: NDKEvent) => {
+          if (seenEventIds.has(ev.id)) return;
+          seenEventIds.add(ev.id);
+
+          const t = ev.created_at || 0;
+          if (latestOldest === null || t < latestOldest) latestOldest = t;
+          const items = extractMediaFromEvent(ev);
+          if (items.length > 0) {
+            fetchedItems.push(...items);
+          }
+        });
+
+        subscription.on('eose', () => {
+          if (!resolved) {
+            resolved = true;
+            subscription.stop();
+            mediaItems = fetchedItems.sort((a, b) => (b.event.created_at || 0) - (a.event.created_at || 0));
+            mediaLoaded = true;
+            oldestMediaTime = latestOldest;
+            hasMoreMedia = seenEventIds.size >= 100;
+            resolve();
+          }
+        });
+
+        setTimeout(() => {
+          if (!resolved) {
+            resolved = true;
+            subscription.stop();
+            mediaItems = fetchedItems.sort((a, b) => (b.event.created_at || 0) - (a.event.created_at || 0));
+            mediaLoaded = true;
+            oldestMediaTime = latestOldest;
+            hasMoreMedia = seenEventIds.size >= 100;
+            resolve();
+          }
+        }, 10000);
+      });
+    } catch (error) {
+      console.error('Error loading media:', error);
+      mediaLoaded = true;
+    }
+  }
+
+  async function loadMoreMedia() {
+    if (loadingMoreMedia || !hasMoreMedia || !hexpubkey || !oldestMediaTime) return;
+    loadingMoreMedia = true;
+
+    try {
+      const filter: NDKFilter = {
+        authors: [hexpubkey],
+        kinds: [1],
+        limit: 100,
+        until: oldestMediaTime - 1
+      };
+
+      const subscription = $ndk.subscribe(filter);
+      const newItems: MediaItem[] = [];
+      const existingUrls = new Set(mediaItems.map((m) => m.url));
+      let eventCount = 0;
+      let latestOldest: number | null = null;
+
+      await new Promise<void>((resolve) => {
+        let resolved = false;
+
+        subscription.on('event', (ev: NDKEvent) => {
+          eventCount++;
+          const items = extractMediaFromEvent(ev);
+          for (const item of items) {
+            if (!existingUrls.has(item.url)) {
+              newItems.push(item);
+              existingUrls.add(item.url);
+            }
+          }
+          const t = ev.created_at || 0;
+          if (latestOldest === null || t < latestOldest) latestOldest = t;
+        });
+
+        subscription.on('eose', () => {
+          if (!resolved) {
+            resolved = true;
+            subscription.stop();
+            if (newItems.length > 0) {
+              mediaItems = [...mediaItems, ...newItems].sort(
+                (a, b) => (b.event.created_at || 0) - (a.event.created_at || 0)
+              );
+              if (latestOldest !== null) oldestMediaTime = latestOldest;
+              hasMoreMedia = eventCount >= 100;
+            } else {
+              hasMoreMedia = false;
+            }
+            resolve();
+          }
+        });
+
+        setTimeout(() => {
+          if (!resolved) {
+            resolved = true;
+            subscription.stop();
+            if (newItems.length > 0) {
+              mediaItems = [...mediaItems, ...newItems].sort(
+                (a, b) => (b.event.created_at || 0) - (a.event.created_at || 0)
+              );
+              if (latestOldest !== null) oldestMediaTime = latestOldest;
+              hasMoreMedia = eventCount >= 100;
+            } else {
+              hasMoreMedia = false;
+            }
+            resolve();
+          }
+        }, 5000);
+      });
+    } catch (error) {
+      console.error('Error loading more media:', error);
+    } finally {
+      loadingMoreMedia = false;
+    }
+  }
+
+  function handleMediaImgError(e: Event) {
+    const el = e.target as HTMLElement;
+    const tile = el?.closest('.media-tile') as HTMLElement | null;
+    if (tile) tile.style.display = 'none';
+  }
+
+  function getMediaEventUrl(event: NDKEvent): string {
+    const nevent = nip19.neventEncode({ id: event.id, author: event.pubkey });
+    return `/${nevent}`;
+  }
+
+  // Load media when switching to media tab
+  $: if (activeTab === 'media' && hexpubkey && !mediaLoaded) {
+    loadMedia();
+  }
+
+  // Load following list when switching to following tab
+  $: if (activeTab === 'following' && hexpubkey && !followingLoaded && !followingLoading) {
+    loadFollowing();
+  }
+
+  /** Fetch NDK events with a timeout that resolves to an empty set (no unhandled rejections) */
+  function fetchEventsWithTimeout(
+    filter: NDKFilter,
+    timeoutMs = 8000
+  ): Promise<Set<NDKEvent>> {
+    return new Promise<Set<NDKEvent>>((resolve, reject) => {
+      const timer = setTimeout(() => resolve(new Set<NDKEvent>()), timeoutMs);
+      $ndk
+        .fetchEvents(filter)
+        .then((result: Set<NDKEvent>) => {
+          clearTimeout(timer);
+          resolve(result);
+        })
+        .catch((error: unknown) => {
+          clearTimeout(timer);
+          reject(error);
+        });
+    });
+  }
+
+  async function loadFollowing() {
+    if (!hexpubkey || followingLoading) return;
+
+    const requestedPubkey = hexpubkey;
+    followingLoading = true;
+
+    try {
+      // Step 1: Get the followed pubkeys — try Primal first (fast), fall back to NDK
+      let followPubkeys: string[] = [];
+
+      const primal = getPrimalCache();
+      if (primal) {
+        try {
+          followPubkeys = await primal.fetchContactList(requestedPubkey, 5000);
+        } catch (e) {
+          console.debug('[Following] Primal contact list failed, trying NDK:', e);
+        }
+      }
+
+      if (followPubkeys.length === 0) {
+        // NDK fallback with a resolving timeout (empty set = timed out)
+        try {
+          const contactEvents = await fetchEventsWithTimeout(
+            { authors: [requestedPubkey], kinds: [3], limit: 1 },
+            8000
+          );
+          const contactList = Array.from(contactEvents)[0];
+          if (contactList) {
+            followPubkeys = contactList.tags
+              .filter((t) => t[0] === 'p' && t[1])
+              .map((t) => t[1]);
+          }
+        } catch (e) {
+          console.debug('[Following] NDK contact list also failed:', e);
+        }
+      }
+
+      // Bail if user navigated away
+      if (hexpubkey !== requestedPubkey) return;
+
+      followingCount = followPubkeys.length;
+
+      if (followPubkeys.length === 0) {
+        followingProfiles = [];
+        followingLoaded = true;
+        followingLoading = false;
+        return;
+      }
+
+      // Step 2: Fetch profile metadata via NDK with resolving timeouts per batch
+      const profiles: FollowingProfile[] = [];
+      const resolvedPubkeys = new Set<string>();
+      const batchSize = 100;
+      for (let i = 0; i < followPubkeys.length; i += batchSize) {
+        const batch = followPubkeys.slice(i, i + batchSize);
+
+        // Bail if user navigated away mid-batch
+        if (hexpubkey !== requestedPubkey) return;
+
+        try {
+          const profileEvents = await fetchEventsWithTimeout(
+            { kinds: [0], authors: batch },
+            8000
+          );
+
+          for (const event of profileEvents) {
+            try {
+              const profileData = JSON.parse(event.content);
+              resolvedPubkeys.add(event.pubkey);
+              profiles.push({
+                pubkey: event.pubkey,
+                npub: nip19.npubEncode(event.pubkey),
+                name: profileData.display_name || profileData.name || nip19.npubEncode(event.pubkey).slice(0, 12) + '...',
+                picture: profileData.picture,
+                nip05: profileData.nip05,
+                about: profileData.about
+              });
+            } catch (e) {
+              resolvedPubkeys.add(event.pubkey);
+              profiles.push({
+                pubkey: event.pubkey,
+                npub: nip19.npubEncode(event.pubkey),
+                name: nip19.npubEncode(event.pubkey).slice(0, 12) + '...'
+              });
+            }
+          }
+        } catch (e) {
+          console.debug('[Following] Profile batch failed, continuing with what we have');
+        }
+      }
+
+      // Bail if user navigated away
+      if (hexpubkey !== requestedPubkey) return;
+
+      // Add placeholder entries for pubkeys we couldn't resolve
+      for (const pk of followPubkeys) {
+        if (!resolvedPubkeys.has(pk)) {
+          profiles.push({
+            pubkey: pk,
+            npub: nip19.npubEncode(pk),
+            name: nip19.npubEncode(pk).slice(0, 12) + '...'
+          });
+        }
+      }
+
+      // Sort: resolved names first, then truncated npubs at the end
+      profiles.sort((a, b) => {
+        const aIsNpub = a.name.startsWith('npub1');
+        const bIsNpub = b.name.startsWith('npub1');
+        if (aIsNpub && !bIsNpub) return 1;
+        if (!aIsNpub && bIsNpub) return -1;
+        return a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+      });
+
+      followingProfiles = profiles;
+      followingLoaded = true;
+    } catch (error) {
+      console.error('Error loading following list:', error);
+      if (hexpubkey === requestedPubkey) {
+        followingLoaded = true;
+      }
+    } finally {
+      if (hexpubkey === requestedPubkey) {
+        followingLoading = false;
+      }
+    }
+  }
+
   let qrModal = false;
   let npubCopied = false;
   let lightningCopied = false;
+  let npubToast = false;
 
   function qrModalCleanup() {
     qrModal = false;
@@ -796,8 +1231,12 @@
     if (user?.npub) {
       await navigator.clipboard.writeText(user.npub);
       npubCopied = true;
+      npubToast = true;
       setTimeout(() => {
         npubCopied = false;
+      }, 2000);
+      setTimeout(() => {
+        npubToast = false;
       }, 2000);
     }
   }
@@ -1093,10 +1532,32 @@
       );
       readsObserver.observe(readsSentinel);
     }
+
+    // Observer for media tab
+    if (mediaObserver) {
+      mediaObserver.disconnect();
+      mediaObserver = null;
+    }
+    if (mediaSentinel && activeTab === 'media') {
+      mediaObserver = new IntersectionObserver(
+        (entries) => {
+          if (
+            entries[0].isIntersecting &&
+            activeTab === 'media' &&
+            hasMoreMedia &&
+            !loadingMoreMedia
+          ) {
+            loadMoreMedia();
+          }
+        },
+        { rootMargin: '200px' }
+      );
+      mediaObserver.observe(mediaSentinel);
+    }
   }
 
   // Reactive statement to setup observers when tab or sentinels change
-  $: if (recipeSentinel || postsSentinel || readsSentinel) {
+  $: if (recipeSentinel || postsSentinel || readsSentinel || mediaSentinel) {
     // Use setTimeout to ensure DOM is ready
     setTimeout(() => {
       setupObservers();
@@ -1115,6 +1576,10 @@
     if (readsObserver) {
       readsObserver.disconnect();
       readsObserver = null;
+    }
+    if (mediaObserver) {
+      mediaObserver.disconnect();
+      mediaObserver = null;
     }
   });
 </script>
@@ -1332,7 +1797,7 @@
               <MembershipBeltBadge pubkey={hexpubkey || ''} size={20} />
             </h1>
           </button>
-          {#if user?.npub}
+          {#if user?.npub && hexpubkey === $userPublickey}
             <button
               on:click={copyNpub}
               class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs transition-colors cursor-pointer flex-shrink-0 bg-input hover:bg-accent-gray"
@@ -1457,9 +1922,30 @@
     </div>
   </div>
 
+  <!-- Profile Stats -->
+  {#if profileStats}
+    <div class="flex items-center gap-5 pb-3">
+      <button
+        on:click={() => (activeTab = 'following')}
+        class="flex items-center gap-1.5 text-sm transition-colors hover:opacity-70"
+        style="color: var(--color-text-secondary)"
+      >
+        <span class="font-semibold" style="color: var(--color-text-primary)">{profileStats.follows_count.toLocaleString()}</span>
+        <span>Following</span>
+      </button>
+      <div
+        class="flex items-center gap-1.5 text-sm"
+        style="color: var(--color-text-secondary)"
+      >
+        <span class="font-semibold" style="color: var(--color-text-primary)">{profileStats.followers_count.toLocaleString()}</span>
+        <span>Followers</span>
+      </div>
+    </div>
+  {/if}
+
   <!-- Tabs -->
-  <div class="border-b mb-4" style="border-color: var(--color-input-border)">
-    <div class="flex gap-1">
+  <div class="border-b mb-4 overflow-x-auto scrollbar-hide" style="border-color: var(--color-input-border)">
+    <div class="flex gap-1 min-w-max">
       <button
         on:click={() => (activeTab = 'recipes')}
         class="px-4 py-2 text-sm font-medium transition-colors relative"
@@ -1489,15 +1975,42 @@
         {/if}
       </button>
       <button
+        on:click={() => (activeTab = 'media')}
+        class="px-4 py-2 text-sm font-medium transition-colors relative"
+        style="color: {activeTab === 'media'
+          ? 'var(--color-text-primary)'
+          : 'var(--color-text-secondary)'}"
+      >
+        Media
+        {#if activeTab === 'media'}
+          <span
+            class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-orange-500 to-amber-500"
+          ></span>
+        {/if}
+      </button>
+      <button
         on:click={() => (activeTab = 'reads')}
-        class="px-4 py-2 text-sm font-medium transition-colors relative flex items-center gap-1"
+        class="px-4 py-2 text-sm font-medium transition-colors relative"
         style="color: {activeTab === 'reads'
           ? 'var(--color-text-primary)'
           : 'var(--color-text-secondary)'}"
       >
-        <BookOpenIcon size={16} />
         Reads
         {#if activeTab === 'reads'}
+          <span
+            class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-orange-500 to-amber-500"
+          ></span>
+        {/if}
+      </button>
+      <button
+        on:click={() => (activeTab = 'following')}
+        class="px-4 py-2 text-sm font-medium transition-colors relative"
+        style="color: {activeTab === 'following'
+          ? 'var(--color-text-primary)'
+          : 'var(--color-text-secondary)'}"
+      >
+        Following
+        {#if activeTab === 'following'}
           <span
             class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-orange-500 to-amber-500"
           ></span>
@@ -1569,6 +2082,58 @@
       <FoodstrFeedOptimized bind:this={foodstrFeedComponent} authorPubkey={hexpubkey} />
       <div bind:this={postsSentinel} class="py-4 text-center"></div>
     </div>
+  {:else if activeTab === 'media'}
+    {#if !mediaLoaded}
+      <!-- Skeleton grid -->
+      <div class="media-grid">
+        {#each Array(12) as _}
+          <div class="media-tile-skeleton animate-pulse"></div>
+        {/each}
+      </div>
+    {:else if mediaItems.length > 0}
+      <div class="media-grid">
+        {#each mediaItems as item}
+          <a href={getMediaEventUrl(item.event)} class="media-tile">
+            {#if item.type === 'video'}
+              <video
+                src={item.url}
+                class="media-tile-img"
+                on:error={handleMediaImgError}
+                playsinline
+                muted
+                loop
+              ></video>
+              <div class="media-video-badge">
+                <PlayIcon size={20} weight="fill" />
+              </div>
+            {:else}
+              <img
+                src={item.url}
+                alt=""
+                loading="lazy"
+                class="media-tile-img"
+                on:error={handleMediaImgError}
+              />
+            {/if}
+          </a>
+        {/each}
+      </div>
+      {#if hasMoreMedia}
+        <div bind:this={mediaSentinel} class="py-4 text-center">
+          {#if loadingMoreMedia}
+            <div class="text-gray-500 text-sm">Loading more media...</div>
+          {/if}
+        </div>
+      {/if}
+    {:else}
+      <div class="py-12 text-center">
+        <div class="max-w-sm mx-auto space-y-4" style="color: var(--color-caption)">
+          <ImageSquareIcon size={48} class="mx-auto opacity-50" />
+          <p class="text-lg font-medium">No media yet</p>
+          <p class="text-sm">This user hasn't posted any images or videos.</p>
+        </div>
+      </div>
+    {/if}
   {:else if activeTab === 'reads'}
     {#if hexpubkey && $mutedPubkeys.has(hexpubkey)}
       <!-- Muted user message for reads tab -->
@@ -1641,6 +2206,44 @@
         </div>
       </div>
     {/if}
+  {:else if activeTab === 'following'}
+    {#if followingLoading && !followingLoaded}
+      <!-- Loading skeleton -->
+      <div class="flex flex-col gap-3">
+        {#each Array(6) as _}
+          <div class="flex items-center gap-3 p-3 rounded-xl animate-pulse" style="background: var(--color-bg-secondary)">
+            <div class="w-10 h-10 rounded-full" style="background: var(--color-accent-gray, #e5e7eb)"></div>
+            <div class="flex-1">
+              <div class="h-4 w-32 rounded" style="background: var(--color-accent-gray, #e5e7eb)"></div>
+              <div class="h-3 w-48 rounded mt-1.5" style="background: var(--color-accent-gray, #e5e7eb)"></div>
+            </div>
+          </div>
+        {/each}
+      </div>
+    {:else if followingProfiles.length === 0}
+      <div class="py-12 text-center">
+        <UsersIcon size={48} class="mx-auto mb-4 opacity-30" />
+        <p class="text-lg font-medium" style="color: var(--color-text-secondary)">Not following anyone yet</p>
+      </div>
+    {:else}
+      <div class="flex flex-col gap-1">
+        {#each followingProfiles as fp (fp.pubkey)}
+          <a
+            href="/user/{fp.npub}"
+            class="flex items-center gap-3 p-3 rounded-xl transition-colors hover:opacity-80"
+            style="background: var(--color-bg-secondary); border: 1px solid transparent;"
+          >
+            <Avatar pubkey={fp.pubkey} src={fp.picture || null} size={40} />
+            <div class="flex-1 min-w-0">
+              <div class="font-medium truncate" style="color: var(--color-text-primary)">{fp.name}</div>
+              {#if fp.nip05}
+                <div class="text-xs truncate" style="color: var(--color-text-secondary)">{fp.nip05}</div>
+              {/if}
+            </div>
+          </a>
+        {/each}
+      </div>
+    {/if}
   {:else if activeTab === 'drafts'}
     {#if $userPublickey === hexpubkey}
       <ProfileDrafts />
@@ -1656,6 +2259,14 @@
     {/if}
   {/if}
 </div>
+
+<!-- Toast for npub copied -->
+{#if npubToast}
+  <div class="npub-toast" role="status" aria-live="polite">
+    <CheckIcon size={16} weight="bold" class="text-green-500" />
+    <span>npub copied</span>
+  </div>
+{/if}
 
 <style>
   /* Ensure line-clamp works for bio text */
@@ -1695,5 +2306,135 @@
     height: 400px;
     display: flex;
     flex-direction: column;
+  }
+
+  /* Media grid */
+  /* Mobile: tight square grid (Instagram-style) */
+  .media-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 3px;
+  }
+
+  .media-tile {
+    position: relative;
+    aspect-ratio: 1;
+    overflow: hidden;
+    background: var(--color-accent-gray, #f3f4f6);
+    border-radius: 2px;
+    display: block;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  .media-tile:hover {
+    opacity: 0.85;
+  }
+
+  .media-tile-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .media-video-badge {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    background: rgba(0, 0, 0, 0.6);
+    color: white;
+    border-radius: 4px;
+    padding: 2px 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .media-tile-skeleton {
+    aspect-ratio: 1;
+    background: var(--color-accent-gray, #e5e7eb);
+    border-radius: 2px;
+  }
+
+  /* Desktop: thumbnail cards with rounded corners and spacing */
+  @media (min-width: 768px) {
+    .media-grid {
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+    }
+
+    .media-tile {
+      border-radius: 0.75rem;
+      border: 1px solid var(--color-input-border, #e5e7eb);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+    }
+
+    .media-tile:hover {
+      opacity: 1;
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    }
+
+    .media-tile-img {
+      border-radius: 0.75rem;
+    }
+
+    .media-tile-skeleton {
+      border-radius: 0.75rem;
+    }
+
+    .media-video-badge {
+      top: 8px;
+      right: 8px;
+      border-radius: 6px;
+      padding: 3px 6px;
+    }
+  }
+
+  /* Hide scrollbar on tab bar */
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Toast notification */
+  .npub-toast {
+    position: fixed;
+    bottom: calc(80px + env(safe-area-inset-bottom, 0px));
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 18px;
+    border-radius: 12px;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--color-text-primary);
+    background: var(--color-bg-secondary);
+    border: 1px solid var(--color-input-border);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+    z-index: 100;
+    animation: toast-in 0.25s ease-out;
+    pointer-events: none;
+  }
+
+  @keyframes toast-in {
+    from {
+      opacity: 0;
+      transform: translateX(-50%) translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+  }
+
+  @media (min-width: 768px) {
+    .npub-toast {
+      bottom: 2rem;
+    }
   }
 </style>

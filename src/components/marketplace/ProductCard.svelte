@@ -1,46 +1,58 @@
 <script lang="ts">
 	import { createEventDispatcher } from 'svelte';
 	import type { NDKEvent } from '@nostr-dev-kit/ndk';
-	import LightningIcon from 'phosphor-svelte/lib/Lightning';
+	import ChatCircleIcon from 'phosphor-svelte/lib/ChatCircle';
 	import PackageIcon from 'phosphor-svelte/lib/Package';
 	import CloudArrowDownIcon from 'phosphor-svelte/lib/CloudArrowDown';
 	import TrashIcon from 'phosphor-svelte/lib/Trash';
-	import { parseProductEvent, formatSatsPrice } from '$lib/marketplace/products';
-	import { CATEGORY_LABELS, type Product } from '$lib/marketplace/types';
+	import { nip19 } from 'nostr-tools';
+	import { parseProductEvent } from '$lib/marketplace/products';
+	import type { Product } from '$lib/marketplace/types';
 	import { getImageOrPlaceholder } from '$lib/placeholderImages';
 	import CustomAvatar from '../CustomAvatar.svelte';
 	import CustomName from '../CustomName.svelte';
 	import ProductDetailModal from './ProductDetailModal.svelte';
+	import TrustBadge from './TrustBadge.svelte';
 
 	export let event: NDKEvent;
 	export let showDelete = false;
+	export let trustRank: number | undefined = undefined;
+	export let personalized: boolean = false;
 
-	const dispatch = createEventDispatcher<{ delete: { product: Product } }>();
+	const dispatch = createEventDispatcher<{ delete: { product: Product }; hide: void }>();
 
-	let imageElement: HTMLElement | null = null;
-	let imageLoaded = false;
+	let imageElement: HTMLImageElement | null = null;
 	let showDetailModal = false;
+	let openWithDm = false;
+	let hidden = false;
+
+	function handleImageError() {
+		hidden = true;
+		dispatch('hide');
+	}
 
 	// Parse product data from event
 	$: product = parseProductEvent(event);
 	$: title = product?.title || '';
 	$: priceSats = product?.priceSats || 0;
-	$: category = product?.category || 'ingredients';
 	$: requiresShipping = product?.requiresShipping ?? true;
 	$: sellerPubkey = product?.pubkey || '';
+	$: sellerNpub = sellerPubkey ? nip19.npubEncode(sellerPubkey) : '';
+	$: kitchenUrl = sellerNpub ? `/market/kitchen/${sellerNpub}` : '';
 
 	// Get primary image with placeholder fallback
 	$: imageUrl = product?.images?.[0]
 		? getImageOrPlaceholder(product.images[0], event.id)
 		: getImageOrPlaceholder(undefined, event.id);
 
-	// Load image when element is available
-	$: if (imageElement && imageUrl && !imageLoaded) {
-		imageElement.style.backgroundImage = `url('${imageUrl}')`;
-		imageLoaded = true;
+	function openDetail() {
+		openWithDm = false;
+		showDetailModal = true;
 	}
 
-	function openDetail() {
+	function openDetailWithDm(e: Event) {
+		e.stopPropagation();
+		openWithDm = true;
 		showDetailModal = true;
 	}
 
@@ -52,17 +64,17 @@
 	}
 </script>
 
+{#if !hidden}
 <button type="button" class="product-card text-left w-full" on:click={openDetail}>
 	<!-- Image -->
 	<div class="relative image-container">
-		<div
+		<img
 			bind:this={imageElement}
-			class="absolute inset-0 image"
+			src={imageUrl}
+			alt={title}
+			class="absolute inset-0 image object-cover"
+			on:error={handleImageError}
 		/>
-		<!-- Category badge -->
-		<span class="absolute top-2 right-2 text-xs font-medium px-2 py-1 rounded-full category-badge">
-			{CATEGORY_LABELS[category]}
-		</span>
 		<!-- Delete button (only shown for owner) -->
 		{#if showDelete}
 			<button
@@ -83,7 +95,32 @@
 			{title}
 		</h5>
 
-		<!-- Shipping badge -->
+		<!-- Price -->
+		<div class="flex items-baseline gap-1.5">
+			<span class="text-xl font-bold text-orange-500">
+				{priceSats.toLocaleString()} sats
+			</span>
+			<span class="text-sm text-orange-400">&#9889;</span>
+		</div>
+
+		<!-- Seller -->
+		{#if sellerPubkey}
+			<span
+				role="link"
+				tabindex="-1"
+				on:click|stopPropagation={() => { window.location.href = kitchenUrl; }}
+				on:keydown|stopPropagation={(e) => { if (e.key === 'Enter') window.location.href = kitchenUrl; }}
+				class="flex items-center gap-2 hover:opacity-80 transition-opacity cursor-pointer"
+			>
+				<CustomAvatar pubkey={sellerPubkey} size={20} className="flex-shrink-0" interactive={false} />
+				<span class="text-xs truncate" style="color: var(--color-text-secondary)">
+					<CustomName pubkey={sellerPubkey} />
+				</span>
+				<TrustBadge rank={trustRank} {personalized} />
+			</span>
+		{/if}
+
+		<!-- Shipping indicator -->
 		<div class="flex items-center gap-1.5 text-xs {requiresShipping ? 'text-gray-400' : 'text-emerald-400'}">
 			{#if requiresShipping}
 				<PackageIcon size={14} />
@@ -94,35 +131,27 @@
 			{/if}
 		</div>
 
-		<!-- Price -->
-		<div class="flex items-baseline gap-1.5">
-			<span class="text-lg font-bold text-orange-500">
-				{priceSats.toLocaleString()}
-			</span>
-			<span class="text-xs" style="color: var(--color-text-secondary)">sats</span>
-		</div>
-
-		<!-- Seller -->
-		{#if sellerPubkey}
-			<div class="flex items-center gap-2 mt-1">
-				<CustomAvatar pubkey={sellerPubkey} size={20} className="flex-shrink-0" />
-				<span class="text-xs truncate" style="color: var(--color-text-secondary)">
-					<CustomName pubkey={sellerPubkey} />
-				</span>
+		<!-- Action Buttons -->
+		<div class="flex gap-2 mt-2">
+			<div class="view-button flex-1 py-2 rounded-lg font-semibold text-sm flex items-center justify-center gap-1.5">
+				View Details
 			</div>
-		{/if}
-
-		<!-- View Details Button -->
-		<div class="view-button w-full mt-2 py-2 rounded-lg font-semibold text-sm flex items-center justify-center gap-2">
-			<LightningIcon size={16} weight="fill" />
-			View Details
+			<button
+				type="button"
+				on:click={openDetailWithDm}
+				class="message-button flex-shrink-0 py-2 px-3 rounded-lg transition-all flex items-center justify-center"
+				title="Message Seller"
+			>
+				<ChatCircleIcon size={16} weight="fill" />
+			</button>
 		</div>
 	</div>
 </button>
 
 <!-- Product Detail Modal -->
 {#if product}
-	<ProductDetailModal bind:open={showDetailModal} {product} />
+	<ProductDetailModal bind:open={showDetailModal} {product} {trustRank} {personalized} initialShowDm={openWithDm} />
+{/if}
 {/if}
 
 <style lang="postcss">
@@ -146,17 +175,11 @@
 	}
 
 	.image {
-		@apply w-full h-full bg-cover bg-center transition-transform duration-500;
+		@apply w-full h-full transition-transform duration-500;
 	}
 
 	.product-card:hover .image {
 		transform: scale(1.05);
-	}
-
-	.category-badge {
-		background-color: rgba(0, 0, 0, 0.6);
-		backdrop-filter: blur(4px);
-		color: white;
 	}
 
 	.delete-button {
@@ -177,5 +200,16 @@
 
 	.product-card:hover .view-button {
 		background-color: #ea580c;
+	}
+
+	.message-button {
+		background-color: var(--color-bg-tertiary, rgba(0, 0, 0, 0.1));
+		color: var(--color-accent);
+		border: 1px solid rgba(249, 115, 22, 0.3);
+	}
+
+	.message-button:hover {
+		background-color: rgba(249, 115, 22, 0.15);
+		border-color: rgba(249, 115, 22, 0.5);
 	}
 </style>

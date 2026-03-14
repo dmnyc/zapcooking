@@ -162,6 +162,7 @@
       loadingMore = false;
       visibleNotes = new Set();
       renderedNotes = new Set();
+      clearRenderZoneState();
       followedPubkeysForRealtime = [];
 
       // Reload without cache
@@ -449,11 +450,11 @@
   const SEVEN_DAYS_SECONDS = 7 * 24 * 60 * 60;
 
   // Relay pools by purpose - optimized based on speed test results
-  // Speed test: nostr.wine (305ms) > nos.lol (342ms) > purplepag.es (356ms) > relay.damus.io (394ms) > kitchen.zap.cooking (510ms) > relay.nostr.band (514ms)
+  // Speed test: nostr.wine (305ms) > nos.lol (342ms) > purplepag.es (356ms) > relay.damus.io (394ms) > relay.nostr.band (514ms)
   // NOTE: All URLs are normalized (no trailing slashes) to prevent duplicate connections
   const RELAY_POOLS = {
-    recipes: ['wss://kitchen.zap.cooking'], // Curated recipe content (510ms, but worth it for relevance)
-    fallback: ['wss://nos.lol', 'wss://relay.damus.io'], // Fast general relays (nos.lol 342ms, relay.damus.io 394ms)
+    recipes: ['wss://nos.lol', 'wss://relay.damus.io'], // General relays with recipe content
+    fallback: ['wss://relay.primal.net', 'wss://nostr.wine'], // Fast general relays for broader discovery
     discovery: ['wss://nostr.wine', 'wss://relay.primal.net', 'wss://purplepag.es'], // Additional relays for discovery
     profiles: ['wss://purplepag.es'], // Profile metadata (356ms, specialized for kind:0)
     members: ['wss://pantry.zap.cooking'], // Private member relay (The Pantry)
@@ -533,6 +534,31 @@
   // Lazy DOM rendering — only mount full component tree for items near the viewport
   let renderedNotes = new Set<string>();
 
+  // Fix A: Height-stable skeleton swaps — remember last measured height per post
+  let measuredHeights = new Map<string, number>();
+
+  // Fix B: Hysteresis debounce — last state change timestamp per event
+  let renderZoneLastChange = new Map<string, number>();
+
+  // Fix C: loadMore cooldown
+  let loadMoreCooldownUntil = 0;
+  let sentinelFiredThisFrame = false;
+
+  // Fix D: Batch visibility updates per frame
+  let pendingRenderUpdates = new Map<string, boolean>();
+  let renderUpdateRafId: number | null = null;
+
+  // Guard against rAF callbacks firing after component destroy
+  let isDestroyed = false;
+
+  /** Clear all render-zone auxiliary state (call wherever renderedNotes is reset) */
+  function clearRenderZoneState() {
+    measuredHeights.clear();
+    renderZoneLastChange.clear();
+    pendingRenderUpdates.clear();
+    loadMoreCooldownUntil = 0;
+  }
+
   // ═══════════════════════════════════════════════════════════════
   // STALE-WHILE-REVALIDATE STATE
   // ═══════════════════════════════════════════════════════════════
@@ -564,38 +590,84 @@
   }
 
   /**
-   * Render-zone action: tracks whether a post is near enough to the viewport
-   * to deserve full component rendering. Unlike lazyLoadAction, this does NOT
-   * disconnect — it watches enter AND leave so items scrolled far away get
-   * replaced with lightweight skeletons, freeing DOM nodes.
+   * Render-zone action with hysteresis (Fix B) and batched updates (Fix D).
+   * Uses TWO observers with different margins to create a dead zone that
+   * prevents oscillation when posts are near the boundary.
+   * Measures height before swapping to skeleton (Fix A).
    */
   function renderZoneAction(node: HTMLElement, eventId: string) {
-    const observer = new IntersectionObserver(
+    const scrollRoot = document.getElementById('app-scroll') || null;
+    const HYSTERESIS_MS = 150;
+
+    // ENTER observer: 2000px margin — triggers full component render
+    const enterObserver = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
-          if (entry.isIntersecting) {
-            if (!renderedNotes.has(eventId)) {
-              renderedNotes.add(eventId);
-              renderedNotes = renderedNotes; // trigger reactivity
-            }
-          } else {
-            if (renderedNotes.has(eventId)) {
-              renderedNotes.delete(eventId);
-              renderedNotes = renderedNotes; // trigger reactivity
-            }
+          if (entry.isIntersecting && !renderedNotes.has(eventId)) {
+            const lastChange = renderZoneLastChange.get(eventId) || 0;
+            if (Date.now() - lastChange < HYSTERESIS_MS) return;
+            pendingRenderUpdates.set(eventId, true);
+            scheduleRenderFlush();
           }
         }
       },
-      { rootMargin: '2000px' } // Render items well before they scroll into view
+      { rootMargin: '2000px', root: scrollRoot }
     );
 
-    observer.observe(node);
+    // LEAVE observer: 3000px margin — triggers skeleton swap (wider = dead zone gap)
+    const leaveObserver = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting && renderedNotes.has(eventId)) {
+            const lastChange = renderZoneLastChange.get(eventId) || 0;
+            if (Date.now() - lastChange < HYSTERESIS_MS) return;
+            // Fix A: measure height before swapping to skeleton
+            measuredHeights.set(eventId, node.offsetHeight);
+            pendingRenderUpdates.set(eventId, false);
+            scheduleRenderFlush();
+          }
+        }
+      },
+      { rootMargin: '3000px', root: scrollRoot }
+    );
+
+    enterObserver.observe(node);
+    leaveObserver.observe(node);
 
     return {
       destroy() {
-        observer.disconnect();
+        enterObserver.disconnect();
+        leaveObserver.disconnect();
       }
     };
+  }
+
+  /**
+   * Fix D: Batch all render-zone state changes into a single rAF callback
+   * to prevent multiple Svelte re-renders during IntersectionObserver bursts.
+   */
+  function scheduleRenderFlush() {
+    if (renderUpdateRafId !== null || isDestroyed) return;
+    renderUpdateRafId = requestAnimationFrame(() => {
+      if (isDestroyed) return;
+      renderUpdateRafId = null;
+      let changed = false;
+      for (const [id, shouldRender] of pendingRenderUpdates) {
+        if (shouldRender && !renderedNotes.has(id)) {
+          renderedNotes.add(id);
+          renderZoneLastChange.set(id, Date.now());
+          changed = true;
+        } else if (!shouldRender && renderedNotes.has(id)) {
+          renderedNotes.delete(id);
+          renderZoneLastChange.set(id, Date.now());
+          changed = true;
+        }
+      }
+      pendingRenderUpdates.clear();
+      if (changed) {
+        renderedNotes = renderedNotes; // trigger Svelte reactivity
+      }
+    });
   }
 
   /** Pre-seed the first N items into renderedNotes to avoid initial skeleton flash */
@@ -620,13 +692,25 @@
       loadMoreObserver = null;
     }
 
+    const scrollRoot = document.getElementById('app-scroll') || null;
+
     loadMoreObserver = new IntersectionObserver(
       (entries) => {
-        if (entries[0].isIntersecting && hasMore && !loadingMore && !loading) {
+        if (
+          entries[0].isIntersecting &&
+          hasMore &&
+          !loadingMore &&
+          !loading &&
+          !sentinelFiredThisFrame &&
+          Date.now() >= loadMoreCooldownUntil
+        ) {
+          // Fix C: Single-fire per intersection — reset after rAF
+          sentinelFiredThisFrame = true;
+          requestAnimationFrame(() => { if (!isDestroyed) sentinelFiredThisFrame = false; });
           loadMore();
         }
       },
-      { rootMargin: '400px' } // Trigger 400px before bottom for smooth loading
+      { rootMargin: '400px', root: scrollRoot }
     );
 
     loadMoreObserver.observe(loadMoreSentinel);
@@ -3281,7 +3365,7 @@
   // ═══════════════════════════════════════════════════════════════
 
   async function loadMore() {
-    if (loadingMore || !hasMore) return;
+    if (loadingMore || !hasMore || Date.now() < loadMoreCooldownUntil) return;
 
     try {
       loadingMore = true;
@@ -3497,8 +3581,11 @@
         // Stop if we've gone back 30 days or got no events
         hasMore = oldestEventTime > timeLimit && olderEvents.length > 0;
       }
+      // Fix C: Cooldown based on filtered batch size — small results get longer cooldown
+      loadMoreCooldownUntil = Date.now() + (validOlder.length < 10 ? 1500 : 500);
     } catch {
-      // Load more failed
+      // Load more failed — longer cooldown on error
+      loadMoreCooldownUntil = Date.now() + 1500;
     } finally {
       loadingMore = false;
     }
@@ -4209,20 +4296,12 @@
   });
 
   // Get engagement info - reads from reactive cache
-  // Optimized: single code path, minimal allocations
+  // Glow disabled on community feed — skip subscription to save bandwidth
   function getEngagementRenderInfo(
-    eventId: string,
-    shouldSubscribe: boolean = true
+    _eventId: string,
+    _shouldSubscribe: boolean = true
   ): EngagementRenderInfo {
-    // Set up subscription if needed (this also populates cache)
-    if (shouldSubscribe && !engagementSubscriptions.has(eventId)) {
-      subscribeToEngagement(eventId);
-      // subscribeToEngagement populates the cache, so check it
-      return engagementGlowCache.get(eventId) || DEFAULT_ENGAGEMENT_INFO;
-    }
-
-    // Return cached info or default
-    return engagementGlowCache.get(eventId) || DEFAULT_ENGAGEMENT_INFO;
+    return DEFAULT_ENGAGEMENT_INFO;
   }
 
   // Reload mute list when user changes
@@ -4371,6 +4450,7 @@
           // Just clear auxiliary state
           visibleNotes = new Set();
           renderedNotes = new Set();
+          clearRenderZoneState();
           followedPubkeysForRealtime = [];
 
           // Force reload without cache to ensure fresh data from target relay only
@@ -4387,6 +4467,7 @@
           stopSubscriptions();
           visibleNotes = new Set();
           renderedNotes = new Set();
+          clearRenderZoneState();
 
           // Try instant cache first
           const cached = loadFromInstantCache(filterMode);
@@ -4430,6 +4511,7 @@
           stopSubscriptions();
           visibleNotes = new Set();
           renderedNotes = new Set();
+          clearRenderZoneState();
 
           // Try instant cache first
           const cached = loadFromInstantCache(filterMode);
@@ -4509,6 +4591,7 @@
       // Clear events to prevent showing stale data during switch
       events = [];
       seenEventIds.clear();
+      clearRenderZoneState();
       loading = true;
       hasMore = true;
       loadingMore = false;
@@ -4521,6 +4604,7 @@
     if (filterMode === 'garden' || filterMode === 'members' || authorPubkey) {
       visibleNotes = new Set();
       renderedNotes = new Set();
+      clearRenderZoneState();
       seenEventIds.clear();
       events = [];
       loading = true;
@@ -4624,6 +4708,15 @@
     }
     if (engagementCleanupTimer) {
       clearTimeout(engagementCleanupTimer);
+    }
+
+    // Prevent rAF callbacks from firing after destroy
+    isDestroyed = true;
+
+    // Clean up render zone batching
+    if (renderUpdateRafId !== null) {
+      cancelAnimationFrame(renderUpdateRafId);
+      renderUpdateRafId = null;
     }
 
     // Clean up zap animation timeouts
@@ -4910,13 +5003,19 @@
     {:else}
       <div class="space-y-0 w-full">
         {#each events as event (event.id)}
+          <div
+            use:renderZoneAction={event.id}
+            class="feed-post-wrapper"
+            style="{!renderedNotes.has(event.id) && measuredHeights.has(event.id) ? `height: ${measuredHeights.get(event.id)}px;` : ''}"
+          >
           {#if renderedNotes.has(event.id)}
           <!-- Get engagement info - always check cache, subscribe only when visible -->
           {@const isVisible = visibleNotes.has(event.id)}
           {@const engagementInfo = getEngagementRenderInfo(event.id, isVisible)}
-          {@const isPopular = engagementInfo.isZapPopular}
-          {@const isZapAnimating = zapAnimatingNotes.has(event.id)}
-          {@const zapGlowTier = engagementInfo.zapGlowTier}
+          <!-- Glow/animation disabled on community feed to reduce bandwidth -->
+          <!-- {@const isPopular = engagementInfo.isZapPopular} -->
+          <!-- {@const isZapAnimating = zapAnimatingNotes.has(event.id)} -->
+          <!-- {@const zapGlowTier = engagementInfo.zapGlowTier} -->
           {@const engagementStoreValue = get(getEngagementStore(event.id))}
           {@const engagementData = {
             zaps: {
@@ -4927,14 +5026,7 @@
             comments: { count: engagementStoreValue.comments.count }
           }}
           <article
-            use:renderZoneAction={event.id}
-            class="border-b py-4 sm:py-6 first:pt-0 w-full
-                   {isPopular ? 'zap-popular-post' : ''}
-                   {isZapAnimating ? 'zap-bolt-animation' : ''}
-                   {zapGlowTier !== 'none' ? `zap-glow-${zapGlowTier}` : ''}"
-            style="border-color: var(--color-input-border); {isPopular
-              ? 'box-shadow: 0 0 20px rgba(251, 191, 36, 0.4), 0 0 40px rgba(251, 191, 36, 0.2); border-radius: 8px; border: 2px solid rgba(251, 191, 36, 0.6); padding: 1rem; margin-bottom: 1rem;'
-              : ''}"
+            class="w-full"
           >
             <!-- User header with avatar and name -->
             <div class="flex items-center justify-between mb-3 px-2 sm:px-0">
@@ -5314,13 +5406,12 @@
           </article>
           {:else}
             <div
-              use:renderZoneAction={event.id}
-              class="border-b py-4 sm:py-6"
-              style="border-color: var(--color-input-border); min-height: 380px;"
+              style="min-height: 380px;"
             >
               <FeedPostSkeleton />
             </div>
           {/if}
+          </div>
         {/each}
 
         <!-- Infinite scroll sentinel - triggers automatic loading -->
@@ -5505,6 +5596,15 @@
 {/if}
 
 <style>
+  /* Fix A & E: Height-stable feed post wrapper with browser rendering optimization */
+  .feed-post-wrapper {
+    contain: layout style;
+    content-visibility: auto;
+    contain-intrinsic-size: auto 400px;
+    padding: 24px 0 24px 4px;
+    border-bottom: 1px solid var(--color-input-border);
+  }
+
   /* Carousel touch behavior - allow both vertical (feed) and horizontal (carousel) scrolling */
   .carousel-container {
     scrollbar-width: none; /* Firefox */

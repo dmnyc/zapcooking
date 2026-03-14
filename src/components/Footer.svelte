@@ -113,6 +113,8 @@
         <span>|</span>
         <a href="/founders" class="hover:text-primary transition-colors">Founders</a>
         <span>|</span>
+        <a href="/sponsors" class="hover:text-primary transition-colors">Sponsors</a>
+        <span>|</span>
         <a
           href="https://github.com/zapcooking/frontend/issues/new"
           target="_blank"
@@ -122,7 +124,11 @@
           Report a Bug
         </a>
         <span>|</span>
+        <a href="/terms" class="hover:text-primary transition-colors">Terms</a>
+        <span>|</span>
         <a href="/privacy" class="hover:text-primary transition-colors">Privacy</a>
+        <span>|</span>
+        <a href="/disclosure" class="hover:text-primary transition-colors">Disclosure</a>
         <span>|</span>
         <a
           href="https://github.com/zapcooking/frontend/blob/main/LICENSE"
