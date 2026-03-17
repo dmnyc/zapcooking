@@ -346,6 +346,7 @@ export async function initializeSdk(
     const config = defaultConfig('mainnet');
     config.apiKey = apiKey;
     config.privateEnabledDefault = true;
+    config.supportLnurlVerify = true; // Enable NIP-57 zap receipt metadata on received payments
 
     // Use sats.zap.cooking (subdomain) in production, breez.tips for local development
     // Strategy A: Subdomain approach - uses CNAME sats -> breez.tips in Cloudflare
