@@ -14,38 +14,12 @@ const PASSKEY_SALT = 'zapcooking-passkey-encrypt';
 const PASSKEY_BACKUP_D_TAG = 'spark-wallet-passkey';
 
 /**
- * Get a PRF-derived encryption key from a passkey.
- * Creates a new passkey if none exists.
+ * Create a new passkey and get PRF-derived encryption key.
+ * Goes straight to credential creation — no get() prompt that triggers password managers.
  */
-async function getPrfKey(): Promise<Uint8Array> {
+async function createPrfKey(): Promise<Uint8Array> {
   const saltBytes = new TextEncoder().encode(PASSKEY_SALT);
 
-  // Try to authenticate with existing passkey
-  try {
-    const credential = await navigator.credentials.get({
-      publicKey: {
-        challenge: crypto.getRandomValues(new Uint8Array(32)),
-        rpId: window.location.hostname,
-        allowCredentials: [],
-        hints: ['client-device'],
-        userVerification: 'required',
-        extensions: {
-          prf: { eval: { first: saltBytes } }
-        } as any
-      }
-    } as any) as any;
-
-    if (credential) {
-      const results = credential.getClientExtensionResults();
-      if (results?.prf?.results?.first) {
-        return new Uint8Array(results.prf.results.first);
-      }
-    }
-  } catch (e) {
-    logger.debug('[Passkey] No existing passkey, will create one');
-  }
-
-  // Create a new passkey with PRF
   const credential = await navigator.credentials.create({
     publicKey: {
       challenge: crypto.getRandomValues(new Uint8Array(32)),
@@ -77,7 +51,7 @@ async function getPrfKey(): Promise<Uint8Array> {
     return new Uint8Array(results.prf.results.first);
   }
 
-  // PRF may not return on create — re-authenticate
+  // PRF may not return on create — re-authenticate with the specific credential
   const authCredential = await navigator.credentials.get({
     publicKey: {
       challenge: crypto.getRandomValues(new Uint8Array(32)),
@@ -97,6 +71,35 @@ async function getPrfKey(): Promise<Uint8Array> {
   }
 
   throw new Error('PRF extension not supported by this passkey');
+}
+
+/**
+ * Authenticate with an existing passkey and get PRF-derived encryption key.
+ */
+async function getPrfKey(): Promise<Uint8Array> {
+  const saltBytes = new TextEncoder().encode(PASSKEY_SALT);
+
+  const credential = await navigator.credentials.get({
+    publicKey: {
+      challenge: crypto.getRandomValues(new Uint8Array(32)),
+      rpId: window.location.hostname,
+      allowCredentials: [],
+      hints: ['client-device'],
+      userVerification: 'required',
+      extensions: {
+        prf: { eval: { first: saltBytes } }
+      } as any
+    }
+  } as any) as any;
+
+  if (credential) {
+    const results = credential.getClientExtensionResults();
+    if (results?.prf?.results?.first) {
+      return new Uint8Array(results.prf.results.first);
+    }
+  }
+
+  throw new Error('No passkey found or PRF not supported');
 }
 
 /**
@@ -152,8 +155,8 @@ export async function backupToPasskey(pubkey: string): Promise<void> {
   const mnemonic = await loadMnemonic(pubkey);
   if (!mnemonic) throw new Error('No wallet found to protect');
 
-  // Get encryption key from passkey
-  const prfKey = await getPrfKey();
+  // Create a new passkey and get encryption key
+  const prfKey = await createPrfKey();
   const encrypted = await encryptWithPrf(prfKey, mnemonic);
 
   // Store encrypted mnemonic on Nostr (kind 30078)
