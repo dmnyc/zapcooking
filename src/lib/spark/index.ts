@@ -139,7 +139,7 @@ export function onSparkEvent(callback: SparkEventCallback): () => void {
 /**
  * Initialize the WASM module (must be called before any SDK operations)
  */
-async function initWasm(): Promise<void> {
+export async function initWasm(): Promise<void> {
   if (_wasmInitialized) return;
 
   if (!browser) {
@@ -458,6 +458,107 @@ export async function initializeSdk(
     return true;
   } catch (error) {
     logger.error('[Spark] Failed to initialize SDK:', String(error));
+    breezSdk.set(null);
+    walletInitialized.set(false);
+    _sdkInstance = null;
+    _currentPubkey = null;
+    return false;
+  } finally {
+    sparkLoading.set(false);
+  }
+}
+
+/**
+ * Initialize SDK with a pre-built Seed object (for passkey-derived seeds).
+ * Similar to initializeSdk but accepts a Seed directly instead of a mnemonic string.
+ */
+export async function initializeSdkWithSeed(
+  pubkey: string,
+  seed: { type: 'mnemonic'; mnemonic: string; passphrase?: string } | ({ type: 'entropy' } & number[]),
+  apiKey: string
+): Promise<boolean> {
+  if (!browser) return false;
+
+  if (_currentPubkey === pubkey && _sdkInstance) {
+    logger.info('[Spark] SDK already initialized for this pubkey');
+    return true;
+  }
+
+  try {
+    sparkLoading.set(true);
+    await disconnectWallet();
+    await initWasm();
+
+    const { defaultConfig, connect } = await import('@breeztech/breez-sdk-spark/web');
+    const config = defaultConfig('mainnet');
+    config.apiKey = apiKey;
+    config.privateEnabledDefault = true;
+    config.supportLnurlVerify = true;
+
+    // Use same lnurlDomain logic as initializeSdk
+    let lnurlDomain = 'breez.tips';
+    if (browser) {
+      const override = localStorage.getItem('lnurlDomain');
+      if (
+        override &&
+        (override === 'sats.zap.cooking' || override === 'zap.cooking' || override === 'breez.tips')
+      ) {
+        lnurlDomain = override;
+      } else {
+        const hostname = window.location.hostname;
+        if (hostname === 'zap.cooking' || hostname.endsWith('.zap.cooking')) {
+          lnurlDomain = 'sats.zap.cooking';
+        } else if (
+          hostname !== 'localhost' &&
+          !hostname.startsWith('127.') &&
+          !hostname.startsWith('192.168.')
+        ) {
+          lnurlDomain = 'sats.zap.cooking';
+        }
+      }
+    }
+    config.lnurlDomain = lnurlDomain;
+
+    _sdkInstance = await withTimeout(
+      connect({ config, seed, storageDir: 'zapcooking-spark' }),
+      20000,
+      'SDK connect'
+    );
+
+    breezSdk.set(_sdkInstance);
+    _currentPubkey = pubkey;
+    await setupEventListener();
+    await refreshBalanceInternal();
+    walletInitialized.set(true);
+    logger.info('[Spark] SDK initialized with seed, starting background sync...');
+
+    sparkSyncing.set(true);
+    const syncTimeout = setTimeout(() => {
+      logger.warn('[Spark] Sync timeout - clearing syncing state');
+      sparkSyncing.set(false);
+    }, 20000);
+
+    _sdkInstance
+      .syncWallet({})
+      .then(() => {
+        logger.info('[Spark] Background sync completed');
+        refreshBalanceInternal();
+        _eventCallbacks.forEach((callback) => {
+          try { callback({ type: 'synced' }); } catch {}
+        });
+      })
+      .catch(() => {
+        logger.warn('[Spark] Background sync failed, will retry on next action');
+      })
+      .finally(() => {
+        clearTimeout(syncTimeout);
+        sparkSyncing.set(false);
+      });
+
+    fetchLightningAddress().catch(() => {});
+    return true;
+  } catch (error) {
+    logger.error('[Spark] Failed to initialize SDK with seed:', String(error));
     breezSdk.set(null);
     walletInitialized.set(false);
     _sdkInstance = null;
