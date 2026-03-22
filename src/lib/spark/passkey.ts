@@ -27,11 +27,13 @@ async function getPrfKey(): Promise<Uint8Array> {
         challenge: crypto.getRandomValues(new Uint8Array(32)),
         rpId: window.location.hostname,
         allowCredentials: [],
+        hints: ['client-device'],
+        userVerification: 'required',
         extensions: {
           prf: { eval: { first: saltBytes } }
         } as any
       }
-    }) as any;
+    } as any) as any;
 
     if (credential) {
       const results = credential.getClientExtensionResults();
@@ -81,11 +83,13 @@ async function getPrfKey(): Promise<Uint8Array> {
       challenge: crypto.getRandomValues(new Uint8Array(32)),
       rpId: window.location.hostname,
       allowCredentials: [{ id: credential.rawId, type: 'public-key' }],
+      hints: ['client-device'],
+      userVerification: 'required',
       extensions: {
         prf: { eval: { first: saltBytes } }
       } as any
     }
-  }) as any;
+  } as any) as any;
 
   const authResults = authCredential?.getClientExtensionResults();
   if (authResults?.prf?.results?.first) {
@@ -282,9 +286,11 @@ class BrowserPrfProvider {
           challenge: crypto.getRandomValues(new Uint8Array(32)),
           rpId: window.location.hostname,
           allowCredentials: [],
+          hints: ['client-device'],
+          userVerification: 'required',
           extensions: { prf: { eval: { first: saltBytes } } } as any
         }
-      }) as any;
+      } as any) as any;
 
       if (credential) {
         const results = credential.getClientExtensionResults();
@@ -331,9 +337,11 @@ class BrowserPrfProvider {
         challenge: crypto.getRandomValues(new Uint8Array(32)),
         rpId: window.location.hostname,
         allowCredentials: [{ id: credential.rawId, type: 'public-key' }],
+        hints: ['client-device'],
+        userVerification: 'required',
         extensions: { prf: { eval: { first: saltBytes } } } as any
       }
-    }) as any;
+    } as any) as any;
 
     const authResults = auth?.getClientExtensionResults();
     if (authResults?.prf?.results?.first) {
