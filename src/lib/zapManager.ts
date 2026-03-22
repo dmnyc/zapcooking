@@ -119,11 +119,9 @@ export class ZapManager {
       zapRequest.tags.push(['e', request.eventId]);
     }
 
-    // Add relays tag
+    // Add relays tag (NIP-57: single tag with all relay URLs as values)
     if (request.relays && request.relays.length > 0) {
-      request.relays.forEach(relay => {
-        zapRequest.tags.push(['relays', relay]);
-      });
+      zapRequest.tags.push(['relays', ...request.relays]);
     }
 
     // Add amount tag
@@ -344,51 +342,30 @@ export class ZapManager {
       throw new Error(`LNURL endpoint does not support Nostr zaps. allowsNostr: ${lnurlPayRequest.allowsNostr}, nostrPubkey: ${lnurlPayRequest.nostrPubkey}`);
     }
 
-    // Validate recipient pubkey matches LNURL nostrPubkey
-    // Note: Some Lightning addresses may be associated with different Nostr pubkeys
-    // This is common when users have multiple Nostr identities or use different keys for different purposes
+    // NIP-57: The zap request `p` tag MUST be the recipient's pubkey,
+    // not the LNURL provider's nostrPubkey. The LNURL nostrPubkey is
+    // only used by the provider to sign the zap receipt (kind 9735).
     if (lnurlPayRequest.nostrPubkey !== pubkey) {
-      console.warn(`Recipient pubkey ${pubkey} does not match LNURL nostrPubkey ${lnurlPayRequest.nostrPubkey}`);
-      console.warn('This is common when Lightning addresses are associated with different Nostr identities');
-      console.warn('Proceeding with zap using the LNURL nostrPubkey for the zap request');
-      console.warn('This ensures the zap is properly associated with the Lightning address');
-      
-      // Use the LNURL nostrPubkey for the zap request instead of the original pubkey
-      // This ensures the zap is properly associated with the Lightning address
-    } else {
-      console.log('Recipient pubkey matches LNURL nostrPubkey - proceeding normally');
+      console.log(`LNURL nostrPubkey (${lnurlPayRequest.nostrPubkey}) differs from recipient (${pubkey}) — using recipient per NIP-57`);
     }
 
-    // Use the LNURL nostrPubkey for the zap request to ensure proper association
-    const zapPubkey = lnurlPayRequest.nostrPubkey || pubkey;
-    
-    // Create zap request
-    console.log('Creating zap request with:', {
-      eventId,
-      originalPubkey: pubkey,
-      zapPubkey: zapPubkey,
-      amount,
-      comment,
-      relays: this.ndk.explicitRelayUrls || []
-    });
+    // Create zap request with the actual recipient's pubkey
     const zapRequest = await this.createZapRequest({
       eventId,
-      pubkey: zapPubkey,
+      pubkey,
       amount,
       comment,
       relays: this.ndk.explicitRelayUrls || []
     });
 
     // Get invoice
-    console.log('Getting zap invoice...');
     const invoiceResponse = await this.getZapInvoice(lnurlPayRequest, zapRequest, amount);
-    console.log('Invoice received:', invoiceResponse.pr.substring(0, 50) + '...');
 
     return {
       invoice: invoiceResponse.pr,
       verify: invoiceResponse.verify,
       zapRequest,
-      zapPubkey: zapPubkey // Return the pubkey used for the zap request
+      zapPubkey: pubkey // Return the recipient pubkey used for the zap request
     };
   }
 
@@ -400,12 +377,11 @@ export class ZapManager {
       return false;
     }
 
-    // Check for required tags
+    // Check for required tags (NIP-57: bolt11 and description are required, preimage is optional)
     const bolt11Tags = zapReceipt.tags.filter(tag => tag[0] === 'bolt11');
     const descriptionTags = zapReceipt.tags.filter(tag => tag[0] === 'description');
-    const preimageTags = zapReceipt.tags.filter(tag => tag[0] === 'preimage');
 
-    if (bolt11Tags.length === 0 || descriptionTags.length === 0 || preimageTags.length === 0) {
+    if (bolt11Tags.length === 0 || descriptionTags.length === 0) {
       return false;
     }
 

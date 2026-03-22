@@ -3,6 +3,7 @@ import { browser } from '$app/environment';
 import type NDK from '@nostr-dev-kit/ndk';
 import type { NDKEvent, NDKSubscription } from '@nostr-dev-kit/ndk';
 import { hellthreadThreshold } from '$lib/hellthreadFilterSettings';
+import { decode as decodeBolt11 } from '@gandlaf21/bolt11-decode';
 
 export interface Notification {
   id: string;
@@ -120,6 +121,54 @@ export const unreadCount = derived(
   ($notifications) => $notifications.filter((n) => !n.read).length
 );
 
+/**
+ * Record NIP-57 zap receipt data to Spark SDK.
+ * Extracts the payment hash from the bolt11 invoice in the zap receipt,
+ * then calls setLnurlMetadata to associate the zap request/receipt with the payment.
+ * This is best-effort and non-blocking.
+ */
+function recordZapToSparkSdk(event: NDKEvent): void {
+  try {
+    const bolt11Tag = event.tags.find((t) => t[0] === 'bolt11')?.[1];
+    const descTag = event.tags.find((t) => t[0] === 'description')?.[1];
+    const preimageTag = event.tags.find((t) => t[0] === 'preimage')?.[1];
+
+    if (!bolt11Tag) return;
+
+    // Extract payment hash from bolt11
+    let paymentHash: string | undefined;
+    try {
+      const decoded = decodeBolt11(bolt11Tag);
+      const hashSection = decoded.sections.find(
+        (s: { name: string; value?: unknown }) => s.name === 'payment_hash'
+      );
+      if (hashSection?.value) {
+        paymentHash = String(hashSection.value);
+      }
+    } catch {
+      // Failed to decode bolt11
+      return;
+    }
+
+    if (!paymentHash) return;
+
+    const zapReceiptJson = JSON.stringify(event.rawEvent());
+    const zapRequestJson = descTag || '';
+
+    // Fire-and-forget: import and call recordNip57ZapData
+    import('$lib/spark').then(({ recordNip57ZapData, walletInitialized }) => {
+      // Only record if Spark wallet is active
+      if (!get(walletInitialized)) return;
+
+      recordNip57ZapData(paymentHash!, zapRequestJson, zapReceiptJson, preimageTag).catch(
+        () => {} // Silently ignore errors
+      );
+    }).catch(() => {});
+  } catch {
+    // Non-fatal: best-effort recording
+  }
+}
+
 // Subscription manager
 let activeSubscription: NDKSubscription | null = null;
 
@@ -191,6 +240,11 @@ export function subscribeToNotifications(ndk: NDK, userPubkey: string, forceFull
 
       // Add to store
       notifications.add(notification);
+
+      // Record NIP-57 zap data to Spark SDK for received zaps
+      if (event.kind === 9735) {
+        recordZapToSparkSdk(event);
+      }
 
       // Send local notification if app is backgrounded and permissions are granted
       if (browser) {
@@ -302,6 +356,11 @@ function processCollectedEvents(events: NDKEvent[], userPubkey: string): number 
     if (notification) {
       newNotifications.push(notification);
     }
+
+    // Record NIP-57 zap data to Spark SDK for received zaps
+    if (event.kind === 9735) {
+      recordZapToSparkSdk(event);
+    }
   }
 
   // Add all new notifications in bulk (returns actual count added)
@@ -321,15 +380,16 @@ function isHellthread(event: NDKEvent): boolean {
   return mentionCount >= threshold;
 }
 
-// Clean up content for preview by removing nostr: URIs and cleaning text
+// Clean up content for preview — preserve nostr: references for display-layer resolution
 function cleanContentForPreview(content: string): string {
   if (!content) return '';
 
   let cleaned = content
-    // Remove all nostr: URIs entirely (they don't add value in preview)
-    .replace(/nostr:[a-z0-9]+/gi, '')
-    // Also catch any standalone bech32 identifiers
-    .replace(/\b(npub1|note1|nevent1|naddr1|nprofile1)[a-z0-9]+\b/gi, '')
+    // Remove image URLs (they don't render in text previews)
+    .replace(/https?:\/\/[^\s]+\.(?:jpg|jpeg|png|gif|webp|svg|bmp|avif)(?:\?[^\s]*)?/gi, '')
+    .replace(/https?:\/\/(?:i\.)?(?:nostr\.build|imgur\.com|primal\.b-cdn\.net|image\.nostr\.build|void\.cat|m\.primal\.net|cdn\.satellite\.earth)[^\s]*/gi, '')
+    // Remove standalone bech32 identifiers (without nostr: prefix) — display layer only resolves nostr: URIs
+    .replace(/\b(?:note1|nevent1|naddr1|npub1|nprofile1)[023456789ac-hj-np-z]{20,}\b/gi, ' ')
     // Clean up multiple spaces and newlines
     .replace(/\s+/g, ' ')
     .trim();
@@ -339,7 +399,7 @@ function cleanContentForPreview(content: string): string {
     return '';
   }
 
-  return cleaned.slice(0, 100);
+  return cleaned.slice(0, 300);
 }
 
 function parseNotification(event: NDKEvent, userPubkey: string): Notification | null {
