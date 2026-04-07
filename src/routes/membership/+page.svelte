@@ -42,6 +42,17 @@
 
   // Current user membership info
   $: currentMembership = $userPublickey ? membershipStore.getMembership($userPublickey) : null;
+
+  // Compute member since date from founders data
+  let memberSince: string | null = null;
+  $: if ($userPublickey && data.founders) {
+    const founderRecord = data.founders.find((f: any) => f.pubkey === $userPublickey);
+    if (founderRecord?.joined) {
+      memberSince = new Date(founderRecord.joined).toLocaleDateString(undefined, { year: 'numeric', month: 'long' });
+    } else {
+      memberSince = null;
+    }
+  }
   $: hasActiveCardMembership = currentMembership
     && currentMembership.paymentMethod === 'card'
     && currentMembership.expiresAt > Date.now()

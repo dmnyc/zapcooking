@@ -45,6 +45,19 @@
       })();
     </script>
 
+    <!-- Apply dark mode before first paint to prevent flash -->
+    <script>
+      (function () {
+        try {
+          var theme = localStorage.getItem('nostrcooking_theme') || 'system';
+          var dark = theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          if (dark) document.documentElement.classList.add('dark');
+        } catch (e) {
+          // localStorage or matchMedia unavailable (Safari private mode, hardened browsers, etc.)
+        }
+      })();
+    </script>
+
     <link rel="icon" href="%sveltekit.assets%/favicon.svg" />
     <!-- Digital font for timer display -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />

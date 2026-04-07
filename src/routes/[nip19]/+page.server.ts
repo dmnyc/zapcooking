@@ -386,6 +386,28 @@ export const load: PageServerLoad = async ({ params, url }) => {
 		throw redirect(301, `/${nip19Id}`);
 	}
 
+	// Try NIP-05 username resolution for plain usernames (not NIP-19 identifiers)
+	const isNip19 = /^(?:npub1|nprofile1|note1|nevent1|naddr1)/.test(nip19Id || '');
+	if (!isNip19 && nip19Id && /^[a-zA-Z0-9_]{3,20}$/.test(nip19Id)) {
+		try {
+			const nostrJsonUrl = new URL('/.well-known/nostr.json?name=' + encodeURIComponent(nip19Id.toLowerCase()), url.origin);
+			const controller = new AbortController();
+			const timeout = setTimeout(() => controller.abort(), 5000);
+			const res = await fetch(nostrJsonUrl.toString(), { signal: controller.signal });
+			clearTimeout(timeout);
+			if (res.ok) {
+				const json = await res.json();
+				const pubkey = json?.names?.[nip19Id.toLowerCase()];
+				if (pubkey) {
+					const npub = nip19.npubEncode(pubkey);
+					throw redirect(302, `/${npub}`);
+				}
+			}
+		} catch (e) {
+			if (e && typeof e === 'object' && 'status' in e) throw e; // re-throw redirects
+		}
+	}
+
 	// Only handle note1/nevent1 identifiers for OG tags
 	if (!nip19Id?.startsWith('note1') && !nip19Id?.startsWith('nevent1')) {
 		return { ogMeta: null };

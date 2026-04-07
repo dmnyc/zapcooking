@@ -259,8 +259,8 @@
   // Check if an NWC wallet already exists (only one allowed at a time)
   $: hasExistingNwcWallet = $wallets.some((w) => w.kind === 3);
 
-  // Check if user has maximum wallets (2)
-  $: hasMaxWallets = $wallets.length >= 2;
+  // Check if user has maximum wallets (1)
+  $: hasMaxWallets = $wallets.length >= 1;
 
   async function checkSparkBackupStatus(pubkey: string) {
     if (sparkBackupChecking) return;
