@@ -1,3 +1,19 @@
+<script context="module" lang="ts">
+	// Portal action — mounts the node directly to document.body so the
+	// dropdown's position:fixed is viewport-relative (otherwise a
+	// transform on the containing modal would scope it to the modal box).
+	function portal(node: HTMLElement) {
+		document.body.appendChild(node);
+		return {
+			destroy() {
+				if (node.parentNode === document.body) {
+					document.body.removeChild(node);
+				}
+			}
+		};
+	}
+</script>
+
 <script lang="ts">
 	import { createEventDispatcher } from 'svelte';
 	import CustomAvatar from './CustomAvatar.svelte';
@@ -10,10 +26,33 @@
 	export let query = '';
 
 	const dispatch = createEventDispatcher<{ select: MentionSuggestion }>();
+
+	// Capture caret viewport position when dropdown opens
+	let fixedTop = 0;
+	let fixedLeft = 0;
+
+	$: if (show) {
+		const sel = window.getSelection();
+		if (sel && sel.rangeCount) {
+			const rect = sel.getRangeAt(0).getBoundingClientRect();
+			if (rect.height > 0) {
+				fixedTop = rect.bottom + 4;
+				fixedLeft = rect.left;
+			} else {
+				const parentRect = sel.anchorNode?.parentElement?.getBoundingClientRect();
+				fixedTop = (parentRect?.bottom ?? 0) + 4;
+				fixedLeft = parentRect?.left ?? 0;
+			}
+		}
+	}
 </script>
 
 {#if show}
-	<div class="mention-dropdown" style="border-color: var(--color-input-border);">
+	<div
+		use:portal
+		class="mention-dropdown"
+		style="border-color: var(--color-input-border); top: {fixedTop}px; left: {fixedLeft}px;"
+	>
 		{#if suggestions.length > 0}
 			<div class="mention-dropdown-content">
 				{#each suggestions as suggestion, index}
@@ -45,11 +84,8 @@
 <style>
 	/* PR #143 fix #3: z-index 50 -> 1000 */
 	.mention-dropdown {
-		position: absolute;
+		position: fixed;
 		z-index: 1000;
-		top: 100%;
-		left: 0;
-		margin-top: 0.25rem;
 		width: 280px;
 		max-width: calc(100vw - 2rem);
 		background: var(--color-input-bg);

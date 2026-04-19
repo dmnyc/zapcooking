@@ -2,6 +2,7 @@
   import ChefHatIcon from 'phosphor-svelte/lib/CookingPot';
   import HeartIcon from 'phosphor-svelte/lib/Heart';
   import CrownIcon from 'phosphor-svelte/lib/Crown';
+  import FireIcon from 'phosphor-svelte/lib/Fire';
   import type { MembershipTier } from '$lib/membershipStore';
 
   export let tier: MembershipTier;
@@ -11,24 +12,38 @@
   const tierConfig = {
     open: {
       icon: ChefHatIcon,
-      name: 'Open Table',
+      name: 'Member',
       color: 'text-emerald-600',
       bgColor: 'bg-emerald-100 dark:bg-emerald-900/30',
       borderColor: 'border-emerald-300 dark:border-emerald-700'
     },
-    cook: {
+    member: {
+      icon: ChefHatIcon,
+      name: 'Member',
+      color: 'text-emerald-600',
+      bgColor: 'bg-emerald-100 dark:bg-emerald-900/30',
+      borderColor: 'border-emerald-300 dark:border-emerald-700'
+    },
+    cook_plus: {
       icon: HeartIcon,
       name: 'Cook+',
       color: 'text-pink-600',
       bgColor: 'bg-pink-100 dark:bg-pink-900/30',
       borderColor: 'border-pink-300 dark:border-pink-700'
     },
-    pro: {
+    pro_kitchen: {
       icon: CrownIcon,
       name: 'Pro Kitchen',
       color: 'text-orange-600',
       bgColor: 'bg-orange-100 dark:bg-orange-900/30',
       borderColor: 'border-orange-300 dark:border-orange-700'
+    },
+    founders: {
+      icon: FireIcon,
+      name: 'Founders Club',
+      color: 'text-amber-600',
+      bgColor: 'bg-amber-100 dark:bg-amber-900/30',
+      borderColor: 'border-amber-300 dark:border-amber-700'
     }
   };
 
@@ -41,7 +56,7 @@
   }[size];
 </script>
 
-{#if tier !== 'open'}
+{#if tier && tier !== 'open'}
   <div
     class="inline-flex items-center justify-center {sizeConfig.gap} {sizeConfig.padding} rounded-full {config.bgColor} {config.borderColor} border"
     title={config.name}

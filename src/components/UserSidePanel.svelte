@@ -27,6 +27,10 @@
   import TimerIcon from 'phosphor-svelte/lib/Timer';
   import LightningIcon from 'phosphor-svelte/lib/Lightning';
   import CrownSimpleIcon from 'phosphor-svelte/lib/CrownSimple';
+  import HandshakeIcon from 'phosphor-svelte/lib/Handshake';
+  import EnvelopeSimpleIcon from 'phosphor-svelte/lib/EnvelopeSimple';
+  import NewspaperIcon from 'phosphor-svelte/lib/Newspaper';
+  import LeafIcon from 'phosphor-svelte/lib/Leaf';
 
   // Components and stores
   import CustomAvatar from './CustomAvatar.svelte';
@@ -274,6 +278,26 @@
           </li>
           <li>
             <button
+              on:click={() => navigate('/messages')}
+              class="w-full flex items-center gap-4 px-4 py-3 rounded-xl hover:bg-opacity-50 transition-colors cursor-pointer"
+              style="color: var(--color-text-primary);"
+            >
+              <EnvelopeSimpleIcon size={22} />
+              <span class="font-medium">Messages</span>
+            </button>
+          </li>
+          <li>
+            <button
+              on:click={() => navigate('/reads')}
+              class="w-full flex items-center gap-4 px-4 py-3 rounded-xl hover:bg-opacity-50 transition-colors cursor-pointer"
+              style="color: var(--color-text-primary);"
+            >
+              <NewspaperIcon size={22} />
+              <span class="font-medium">Reads</span>
+            </button>
+          </li>
+          <li>
+            <button
               on:click={() => navigate('/cookbook')}
               class="w-full flex items-center gap-4 px-4 py-3 rounded-xl hover:bg-opacity-50 transition-colors cursor-pointer"
               style="color: var(--color-text-primary);"
@@ -317,10 +341,30 @@
               {/if}
             </button>
           </li>
+          <li>
+            <button
+              on:click={() => navigate('/sponsors')}
+              class="w-full flex items-center gap-4 px-4 py-3 rounded-xl hover:bg-opacity-50 transition-colors cursor-pointer"
+              style="color: var(--color-text-primary);"
+            >
+              <HandshakeIcon size={22} />
+              <span class="font-medium">Sponsors</span>
+            </button>
+          </li>
+          <li>
+            <button
+              on:click={() => navigate('/nourish')}
+              class="w-full flex items-center gap-4 px-4 py-3 rounded-xl hover:bg-opacity-50 transition-colors cursor-pointer"
+              style="color: var(--color-text-primary);"
+            >
+              <LeafIcon size={22} />
+              <span class="font-medium">Nourish</span>
+            </button>
+          </li>
           {#if SHOW_PRO_FEATURES}
             <li>
               <button
-                on:click={() => navigate('/extract')}
+                on:click={() => navigate('/souschef')}
                 class="w-full flex items-center gap-4 px-4 py-3 rounded-xl hover:bg-opacity-50 transition-colors cursor-pointer"
                 style="color: var(--color-text-primary);"
               >
@@ -417,16 +461,6 @@
           Community Relays
         </h3>
         <ul class="flex flex-col gap-1">
-          <li>
-            <button
-              on:click={() => navigate('/kitchen')}
-              class="w-full flex items-center gap-4 px-4 py-3 rounded-xl hover:bg-opacity-50 transition-colors cursor-pointer"
-              style="color: var(--color-text-primary);"
-            >
-              <FlameIcon size={22} />
-              <span class="font-medium">The Kitchen</span>
-            </button>
-          </li>
           <li>
             <button
               on:click={() => navigate('/garden')}

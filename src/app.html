@@ -3,6 +3,25 @@
   <head>
     <meta charset="utf-8" />
 
+    <!-- Apply dark mode before first paint to prevent flash -->
+    <script>
+      (function () {
+        try {
+          var theme = localStorage.getItem('nostrcooking_theme') || 'system';
+          var dark = theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          if (dark) document.documentElement.classList.add('dark');
+        } catch (e) {
+          // localStorage or matchMedia unavailable (Safari private mode, hardened browsers, etc.)
+        }
+      })();
+    </script>
+
+    <!-- Logo visibility rule inlined so it applies before the Tailwind bundle loads (prevents light-logo flash in dark mode) -->
+    <style>
+      html.dark .logo-light { display: none !important; }
+      html:not(.dark) .logo-dark { display: none !important; }
+    </style>
+
     <!-- Override fetch BEFORE anything else loads to intercept __data.json requests in static builds -->
     <script>
       (function () {

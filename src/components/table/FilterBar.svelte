@@ -4,15 +4,22 @@
 
   export let selectedCategory: string = 'Food'; // Default to Food
   export let selectedSort: SortOption = 'newest';
+  export let showForYou: boolean = false;
 
   // Use ordered categories
   const categories = ARTICLE_CATEGORY_ORDER;
-  const sortOptions: { value: SortOption; label: string }[] = [
+
+  const baseSortOptions: { value: SortOption; label: string }[] = [
     { value: 'newest', label: 'Newest' },
     { value: 'oldest', label: 'Oldest' },
     { value: 'longest', label: 'Longest' },
     { value: 'shortest', label: 'Shortest' }
   ];
+
+  let sortOptions: { value: SortOption; label: string }[] = baseSortOptions;
+  $: sortOptions = showForYou
+    ? [{ value: 'foryou' as SortOption, label: 'For You' }, ...baseSortOptions]
+    : baseSortOptions;
 
   let sortDropdownOpen = false;
 

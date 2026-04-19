@@ -1,6 +1,6 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { browser } from '$app/environment';
   import { userPublickey } from '$lib/nostr';
   import { portal } from '../../components/Modal.svelte';
@@ -119,6 +119,7 @@
   import CopyIcon from 'phosphor-svelte/lib/Copy';
   import InfoIcon from 'phosphor-svelte/lib/Info';
   import LinkIcon from 'phosphor-svelte/lib/Link';
+  import QrCodeIcon from 'phosphor-svelte/lib/QrCode';
   import CheckIcon from 'phosphor-svelte/lib/Check';
   import XIcon from 'phosphor-svelte/lib/X';
   import UserCirclePlusIcon from 'phosphor-svelte/lib/UserCirclePlus';
@@ -129,6 +130,8 @@
   import CustomAvatar from '../../components/CustomAvatar.svelte';
   import CustomName from '../../components/CustomName.svelte';
   import LifebuoyIcon from 'phosphor-svelte/lib/Lifebuoy';
+  import ShieldCheckIcon from 'phosphor-svelte/lib/ShieldCheck';
+  import PencilSimpleIcon from 'phosphor-svelte/lib/PencilSimple';
   import CloudCheckIcon from 'phosphor-svelte/lib/CloudCheck';
   import WalletRecoveryHelpModal from '../../components/WalletRecoveryHelpModal.svelte';
   import CheckRelayBackupsModal from '../../components/CheckRelayBackupsModal.svelte';
@@ -171,6 +174,11 @@
   let sparkMnemonic = '';
   let showMnemonic = false;
   let mnemonicVisible = false;
+
+  // Backup reminder state
+  let showBackupReminder = false;
+  let backupReminderDismissed = false;
+  let showPaperBackupInline = false;
 
   // Spark restore options
   let sparkRestoreMode: 'options' | 'mnemonic' | 'file' | 'nostr-select' = 'options';
@@ -259,8 +267,8 @@
   // Check if an NWC wallet already exists (only one allowed at a time)
   $: hasExistingNwcWallet = $wallets.some((w) => w.kind === 3);
 
-  // Check if user has maximum wallets (2)
-  $: hasMaxWallets = $wallets.length >= 2;
+  // Check if user has maximum wallets (1)
+  $: hasMaxWallets = $wallets.length >= 1;
 
   async function checkSparkBackupStatus(pubkey: string) {
     if (sparkBackupChecking) return;
@@ -361,6 +369,8 @@
   let showSendModal = false;
   let showReceiveModal = false;
   let sendInput = ''; // Invoice or Lightning address
+  let brantaVerifyTriggered = false;
+  let rawQrText = ''; // Raw QR text for QR-based branta verification
   let sendAmount = 0; // Amount for Lightning address sends
   let sendComment = ''; // Optional message for Lightning address sends
   let receiveAmount = 0;
@@ -421,6 +431,14 @@
   let isSendingOnchain = false;
   let showOnchainConfirmation = false; // Show address verification step before sending
   let sendingMaxBalance = false; // Track if user wants to send full balance (fee will be deducted)
+
+  // QR scan state
+  let showQrCamera = false;
+  let qrVideoElement: HTMLVideoElement;
+  let qrCameraStream: MediaStream | null = null;
+  let qrAnimFrame: number | null = null;
+  let jsQRModule: typeof import('jsqr').default | null = null;
+  let qrScanError = '';
 
   // Check if send input is a Bitcoin address
   $: isBtcAddress = isBitcoinAddress(sendInput);
@@ -614,6 +632,9 @@
     ndkReady.then(() => {
       checkEncryptionSupport();
     });
+
+    // Load backup status
+    loadBackupStatus();
 
     // Load transaction history if wallet is already connected (not for WebLN)
     if ($walletConnected && $activeWallet && $activeWallet.kind !== 1) {
@@ -988,8 +1009,82 @@
     sendError = '';
     sendSuccess = '';
     isSending = false;
+    qrScanError = '';
+    stopQrCamera();
     // Reset on-chain state
     resetOnchainSendState();
+  }
+
+  async function startQrCamera() {
+    qrScanError = '';
+    showQrCamera = true;
+    await tick();
+    try {
+      if (!jsQRModule) jsQRModule = (await import('jsqr')).default;
+      qrCameraStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment' }
+      });
+      qrVideoElement.srcObject = qrCameraStream;
+      await qrVideoElement.play();
+      scanQrFrame();
+    } catch {
+      stopQrCamera();
+      qrScanError = 'Camera access denied.';
+    }
+  }
+
+  let qrCanvas: HTMLCanvasElement | null = null;
+  let qrCtx: CanvasRenderingContext2D | null = null;
+
+  function scanQrFrame() {
+    if (!showQrCamera || !qrVideoElement || !jsQRModule) return;
+    if (qrVideoElement.readyState === qrVideoElement.HAVE_ENOUGH_DATA) {
+      const w = qrVideoElement.videoWidth;
+      const h = qrVideoElement.videoHeight;
+      if (!qrCanvas) {
+        qrCanvas = document.createElement('canvas');
+        qrCtx = qrCanvas.getContext('2d')!;
+      }
+      if (qrCanvas.width !== w) qrCanvas.width = w;
+      if (qrCanvas.height !== h) qrCanvas.height = h;
+      qrCtx!.drawImage(qrVideoElement, 0, 0);
+      const imageData = qrCtx!.getImageData(0, 0, w, h);
+      const result = jsQRModule(imageData.data, imageData.width, imageData.height);
+      if (result) {
+        const raw = result.data.trim();
+        let decoded = raw;
+        let shouldAutoVerify = false;
+
+        if (decoded.toLowerCase().startsWith('lightning:')) {
+          decoded = decoded.slice('lightning:'.length);
+          shouldAutoVerify = true;
+        } else if (decoded.toLowerCase().startsWith('bitcoin:')) {
+          const withoutPrefix = decoded.slice('bitcoin:'.length);
+          const params = new URLSearchParams(withoutPrefix.includes('?') ? withoutPrefix.split('?')[1] : '');
+          if (params.has('branta_id') && params.has('branta_secret')) {
+            shouldAutoVerify = true;
+          }
+          decoded = withoutPrefix.split('?')[0];
+        }
+
+        sendInput = decoded;
+        rawQrText = shouldAutoVerify ? raw : '';
+        sendingMaxBalance = false;
+        brantaVerifyTriggered = shouldAutoVerify;
+        if (onchainFeeQuote) { onchainFeeQuote = null; onchainPrepareResponse = null; }
+        stopQrCamera();
+        return;
+      }
+    }
+    qrAnimFrame = requestAnimationFrame(scanQrFrame);
+  }
+
+  function stopQrCamera() {
+    showQrCamera = false;
+    if (qrAnimFrame) { cancelAnimationFrame(qrAnimFrame); qrAnimFrame = null; }
+    if (qrCameraStream) { qrCameraStream.getTracks().forEach(t => t.stop()); qrCameraStream = null; }
+    qrCanvas = null;
+    qrCtx = null;
   }
 
   // Reset on-chain send state (defined above resetSendModal call)
@@ -1013,8 +1108,8 @@
     return segments;
   }
 
-  // Register a payment address/invoice with Branta Guardrail (fire-and-forget)
-  // zk: true for on-chain Bitcoin addresses, false for Lightning invoices/addresses
+  // Register a payment address/invoice with Branta Guardrail
+  // zk: true enables zero-knowledge encryption (on-chain addresses), false for plaintext (Lightning)
   async function registerWithBranta(paymentString: string, description?: string, zk?: boolean) {
     try {
       await fetch('/api/branta/register', {
@@ -1059,9 +1154,9 @@
 
     try {
       const result = await receiveOnchain();
-      // Register with Branta for verification (zk: true for on-chain)
+      // Register with Branta for verification (plaintext for now, ZK in follow-up PR)
       // Await to ensure badge can verify after registration completes
-      await registerWithBranta(result.address, 'zap.cooking Bitcoin deposit address', true);
+      await registerWithBranta(result.address, 'zap.cooking Bitcoin deposit address', false);
       onchainAddress = result.address;
       // Also load any pending deposits
       await loadUnclaimedDeposits();
@@ -1573,11 +1668,11 @@
     errorMessage = '';
 
     try {
-      const mnemonic = await createSparkWallet($userPublickey, BREEZ_API_KEY);
-      sparkMnemonic = mnemonic;
-      showMnemonic = true;
-      mnemonicVisible = false;
-      successMessage = 'Breez Spark wallet created! Please save your recovery phrase.';
+      await createSparkWallet($userPublickey, BREEZ_API_KEY);
+      successMessage = 'Spark wallet created!';
+      showBackupReminder = true;
+      showAddWallet = false;
+      selectedWalletType = null;
 
       // Register in wallet store
       await connectWallet(4, 'spark');
@@ -1953,11 +2048,53 @@
     try {
       await backupWalletToNostr($userPublickey);
       successMessage = 'Wallet backed up to Nostr relays!';
+      saveBackupStatus('nostr');
+      showBackupReminder = false;
     } catch (e) {
       errorMessage = getSignerErrorMessage(e, 'Failed to backup to Nostr');
     } finally {
       isBackingUp = false;
     }
+  }
+
+  // Backup reminder helpers
+  const BACKUP_STATUS_KEY = 'spark_backup_status';
+
+  function getBackupStatusKey(): string {
+    return `${BACKUP_STATUS_KEY}_${$userPublickey}`;
+  }
+
+  function loadBackupStatus() {
+    if (!browser || !$userPublickey) return;
+    const status = localStorage.getItem(getBackupStatusKey());
+    if (status) {
+      backupReminderDismissed = true;
+    }
+  }
+
+  function saveBackupStatus(method: string) {
+    if (!browser || !$userPublickey) return;
+    localStorage.setItem(getBackupStatusKey(), method);
+    backupReminderDismissed = true;
+  }
+
+  function dismissBackupReminder() {
+    showBackupReminder = false;
+    backupReminderDismissed = true;
+  }
+
+  function handleShowPaperBackup() {
+    showPaperBackupInline = true;
+    handleRevealMnemonic();
+  }
+
+  function handlePaperBackupDone() {
+    showPaperBackupInline = false;
+    revealedMnemonic = null;
+    mnemonicVisible = false;
+    saveBackupStatus('paper');
+    showBackupReminder = false;
+    successMessage = 'Recovery phrase backed up!';
   }
 
   async function handleNwcBackupToNostr(wallet: { data: string }) {
@@ -2240,17 +2377,19 @@
     <h1 class="text-2xl font-bold mb-6" style="color: var(--color-text-primary)">Wallet</h1>
 
     <!-- Error/Success Messages - Fixed at top, above all modals -->
-    {#if errorMessage}
-      <div
-        class="fixed top-4 left-4 right-4 max-w-2xl mx-auto p-4 rounded-lg flex items-center gap-3 shadow-xl border z-[100]"
-        style="background-color: var(--color-bg-primary); border-color: #ef4444; color: #ef4444;"
-      >
-        <WarningIcon size={20} class="flex-shrink-0" />
-        <span class="flex-1 text-sm">{errorMessage}</span>
-        <button
-          class="text-sm underline flex-shrink-0 hover:opacity-80"
-          on:click={() => (errorMessage = '')}>Dismiss</button
+    {#if errorMessage && portalTarget}
+      <div use:portal={portalTarget}>
+        <div
+          class="fixed top-4 left-4 right-4 max-w-2xl mx-auto p-4 rounded-lg flex items-center gap-3 shadow-xl border z-[9999]"
+          style="background-color: var(--color-bg-primary); border-color: #ef4444; color: #ef4444;"
         >
+          <WarningIcon size={20} class="flex-shrink-0" />
+          <span class="flex-1 text-sm">{errorMessage}</span>
+          <button
+            class="text-sm underline flex-shrink-0 hover:opacity-80"
+            on:click={() => (errorMessage = '')}>Dismiss</button
+          >
+        </div>
       </div>
     {/if}
 
@@ -2329,13 +2468,13 @@
 
     <!-- Balance Overview -->
     {#if $walletConnected && $activeWallet && !$weblnConnected}
-      <div class="mb-8 p-6 rounded-2xl bg-input border border-input">
+      <div class="mb-8">
         <div class="flex items-start justify-between mb-2">
           <div>
             <div class="text-4xl font-bold text-primary-color flex items-center gap-3">
               <LightningIcon size={32} weight="fill" class="text-amber-500 flex-shrink-0" />
               {#if $walletLoading || $walletBalance === null}
-                <span class="animate-pulse">...</span>
+                <span class="inline-block w-32 h-9 rounded-lg animate-pulse" style="background: var(--color-input-bg);"></span>
               {:else if $balanceVisible}
                 {formatBalance($walletBalance)}
               {:else}
@@ -2409,7 +2548,98 @@
       </div>
     {/if}
 
+    <!-- Pending deposits alert -->
+    {#if $activeWallet?.kind === 4 && unclaimedDeposits.length > 0}
+      <div class="mb-4 p-3 rounded-xl flex items-center gap-2" style="background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.3);">
+        <WarningIcon size={18} class="text-amber-500 flex-shrink-0" />
+        <span class="text-sm font-medium" style="color: var(--color-text-primary);">{unclaimedDeposits.length} pending deposit{unclaimedDeposits.length > 1 ? 's' : ''} to claim</span>
+        <a href="#pending-deposits" class="ml-auto text-xs font-medium text-amber-500 hover:text-amber-400">View</a>
+      </div>
+    {/if}
+
+    <!-- Backup Reminder Banner (Spark wallet only, after creation) -->
+    {#if showBackupReminder && !backupReminderDismissed && $activeWallet?.kind === 4}
+      <div
+        class="mb-4 p-4 rounded-2xl"
+        style="background-color: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.3);"
+      >
+        <div class="flex items-start gap-3">
+          <ShieldCheckIcon size={22} class="text-amber-500 flex-shrink-0 mt-0.5" />
+          <div class="flex-1">
+            <p class="font-medium text-primary-color mb-1">Protect your wallet</p>
+            <p class="text-sm text-caption mb-3">
+              Choose a backup method to secure your funds.
+            </p>
+
+            {#if showPaperBackupInline && revealedMnemonic}
+              <div class="mb-3">
+                <div
+                  class="relative p-4 rounded-lg mb-3 font-mono text-sm"
+                  style="background-color: var(--color-input-bg); color: var(--color-text-primary);"
+                >
+                  {#if mnemonicVisible}
+                    <span class="select-all">{revealedMnemonic}</span>
+                  {:else}
+                    <span class="blur-sm select-none" aria-hidden="true">{revealedMnemonic}</span>
+                  {/if}
+                  <button
+                    class="absolute top-3 right-3 p-1 rounded-lg opacity-70 hover:opacity-100 transition-opacity"
+                    style="color: var(--color-text-primary);"
+                    on:click={() => (mnemonicVisible = !mnemonicVisible)}
+                    title={mnemonicVisible ? 'Hide' : 'Reveal'}
+                  >
+                    {#if mnemonicVisible}
+                      <EyeSlashIcon size={18} />
+                    {:else}
+                      <EyeIcon size={18} />
+                    {/if}
+                  </button>
+                </div>
+                <button
+                  class="w-full py-2 px-4 rounded-xl text-sm font-medium bg-amber-500 hover:bg-amber-600 text-white transition-colors"
+                  on:click={handlePaperBackupDone}
+                >
+                  I've written it down
+                </button>
+              </div>
+            {:else}
+              <div class="flex flex-col gap-2">
+                <button
+                  class="flex items-center gap-3 w-full py-2.5 px-4 rounded-xl text-sm font-medium text-left transition-colors hover:bg-white/5"
+                  style="border: 1px solid var(--color-input-border);"
+                  on:click={handleShowPaperBackup}
+                >
+                  <PencilSimpleIcon size={18} class="text-amber-500 flex-shrink-0" />
+                  <span class="text-primary-color">Write down recovery phrase</span>
+                </button>
+                <button
+                  class="flex items-center gap-3 w-full py-2.5 px-4 rounded-xl text-sm font-medium text-left transition-colors hover:bg-white/5 disabled:opacity-40"
+                  style="border: 1px solid var(--color-input-border);"
+                  on:click={handleBackupToNostr}
+                  disabled={isBackingUp || !encryptionSupported}
+                  title={!encryptionSupported ? 'Your signer does not support encryption' : ''}
+                >
+                  <CloudArrowUpIcon size={18} class="text-amber-500 flex-shrink-0" />
+                  <span class="text-primary-color">
+                    {isBackingUp ? 'Backing up...' : 'Backup to Nostr'}
+                  </span>
+                </button>
+              </div>
+            {/if}
+
+            <button
+              class="mt-3 text-xs text-caption hover:text-primary-color transition-colors cursor-pointer"
+              on:click={dismissBackupReminder}
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      </div>
+    {/if}
+
     <!-- Pending On-Chain Deposits (Spark wallet only) -->
+    <div id="pending-deposits"></div>
     {#if $activeWallet?.kind === 4 && unclaimedDeposits.length > 0}
       <div
         class="mb-8 p-4 rounded-2xl"
@@ -2499,22 +2729,6 @@
 
     <!-- Connected Wallets -->
     <div class="mb-8">
-      <div class="flex items-center justify-between mb-4">
-        <h2 class="text-lg font-semibold" style="color: var(--color-text-primary)">
-          Connected Wallets
-        </h2>
-        {#if !hasMaxWallets && !$weblnConnected && !$bitcoinConnectEnabled}
-          <Button
-            on:click={() => {
-              showAddWallet = true;
-              selectedWalletType = null;
-            }}
-          >
-            <PlusIcon size={16} />
-            Add Wallet
-          </Button>
-        {/if}
-      </div>
 
       <!-- WebLN External Wallet Display -->
       {#if $weblnConnected}
@@ -2533,7 +2747,7 @@
           <p class="text-sm text-caption mb-4">Browser wallet connected via WebLN</p>
           <button
             class="px-5 py-2.5 rounded-full font-semibold text-sm text-caption hover:text-red-500 transition-colors cursor-pointer"
-            style="background-color: var(--color-bg-primary); border: 1px solid var(--color-input-border);"
+            style="border: 1px solid var(--color-input-border);"
             on:click={handleDisconnectWebln}
           >
             Disconnect Browser Wallet
@@ -2543,8 +2757,7 @@
 
       {#if $wallets.length === 0 && !$weblnConnected}
         <div
-          class="p-8 rounded-2xl text-center flex flex-col items-center"
-          style="background-color: var(--color-input-bg); border: 1px solid var(--color-input-border);"
+          class="py-12 text-center flex flex-col items-center"
         >
           {#if $bitcoinConnectEnabled}
             <div
@@ -2591,7 +2804,7 @@
             <div class="flex gap-2">
               <button
                 class="px-4 py-2 rounded-full font-semibold text-sm transition-colors cursor-pointer"
-                style="background-color: var(--color-bg-primary); color: var(--color-text-primary); border: 1px solid var(--color-input-border);"
+                style="color: var(--color-text-primary); border: 1px solid var(--color-input-border);"
                 on:click={refreshBitcoinConnectBalance}
                 disabled={$bitcoinConnectBalanceLoading}
               >
@@ -2602,15 +2815,18 @@
               </button>
               <button
                 class="px-4 py-2 rounded-full font-semibold text-sm text-caption hover:text-red-500 transition-colors cursor-pointer"
-                style="background-color: var(--color-bg-primary); border: 1px solid var(--color-input-border);"
+                style="border: 1px solid var(--color-input-border);"
                 on:click={() => (showRemoveBitcoinConnectModal = true)}
               >
                 Disconnect
               </button>
             </div>
           {:else}
-            <WalletIcon size={48} class="mb-4 text-caption" />
-            <p class="text-caption mb-4">No wallets connected yet</p>
+            <div class="w-16 h-16 rounded-full bg-gradient-to-br from-amber-500/20 to-orange-500/20 flex items-center justify-center mb-4">
+              <WalletIcon size={32} class="text-amber-500" />
+            </div>
+            <h3 class="font-semibold mb-1" style="color: var(--color-text-primary)">Get Started with Sats</h3>
+            <p class="text-caption text-sm mb-4 max-w-xs">Connect a Lightning wallet to send zaps, receive payments, and support creators.</p>
             <Button
               on:click={() => {
                 showAddWallet = true;
@@ -2641,7 +2857,7 @@
             </div>
             <button
               class="text-xs px-2 py-1 rounded-full text-caption hover:text-red-500 transition-colors cursor-pointer"
-              style="background-color: var(--color-bg-primary); border: 1px solid var(--color-input-border);"
+              style="border: 1px solid var(--color-input-border);"
               on:click={handleDisconnectWebln}
             >
               Disconnect
@@ -2652,10 +2868,8 @@
           {#each $wallets.filter((w) => w.kind !== 1) as wallet}
             {@const isEffectivelyActive = wallet.active && !$weblnConnected}
             <div
-              class="rounded-xl overflow-hidden"
-              style="background-color: var(--color-input-bg); border: 1px solid var(--color-input-border);"
-              class:ring-2={isEffectivelyActive}
-              class:ring-amber-500={isEffectivelyActive}
+              class="rounded-lg overflow-hidden border"
+              style="border-color: {isEffectivelyActive ? 'rgba(245, 158, 11, 0.5)' : 'var(--color-input-border)'};"
             >
               <div class="p-3 sm:p-4 flex items-center gap-2 sm:gap-4">
                 <!-- Wallet type icon -->
@@ -2674,23 +2888,6 @@
                         · {parsed.pubkey.slice(0, 8)}...{/if}{/if}
                   </div>
                 </div>
-                {#if isEffectivelyActive}
-                  <span class="text-xs px-2 py-1 rounded-full bg-amber-500 text-white flex-shrink-0"
-                    >Active</span
-                  >
-                {:else if $weblnConnected}
-                  <span
-                    class="text-xs px-2 py-1 rounded-full text-caption flex-shrink-0"
-                    style="background-color: var(--color-input-bg);">Inactive</span
-                  >
-                {:else}
-                  <button
-                    class="text-xs sm:text-sm text-caption hover:text-primary cursor-pointer flex-shrink-0 whitespace-nowrap"
-                    on:click={() => handleSetActive(wallet.id)}
-                  >
-                    Set Active
-                  </button>
-                {/if}
                 {#if wallet.kind === 4 || wallet.kind === 3}
                   <button
                     class="relative flex items-center gap-0.5 sm:gap-1 p-1.5 sm:px-2 sm:py-1 rounded-lg text-caption hover:text-primary hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer transition-all flex-shrink-0"
@@ -2750,8 +2947,8 @@
                   </div>
                   <div class="grid grid-cols-2 gap-2 mb-4">
                     <button
-                      class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer"
-                      style="background-color: var(--color-bg-primary); border: 1px solid var(--color-input-border);"
+                      class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer hover:bg-white/5 dark:hover:bg-white/5"
+                      style="color: var(--color-text-secondary); border: 1px solid var(--color-input-border);"
                       on:click={handleViewSparkInfo}
                       disabled={isLoadingSparkInfo}
                     >
@@ -2768,11 +2965,19 @@
                   </div>
                   <div class="grid grid-cols-2 gap-2">
                     <button
-                      class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors"
+                      class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer hover:bg-white/5 dark:hover:bg-white/5"
+                      style="color: var(--color-text-secondary); border: 1px solid var(--color-input-border);"
+                      on:click={handleRevealMnemonic}
+                    >
+                      <KeyIcon size={16} />
+                      Recovery Phrase
+                    </button>
+                    <button
+                      class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors hover:bg-white/5 dark:hover:bg-white/5"
                       class:cursor-pointer={encryptionSupported}
                       class:cursor-not-allowed={!encryptionSupported}
                       class:opacity-50={!encryptionSupported}
-                      style="background-color: var(--color-bg-primary); border: 1px solid var(--color-input-border);"
+                      style="color: var(--color-text-secondary); border: 1px solid var(--color-input-border);"
                       on:click={handleBackupToNostr}
                       disabled={isBackingUp || !encryptionSupported}
                       title={!encryptionSupported ? 'Your signer does not support encryption' : ''}
@@ -2781,37 +2986,8 @@
                       {isBackingUp ? 'Backing up...' : 'Backup to Nostr'}
                     </button>
                     <button
-                      class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors"
-                      class:cursor-pointer={encryptionSupported}
-                      class:cursor-not-allowed={!encryptionSupported}
-                      class:opacity-50={!encryptionSupported}
-                      style="background-color: var(--color-bg-primary); border: 1px solid var(--color-input-border);"
-                      on:click={handleDownloadBackup}
-                      disabled={isBackingUp || !encryptionSupported}
-                      title={!encryptionSupported ? 'Your signer does not support encryption' : ''}
-                    >
-                      <DownloadSimpleIcon size={16} />
-                      Download
-                    </button>
-                    <button
-                      class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer"
-                      style="background-color: var(--color-bg-primary); border: 1px solid var(--color-input-border);"
-                      on:click={handleRevealMnemonic}
-                    >
-                      <KeyIcon size={16} />
-                      Recovery Phrase
-                    </button>
-                    <button
-                      class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer"
-                      style="background-color: var(--color-bg-primary); border: 1px solid var(--color-input-border);"
-                      on:click={() => (showRecoveryHelpModal = true)}
-                    >
-                      <LifebuoyIcon size={16} />
-                      Recovery Help
-                    </button>
-                    <button
-                      class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer"
-                      style="background-color: var(--color-bg-primary); border: 1px solid var(--color-input-border);"
+                      class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer hover:bg-white/5 dark:hover:bg-white/5"
+                      style="color: var(--color-text-secondary); border: 1px solid var(--color-input-border);"
                       on:click={() => {
                         checkRelayBackupsWalletType = 'spark';
                         showCheckRelayBackupsModal = true;
@@ -2821,8 +2997,16 @@
                       Check Backups
                     </button>
                     <button
+                      class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer hover:bg-white/5 dark:hover:bg-white/5"
+                      style="color: var(--color-text-secondary); border: 1px solid var(--color-input-border);"
+                      on:click={() => (showRecoveryHelpModal = true)}
+                    >
+                      <LifebuoyIcon size={16} />
+                      Recovery Help
+                    </button>
+                    <button
                       class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer text-red-500 hover:bg-red-500/10"
-                      style="background-color: var(--color-bg-primary); border: 1px solid var(--color-input-border);"
+                      style="border: 1px solid var(--color-input-border);"
                       on:click={() =>
                         (walletToDelete = {
                           id: wallet.id,
@@ -2847,10 +3031,7 @@
 
                     {#if $sparkLightningAddressStore}
                       <!-- Has lightning address -->
-                      <div
-                        class="p-3 rounded-lg mb-3"
-                        style="background-color: var(--color-bg-primary); border: 1px solid var(--color-input-border);"
-                      >
+                      <div class="mb-3">
                         <div class="text-sm text-caption mb-1">Your lightning address:</div>
                         <div class="font-medium text-primary-color flex items-center gap-2">
                           {$sparkLightningAddressStore}
@@ -2936,7 +3117,7 @@
                           {:else}
                             <button
                               class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer"
-                              style="background-color: var(--color-bg-primary); border: 1px solid var(--color-input-border);"
+                              style="border: 1px solid var(--color-input-border);"
                               on:click={() => (showSyncConfirmModal = true)}
                             >
                               <UserCirclePlusIcon size={16} />
@@ -2945,7 +3126,7 @@
                           {/if}
                           <button
                             class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-red-500 hover:bg-red-500/10 transition-colors cursor-pointer"
-                            style="background-color: var(--color-bg-primary); border: 1px solid var(--color-input-border);"
+                            style="border: 1px solid var(--color-input-border);"
                             on:click={() => (showDeleteAddressConfirmModal = true)}
                           >
                             <TrashIcon size={16} />
@@ -2963,7 +3144,7 @@
                         <!-- Wallet is still initializing -->
                         <div
                           class="p-3 rounded-lg"
-                          style="background-color: var(--color-bg-primary); border: 1px solid var(--color-input-border);"
+                          style="border: 1px solid var(--color-input-border);"
                         >
                           <div class="flex items-center gap-2 text-sm text-caption">
                             <div
@@ -2987,7 +3168,7 @@
                             <input
                               type="text"
                               class="w-full p-2 pr-20 rounded-lg text-sm"
-                              style="background-color: var(--color-bg-primary); border: 1px solid var(--color-input-border); color: var(--color-text-primary);"
+                              style="border: 1px solid var(--color-input-border); color: var(--color-text-primary);"
                               placeholder="username"
                               value={newLightningUsername}
                               on:input={handleUsernameInput}
@@ -3021,7 +3202,7 @@
                         {/if}
                         <button
                           class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer disabled:opacity-50"
-                          style="background-color: var(--color-bg-primary); border: 1px solid var(--color-input-border);"
+                          style="border: 1px solid var(--color-input-border);"
                           on:click={handleRegisterLightningAddress}
                           disabled={!isUsernameAvailable ||
                             isRegisteringAddress ||
@@ -3052,8 +3233,8 @@
                   </div>
                   <div class="grid grid-cols-2 gap-2 mb-4">
                     <button
-                      class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer"
-                      style="background-color: var(--color-bg-primary); border: 1px solid var(--color-input-border);"
+                      class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer hover:bg-white/5 dark:hover:bg-white/5"
+                      style="color: var(--color-text-secondary); border: 1px solid var(--color-input-border);"
                       on:click={() => handleViewNwcInfo(wallet)}
                       disabled={isLoadingNwcInfo}
                     >
@@ -3062,8 +3243,8 @@
                       >
                     </button>
                     <button
-                      class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer"
-                      style="background-color: var(--color-bg-primary); border: 1px solid var(--color-input-border);"
+                      class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer hover:bg-white/5 dark:hover:bg-white/5"
+                      style="color: var(--color-text-secondary); border: 1px solid var(--color-input-border);"
                       on:click={() => handleCopyNwcConnection(wallet)}
                     >
                       <CopyIcon size={16} />
@@ -3081,7 +3262,7 @@
                       class:cursor-pointer={encryptionSupported}
                       class:cursor-not-allowed={!encryptionSupported}
                       class:opacity-50={!encryptionSupported}
-                      style="background-color: var(--color-bg-primary); border: 1px solid var(--color-input-border);"
+                      style="border: 1px solid var(--color-input-border);"
                       on:click={() => handleNwcBackupToNostr(wallet)}
                       disabled={isBackingUp || !encryptionSupported}
                       title={!encryptionSupported ? 'Your signer does not support encryption' : ''}
@@ -3092,16 +3273,16 @@
                       >
                     </button>
                     <button
-                      class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer"
-                      style="background-color: var(--color-bg-primary); border: 1px solid var(--color-input-border);"
+                      class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer hover:bg-white/5 dark:hover:bg-white/5"
+                      style="color: var(--color-text-secondary); border: 1px solid var(--color-input-border);"
                       on:click={() => handleDownloadNwcBackup(wallet)}
                     >
                       <DownloadSimpleIcon size={16} />
                       <span class="truncate">Download</span>
                     </button>
                     <button
-                      class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer"
-                      style="background-color: var(--color-bg-primary); border: 1px solid var(--color-input-border);"
+                      class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer hover:bg-white/5 dark:hover:bg-white/5"
+                      style="color: var(--color-text-secondary); border: 1px solid var(--color-input-border);"
                       on:click={() => {
                         checkRelayBackupsWalletType = 'nwc';
                         showCheckRelayBackupsModal = true;
@@ -3112,7 +3293,7 @@
                     </button>
                     <button
                       class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer text-red-500 hover:bg-red-500/10"
-                      style="background-color: var(--color-bg-primary); border: 1px solid var(--color-input-border);"
+                      style="border: 1px solid var(--color-input-border);"
                       on:click={() =>
                         (walletToDelete = {
                           id: wallet.id,
@@ -3143,7 +3324,7 @@
 
                         <div
                           class="p-3 rounded-lg mb-3"
-                          style="background-color: var(--color-bg-primary); border: 1px solid var(--color-input-border);"
+                          style="border: 1px solid var(--color-input-border);"
                         >
                           <div class="text-sm text-caption mb-1">From NWC connection:</div>
                           <div class="font-medium text-primary-color flex items-center gap-2">
@@ -3302,22 +3483,22 @@
           </div>
 
           {#if isLoadingHistory && transactions.length === 0 && filteredPendingTransactions.length === 0}
-            <div class="p-8 rounded-2xl text-center bg-input border border-input">
+            <div class="py-8 text-center">
               <div class="animate-pulse text-caption">Loading transactions...</div>
             </div>
           {:else if transactions.length === 0 && filteredPendingTransactions.length === 0}
-            <div class="p-8 rounded-2xl text-center bg-input border border-input">
+            <div class="py-8 text-center">
               <ClockIcon size={48} class="mx-auto mb-4 text-caption" />
               <p class="text-caption">No transactions yet</p>
             </div>
           {:else}
-            <div class="space-y-2">
+            <div>
               <!-- Pending/completed transactions shown first (filtered to active wallet) -->
               {#each filteredPendingTransactions as tx (tx.id)}
                 {#if tx.status === 'completed'}
                   <!-- Completed but not yet in history (outgoing = orange) -->
                   <div
-                    class="p-4 rounded-xl flex items-center gap-4 bg-input border border-orange-500/50"
+                    class="py-4 flex items-center gap-4 border-b border-l-2 border-orange-500/50 pl-3" style="border-bottom-color: var(--color-input-border);"
                   >
                     {#if tx.pubkey}
                       <a href="/user/{nip19.npubEncode(tx.pubkey)}" class="flex-shrink-0">
@@ -3361,7 +3542,7 @@
                 {:else}
                   <!-- Still pending -->
                   <div
-                    class="p-4 rounded-xl flex items-center gap-4 bg-input border border-amber-500/50 animate-pulse"
+                    class="py-4 flex items-center gap-4 border-b border-l-2 border-amber-500/50 pl-3 animate-pulse" style="border-bottom-color: var(--color-input-border);"
                   >
                     {#if tx.pubkey}
                       <a href="/user/{nip19.npubEncode(tx.pubkey)}" class="flex-shrink-0">
@@ -3410,7 +3591,7 @@
                 {#if tx.status === 'pending'}
                   <!-- Pending transaction from SDK -->
                   <div
-                    class="p-4 rounded-xl flex items-center gap-4 bg-input border border-amber-500/50 animate-pulse"
+                    class="py-4 flex items-center gap-4 border-b border-l-2 border-amber-500/50 pl-3 animate-pulse" style="border-bottom-color: var(--color-input-border);"
                   >
                     {#if tx.pubkey}
                       <a href="/user/{nip19.npubEncode(tx.pubkey)}" class="flex-shrink-0">
@@ -3462,7 +3643,7 @@
                   </div>
                 {:else}
                   <!-- Completed transaction -->
-                  <div class="p-4 rounded-xl flex items-center gap-4 bg-input border border-input">
+                  <div class="py-4 flex items-center gap-4 border-b" style="border-color: var(--color-input-border);">
                     {#if tx.pubkey}
                       <a href="/user/{nip19.npubEncode(tx.pubkey)}" class="flex-shrink-0">
                         <CustomAvatar pubkey={tx.pubkey} size={40} />
@@ -3532,6 +3713,8 @@
                   {isLoadingHistory ? 'Loading...' : 'Load More'}
                 </Button>
               </div>
+            {:else if transactions.length > 0}
+              <p class="mt-4 text-center text-xs text-caption">End of transaction history</p>
             {/if}
           {/if}
         {/if}
@@ -3566,7 +3749,7 @@
                 {#if $weblnConnected}
                   <div
                     class="p-4 rounded-xl text-center"
-                    style="background-color: var(--color-input-bg); border: 1px solid var(--color-input-border);"
+                    style="border: 1px solid var(--color-input-border);"
                   >
                     <p class="text-sm text-caption">
                       Disconnect your browser wallet to add embedded wallets
@@ -3579,7 +3762,7 @@
                     class:cursor-pointer={!hasExistingSparkWallet}
                     class:cursor-not-allowed={hasExistingSparkWallet}
                     class:opacity-50={hasExistingSparkWallet}
-                    style="background-color: var(--color-input-bg); border: 1px solid var(--color-input-border);"
+                    style="border: 1px solid var(--color-input-border);"
                     on:click={() => !hasExistingSparkWallet && (selectedWalletType = 4)}
                     disabled={hasExistingSparkWallet}
                   >
@@ -3609,7 +3792,7 @@
                     class:cursor-pointer={!hasExistingNwcWallet}
                     class:cursor-not-allowed={hasExistingNwcWallet}
                     class:opacity-50={hasExistingNwcWallet}
-                    style="background-color: var(--color-input-bg); border: 1px solid var(--color-input-border);"
+                    style="border: 1px solid var(--color-input-border);"
                     on:click={() => !hasExistingNwcWallet && (selectedWalletType = 3)}
                     disabled={hasExistingNwcWallet}
                   >
@@ -3651,7 +3834,7 @@
                 {#if $wallets.length > 0}
                   <div
                     class="p-4 rounded-xl text-center"
-                    style="background-color: var(--color-input-bg); border: 1px solid var(--color-input-border);"
+                    style="border: 1px solid var(--color-input-border);"
                   >
                     <p class="text-sm text-caption">
                       Backup and remove all embedded wallets if you want to connect a
@@ -3665,7 +3848,7 @@
                     class:cursor-pointer={!$bitcoinConnectEnabled && !$weblnConnected}
                     class:cursor-not-allowed={$bitcoinConnectEnabled || $weblnConnected}
                     class:opacity-50={$bitcoinConnectEnabled || $weblnConnected}
-                    style="background-color: var(--color-input-bg); border: 1px solid var(--color-input-border);"
+                    style="border: 1px solid var(--color-input-border);"
                     on:click={handleConnectBitcoinConnect}
                     disabled={$bitcoinConnectEnabled || $weblnConnected}
                   >
@@ -3697,7 +3880,7 @@
                       class:cursor-pointer={!$weblnConnected}
                       class:cursor-not-allowed={$weblnConnected}
                       class:opacity-50={$weblnConnected}
-                      style="background-color: var(--color-input-bg); border: 1px solid var(--color-input-border);"
+                      style="border: 1px solid var(--color-input-border);"
                       on:click={handleConnectWebln}
                       disabled={$weblnConnected}
                     >
@@ -3730,14 +3913,14 @@
                 {#if canCheckNwcBackup && nwcBackupChecking}
                   <div
                     class="mb-4 p-3 rounded-lg border text-sm"
-                    style="background-color: var(--color-input-bg); border-color: var(--color-input-border); color: var(--color-text-primary);"
+                    style="border-color: var(--color-input-border); color: var(--color-text-primary);"
                   >
                     Checking for Nostr backup...
                   </div>
                 {:else if canCheckNwcBackup && nwcBackupExists}
                   <div
                     class="mb-4 p-3 rounded-lg border text-sm"
-                    style="background-color: var(--color-input-bg); border-color: var(--color-input-border); color: var(--color-text-primary);"
+                    style="border-color: var(--color-input-border); color: var(--color-text-primary);"
                   >
                     Backup found on Nostr. You can restore it below.
                   </div>
@@ -3794,14 +3977,14 @@
                 {#if canCheckSparkBackup && sparkBackupChecking}
                   <div
                     class="mb-4 p-3 rounded-lg border text-sm"
-                    style="background-color: var(--color-input-bg); border-color: var(--color-input-border); color: var(--color-text-primary);"
+                    style="border-color: var(--color-input-border); color: var(--color-text-primary);"
                   >
                     Checking for Nostr backup...
                   </div>
                 {:else if canCheckSparkBackup && sparkBackupExists}
                   <div
                     class="mb-4 p-3 rounded-lg border text-sm"
-                    style="background-color: var(--color-input-bg); border-color: var(--color-input-border); color: var(--color-text-primary);"
+                    style="border-color: var(--color-input-border); color: var(--color-text-primary);"
                   >
                     Backup found on Nostr. You can restore it below.
                   </div>
@@ -3815,7 +3998,7 @@
                     <!-- Show loading state -->
                     <div
                       class="p-8 rounded-xl text-center"
-                      style="background-color: var(--color-input-bg); border: 1px solid var(--color-input-border);"
+                      style="border: 1px solid var(--color-input-border);"
                     >
                       <div
                         class="animate-spin w-8 h-8 border-2 border-amber-500 border-t-transparent rounded-full mx-auto mb-4"
@@ -3825,48 +4008,6 @@
                     </div>
                   {:else}
                     <div class="space-y-3 mb-4">
-                      <div class="text-xs text-caption uppercase tracking-wide text-center">
-                        Restore existing wallet
-                      </div>
-                      <div class="space-y-2">
-                        {#if canCheckSparkBackup}
-                          <Button
-                            on:click={handleRestoreFromNostr}
-                            disabled={isConnecting}
-                            class="w-full"
-                          >
-                            <CloudArrowDownIcon size={16} />
-                            Restore from Nostr Backup
-                          </Button>
-                          {#if sparkBackupExists === false}
-                            <p class="text-xs text-caption text-center">
-                              No backup found on relays.
-                            </p>
-                          {/if}
-                        {/if}
-                        <Button
-                          on:click={() => fileInput?.click()}
-                          disabled={isConnecting}
-                          class="w-full"
-                        >
-                          Restore from Backup File
-                        </Button>
-                        <input
-                          type="file"
-                          accept=".json"
-                          class="hidden"
-                          bind:this={fileInput}
-                          on:change={handleFileSelect}
-                        />
-                        <Button
-                          on:click={() => (sparkRestoreMode = 'mnemonic')}
-                          disabled={isConnecting}
-                          class="w-full"
-                        >
-                          Restore from Recovery Phrase
-                        </Button>
-                      </div>
-                      <div class="border-t" style="border-color: var(--color-input-border);"></div>
                       <Button
                         on:click={handleSparkCreateRequest}
                         disabled={isConnecting}
@@ -3874,6 +4015,37 @@
                       >
                         Create New Wallet
                       </Button>
+                      <div class="border-t" style="border-color: var(--color-input-border);"></div>
+                      <div class="text-xs text-caption uppercase tracking-wide text-center">
+                        Restore existing wallet
+                      </div>
+                      <div class="space-y-2">
+                        {#if canCheckSparkBackup}
+                          <button
+                            class="flex items-center justify-center gap-2 w-full px-3 py-2.5 rounded-lg text-sm transition-colors cursor-pointer disabled:opacity-50"
+                            style="border: 1px solid var(--color-input-border);"
+                            on:click={handleRestoreFromNostr}
+                            disabled={isConnecting}
+                          >
+                            <CloudArrowDownIcon size={16} />
+                            Restore from Nostr Backup
+                          </button>
+                        {/if}
+                        <button
+                          class="flex items-center justify-center gap-2 w-full px-3 py-2.5 rounded-lg text-sm transition-colors cursor-pointer disabled:opacity-50"
+                          style="border: 1px solid var(--color-input-border);"
+                          on:click={() => (sparkRestoreMode = 'mnemonic')}
+                          disabled={isConnecting}
+                        >
+                          <KeyIcon size={16} />
+                          Restore from Recovery Phrase
+                        </button>
+                      </div>
+                      {#if canCheckSparkBackup && sparkBackupExists === false}
+                        <p class="text-xs text-caption text-center">
+                          No backup found on relays.
+                        </p>
+                      {/if}
                     </div>
                   {/if}
                 {:else if sparkRestoreMode === 'nostr-select'}
@@ -3960,57 +4132,7 @@
       </div>
     {/if}
 
-    <!-- Mnemonic Display Modal (after wallet creation) -->
-    {#if showMnemonic && sparkMnemonic && portalTarget}
-      <div use:portal={portalTarget}>
-        <div
-          class="fixed inset-0 bg-black/50 flex z-50 p-4"
-          style="display: flex; align-items: center; justify-content: center;"
-        >
-          <div
-            class="rounded-2xl p-6 max-w-md w-full max-h-[90vh] overflow-y-auto"
-            style="background-color: var(--color-bg-primary);"
-          >
-            <h2 class="text-xl font-bold mb-4" style="color: var(--color-text-primary)">
-              Save Your Recovery Phrase
-            </h2>
-            <div
-              class="mb-4 p-4 rounded-lg"
-              style="background-color: rgba(239, 68, 68, 0.1); color: #ef4444;"
-            >
-              <WarningIcon size={20} class="inline mr-2" />
-              Write down these 12 words and store them securely. If you lose them, you will lose access
-              to your wallet.
-            </div>
-            <div
-              class="relative p-4 rounded-lg mb-4 font-mono text-sm"
-              style="background-color: var(--color-input-bg); color: var(--color-text-primary);"
-            >
-              {#if mnemonicVisible}
-                <span class="select-all">{sparkMnemonic}</span>
-              {:else}
-                <span class="blur-sm select-none" aria-hidden="true">{sparkMnemonic}</span>
-              {/if}
-              <button
-                class="absolute top-3 right-3 p-1 rounded-lg opacity-70 hover:opacity-100 transition-opacity"
-                style="color: var(--color-text-primary);"
-                on:click={() => (mnemonicVisible = !mnemonicVisible)}
-                title={mnemonicVisible ? 'Hide recovery phrase' : 'Reveal recovery phrase'}
-              >
-                {#if mnemonicVisible}
-                  <EyeSlashIcon size={20} />
-                {:else}
-                  <EyeIcon size={20} />
-                {/if}
-              </button>
-            </div>
-            <Button on:click={closeMnemonicModal} class="w-full"
-              >I've Saved My Recovery Phrase</Button
-            >
-          </div>
-        </div>
-      </div>
-    {/if}
+    <!-- Mnemonic Display Modal removed - replaced by backup reminder banner -->
 
     <!-- Reveal Mnemonic Modal - higher z-index to appear above other modals -->
     {#if revealedMnemonic && portalTarget}
@@ -4242,102 +4364,78 @@
             </p>
 
             {#if walletToDelete.kind === 4 || walletToDelete.kind === 3}
-              <!-- Backup options section -->
-              <div
-                class="p-4 rounded-xl mb-4"
-                style="background-color: var(--color-input-bg); border: 1px solid var(--color-input-border);"
-              >
-                <div class="flex items-center gap-2 mb-3">
-                  <WarningIcon size={18} class="text-amber-500" />
-                  <span class="text-sm font-medium text-amber-500">Save a backup first</span>
-                </div>
-
-                <div
-                  class="grid gap-2"
-                  class:grid-cols-2={encryptionSupported}
-                  class:grid-cols-1={!encryptionSupported}
-                >
-                  {#if walletToDelete.kind === 4}
-                    <!-- Spark wallet: Download JSON backup (encrypted) -->
-                    {#if encryptionSupported}
-                      <button
-                        class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer bg-amber-500 hover:bg-amber-600 text-black"
-                        on:click={handleDownloadBackup}
-                        disabled={isBackingUp}
-                      >
-                        <DownloadSimpleIcon size={16} />
-                        Download JSON
-                      </button>
-                    {:else}
-                      <!-- Fallback to Recovery Phrase if encryption not supported -->
-                      <button
-                        class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer bg-amber-500 hover:bg-amber-600 text-black"
-                        on:click={handleRevealMnemonic}
-                      >
-                        <KeyIcon size={16} />
-                        Recovery Phrase
-                      </button>
-                    {/if}
-                  {:else}
-                    <!-- NWC wallet: Download works without encryption -->
-                    <button
-                      class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer bg-amber-500 hover:bg-amber-600 text-black"
-                      on:click={() => walletToDelete && handleDownloadNwcBackup(walletToDelete)}
-                      disabled={isBackingUp}
-                    >
-                      <DownloadSimpleIcon size={16} />
-                      Download
-                    </button>
-                  {/if}
-                  {#if encryptionSupported}
-                    <button
-                      class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer bg-black hover:bg-gray-800 text-white"
-                      on:click={() =>
-                        walletToDelete?.kind === 4
-                          ? handleBackupToNostr()
-                          : walletToDelete
-                            ? handleNwcBackupToNostr(walletToDelete)
-                            : undefined}
-                      disabled={isBackingUp}
-                    >
-                      <CloudArrowUpIcon size={16} />
-                      {isBackingUp ? 'Saving...' : 'Backup to Nostr'}
-                    </button>
-                  {/if}
-                </div>
+              <!-- Backup warning -->
+              <div class="flex items-center gap-2 mb-3 pb-3 border-b" style="border-color: var(--color-input-border);">
+                <WarningIcon size={18} class="text-amber-500 flex-shrink-0" />
+                <span class="text-sm text-amber-500">Back up your wallet before removing</span>
               </div>
 
-              <!-- Delete relay backup toggle button -->
-              <button
-                class="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer mb-4"
-                class:bg-red-500={deleteRelayBackups}
-                class:hover:bg-red-600={deleteRelayBackups}
-                class:text-white={deleteRelayBackups}
-                style={deleteRelayBackups
-                  ? ''
-                  : 'background-color: var(--color-input-bg); border: 1px solid var(--color-input-border); color: var(--color-text-caption);'}
-                on:click={() => (deleteRelayBackups = !deleteRelayBackups)}
+              <div
+                class="grid gap-2 mb-4"
+                class:grid-cols-2={encryptionSupported}
+                class:grid-cols-1={!encryptionSupported}
               >
-                <TrashIcon size={14} />
-                {deleteRelayBackups ? 'Will delete relay backup' : 'Delete relay backup'}
-              </button>
+                {#if walletToDelete.kind === 4}
+                  <button
+                    class="flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors cursor-pointer hover:bg-white/5"
+                    style="border: 1px solid var(--color-input-border); color: var(--color-text-primary);"
+                    on:click={handleRevealMnemonic}
+                  >
+                    <KeyIcon size={16} class="text-amber-500" />
+                    Recovery Phrase
+                  </button>
+                {:else}
+                  <button
+                    class="flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors cursor-pointer hover:bg-white/5"
+                    style="border: 1px solid var(--color-input-border); color: var(--color-text-primary);"
+                    on:click={() => walletToDelete && handleDownloadNwcBackup(walletToDelete)}
+                    disabled={isBackingUp}
+                  >
+                    <DownloadSimpleIcon size={16} class="text-amber-500" />
+                    Download
+                  </button>
+                {/if}
+                {#if encryptionSupported}
+                  <button
+                    class="flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors cursor-pointer hover:bg-white/5"
+                    style="border: 1px solid var(--color-input-border); color: var(--color-text-primary);"
+                    on:click={() =>
+                      walletToDelete?.kind === 4
+                        ? handleBackupToNostr()
+                        : walletToDelete
+                          ? handleNwcBackupToNostr(walletToDelete)
+                          : undefined}
+                    disabled={isBackingUp}
+                  >
+                    <CloudArrowUpIcon size={16} class="text-amber-500" />
+                    {isBackingUp ? 'Saving...' : 'Backup to Nostr'}
+                  </button>
+                {/if}
+              </div>
+
+              <!-- Delete relay backup toggle -->
+              <label class="flex items-center gap-2 mb-4 cursor-pointer text-sm" style="color: var(--color-text-secondary);">
+                <input type="checkbox" bind:checked={deleteRelayBackups} class="accent-red-500" />
+                Also delete relay backup
+              </label>
             {:else}
               <p class="text-caption text-sm mb-4">You can reconnect it later.</p>
             {/if}
 
             <div class="flex gap-3">
-              <Button
+              <button
+                class="flex-1 px-4 py-2.5 rounded-lg font-medium text-sm transition-colors cursor-pointer hover:bg-white/5"
+                style="border: 1px solid var(--color-input-border); color: var(--color-text-primary);"
                 on:click={() => {
                   walletToDelete = null;
                   deleteRelayBackups = false;
                 }}
                 disabled={isDeletingWallet}
-                class="flex-1"
               >
                 Cancel
-              </Button>
+              </button>
               <button
-                class="flex-1 px-4 py-2 rounded-full bg-red-500 hover:bg-red-600 text-white font-medium transition-colors cursor-pointer disabled:opacity-50"
+                class="flex-1 px-4 py-2.5 rounded-lg bg-red-500 hover:bg-red-600 text-white font-medium text-sm transition-colors cursor-pointer disabled:opacity-50"
                 disabled={isDeletingWallet}
                 on:click={async () => {
                   if (walletToDelete) {
@@ -4613,26 +4711,64 @@
                       Invoice or Lightning Address
                     {/if}
                   </label>
-                  <textarea
-                    bind:value={sendInput}
-                    placeholder={$activeWallet?.kind === 4
-                      ? 'lnbc..., user@example.com, or bc1...'
-                      : 'lnbc... or user@example.com'}
-                    class="w-full p-3 rounded-lg bg-input border border-input text-primary-color placeholder-caption resize-none focus:outline-none focus:ring-2 focus:ring-amber-500"
-                    rows="3"
-                    disabled={isSending || isSendingOnchain}
-                    on:input={() => {
-                      // Reset on-chain state when input changes
-                      sendingMaxBalance = false;
-                      if (onchainFeeQuote) {
-                        onchainFeeQuote = null;
-                        onchainPrepareResponse = null;
-                      }
-                    }}
-                  />
+                  <div class="relative">
+                    <textarea
+                      bind:value={sendInput}
+                      placeholder={$activeWallet?.kind === 4
+                        ? 'lnbc..., user@example.com, or bc1...'
+                        : 'lnbc... or user@example.com'}
+                      class="w-full p-3 pr-10 rounded-lg bg-input border border-input text-primary-color placeholder-caption resize-none focus:outline-none focus:ring-2 focus:ring-amber-500"
+                      rows="3"
+                      disabled={isSending || isSendingOnchain}
+                      on:input={() => {
+                        // Reset on-chain state when input changes
+                        sendingMaxBalance = false;
+                        brantaVerifyTriggered = false;
+                        rawQrText = '';
+                        if (onchainFeeQuote) {
+                          onchainFeeQuote = null;
+                          onchainPrepareResponse = null;
+                        }
+                      }}
+                    />
+                    <button
+                      type="button"
+                      class="absolute top-2 right-2 px-2 py-1 rounded-lg text-xs font-medium flex items-center gap-1 transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                      style="background: var(--color-input-bg); color: var(--color-text-secondary); border: 1px solid var(--color-input-border);"
+                      on:click={startQrCamera}
+                      disabled={isSending || isSendingOnchain || showQrCamera}
+                      title="Scan QR code"
+                      aria-label="Scan QR code"
+                    >
+                      <QrCodeIcon size={14} />
+                      Scan
+                    </button>
+                  </div>
                   {#if isBtcAddress && $activeWallet?.kind === 4}
                     <div class="mt-1 text-xs text-amber-500 flex items-center gap-1">
                       ₿ Bitcoin address detected - on-chain payment
+                    </div>
+                  {/if}
+                  <div class="mt-1">
+                    {#if sendInput.trim()}
+                      {#if brantaVerifyTriggered}
+                        <BrantaBadge paymentString={sendInput.trim()} rawQrText={rawQrText} />
+                      {:else}
+                        <button
+                          type="button"
+                          class="flex items-center gap-1.5 text-xs px-2 py-1 rounded-lg border border-input text-caption hover:text-primary-color transition-colors"
+                          on:click={() => (brantaVerifyTriggered = true)}
+                        >
+                          <ShieldCheckIcon size={14} />
+                          Verify with Branta
+                        </button>
+                      {/if}
+                    {/if}
+                  </div>
+                  {#if qrScanError}
+                    <div class="mt-1 text-xs text-red-400 flex items-center gap-1">
+                      <WarningIcon size={12} />
+                      {qrScanError}
                     </div>
                   {/if}
                 </div>
@@ -4859,8 +4995,23 @@
             </div>
           </div>
         </div>
-      </div>
-    {/if}
+      {#if showQrCamera}
+        <div class="fixed inset-0 bg-black z-[60] flex flex-col">
+          <div class="flex items-center justify-between p-4">
+            <span class="text-white text-sm font-medium">Point camera at QR code</span>
+            <button type="button" class="text-white p-1" on:click={stopQrCamera} aria-label="Close QR scanner">
+              <XIcon size={24} />
+            </button>
+          </div>
+          <div class="flex-1 flex items-center justify-center overflow-hidden">
+            <!-- svelte-ignore a11y-media-has-caption -->
+            <video bind:this={qrVideoElement} class="w-full h-full object-cover" playsinline />
+          </div>
+          <div class="p-4 text-center text-white/50 text-sm">Scanning for QR code...</div>
+        </div>
+      {/if}
+    </div>
+  {/if}
 
     <!-- Receive Modal -->
     {#if showReceiveModal && portalTarget}
@@ -4946,7 +5097,7 @@
                   <!-- Current Network Fees -->
                   <div
                     class="p-3 rounded-lg text-left"
-                    style="background-color: var(--color-input-bg); border: 1px solid var(--color-input-border);"
+                    style="border: 1px solid var(--color-input-border);"
                   >
                     <div class="flex items-center justify-between mb-2">
                       <span class="text-xs font-medium text-caption">Current Network Fees</span>

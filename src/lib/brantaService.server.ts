@@ -13,29 +13,14 @@
  */
 
 import { env } from '$env/dynamic/private';
+import { V2BrantaClient, type BrantaClientOptions, type Destination, type Payment } from '@branta-ops/branta';
 
-interface BrantaConfig {
-  apiKey: string;
-  baseUrl: string;
-}
-
-export interface RegisterPaymentOptions {
-  ttl?: number; // Time-to-live in seconds (default: 86400 = 24 hours)
-  description?: string;
-  metadata?: Record<string, string>;
-  zk?: boolean; // Zero-knowledge encryption (recommended true for on-chain, false for lightning)
-}
+export type { Payment };
 
 export interface RegisterPaymentResult {
   success: boolean;
-  paymentId?: string;
-  error?: string;
-}
-
-export interface VerifyPaymentResult {
-  verified: boolean;
-  registeredAt?: string;
-  description?: string;
+  verifyLink?: string;
+  secret?: string;
   error?: string;
 }
 
@@ -43,7 +28,7 @@ export interface VerifyPaymentResult {
  * Get Branta API configuration from environment variables
  * Returns null if not configured (allows graceful degradation)
  */
-function getBrantaConfig(platform?: any): BrantaConfig | null {
+export function getBrantaConfig(platform?: any): BrantaClientOptions | null {
   const apiKey = platform?.env?.BRANTA_API_KEY || env.BRANTA_API_KEY;
 
   if (!apiKey) {
@@ -53,9 +38,9 @@ function getBrantaConfig(platform?: any): BrantaConfig | null {
   const baseUrl =
     platform?.env?.BRANTA_API_BASE_URL ||
     env.BRANTA_API_BASE_URL ||
-    'https://guardrail.branta.pro/v2';
+    'https://guardrail.branta.pro';
 
-  return { apiKey, baseUrl };
+  return { defaultApiKey: apiKey, baseUrl };
 }
 
 /**
@@ -65,42 +50,6 @@ export function isBrantaConfigured(platform?: any): boolean {
   return getBrantaConfig(platform) !== null;
 }
 
-/**
- * Make an authenticated request to Branta API
- */
-async function brantaRequest(
-  endpoint: string,
-  options: RequestInit = {},
-  platform?: any
-): Promise<Response> {
-  const config = getBrantaConfig(platform);
-
-  if (!config) {
-    throw new Error('Branta API is not configured');
-  }
-
-  const { apiKey, baseUrl } = config;
-  const url = `${baseUrl.replace(/\/$/, '')}${endpoint}`;
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
-
-  try {
-    const response = await fetch(url, {
-      ...options,
-      signal: controller.signal,
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-        ...options.headers
-      }
-    });
-
-    return response;
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
 
 /**
  * Register a payment address/invoice with Branta
@@ -111,67 +60,53 @@ async function brantaRequest(
  */
 export async function registerPayment(
   paymentString: string,
-  options: RegisterPaymentOptions = {},
+  ttl: number | undefined,
+  description: string | undefined,
+  metadata: object | undefined,
+  zk: boolean | undefined,
   platform?: any
 ): Promise<RegisterPaymentResult> {
-  if (!isBrantaConfigured(platform)) {
-    return { success: false, error: 'Branta not configured' };
-  }
+  const config = getBrantaConfig(platform);
 
-  if (!paymentString || paymentString.trim().length === 0) {
-    return { success: false, error: 'Payment string is required' };
+  if (config === null) {
+    return { success: false, error: 'Branta not configured' };
   }
 
   try {
     // Build destination object with optional zk flag
-    const destination: { value: string; zk?: boolean } = {
+    const destination: Destination = {
       value: paymentString.trim()
     };
 
     // Use zk (zero-knowledge) for on-chain addresses, plaintext for lightning
-    if (options.zk !== undefined) {
-      destination.zk = options.zk;
+    if (zk !== undefined) {
+      destination.zk = zk;
     }
 
-    const body: Record<string, any> = {
+    const body: Payment = {
       destinations: [destination],
-      ttl: options.ttl || 86400 // Default 24 hours
+      ttl: ttl || 86400 // Default 24 hours
     };
 
-    if (options.description) {
-      body.description = options.description;
+    if (description) {
+      body.description = description;
     }
 
     // metadata must be stringified JSON per API spec
-    if (options.metadata) {
-      body.metadata = JSON.stringify(options.metadata);
+    if (metadata) {
+      body.metadata = metadata as Record<string, string>;
     }
 
-    const response = await brantaRequest(
-      '/payments',
-      {
-        method: 'POST',
-        body: JSON.stringify(body)
-      },
-      platform
-    );
+    const brantaClient = new V2BrantaClient(config);
 
-    if (response.ok) {
-      const data = await response.json();
-      return {
-        success: true,
-        paymentId: data.id || data.payment_id || data.paymentId
-      };
+    // Use ZK encryption for on-chain addresses, plaintext for Lightning
+    if (zk) {
+      const result = await brantaClient.addZKPayment(body);
+      return { success: true, verifyLink: result.verifyLink, secret: result.secret };
+    } else {
+      const result = await brantaClient.addPayment(body);
+      return { success: true, verifyLink: result.verifyLink };
     }
-
-    // Handle error responses
-    const errorText = await response.text();
-    console.warn(`[Branta] Registration failed (${response.status}):`, errorText);
-
-    return {
-      success: false,
-      error: `API error: ${response.status}`
-    };
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
       console.warn('[Branta] Registration request timed out');
@@ -187,60 +122,43 @@ export async function registerPayment(
 }
 
 /**
- * Verify if a payment address/invoice is registered with Branta
- *
- * @param paymentString - The Bitcoin address, Lightning invoice, or Lightning address
- * @param platform - Optional platform object for Cloudflare Workers
+ * Get payment info for an address/invoice from Branta
  */
-export async function verifyPayment(
+export async function getPaymentInfo(
   paymentString: string,
   platform?: any
-): Promise<VerifyPaymentResult> {
-  if (!isBrantaConfigured(platform)) {
-    return { verified: false, error: 'Branta not configured' };
-  }
-
-  if (!paymentString || paymentString.trim().length === 0) {
-    return { verified: false, error: 'Payment string is required' };
-  }
+): Promise<Payment | null> {
+  const config = getBrantaConfig(platform);
+  if (!config || !paymentString?.trim()) return null;
 
   try {
-    const encodedPayment = encodeURIComponent(paymentString.trim());
-    const response = await brantaRequest(
-      `/payments/${encodedPayment}`,
-      { method: 'GET' },
-      platform
-    );
-
-    if (response.ok) {
-      const data = await response.json();
-      return {
-        verified: true,
-        registeredAt: data.created_at || data.createdAt || data.registered_at,
-        description: data.description
-      };
-    }
-
-    if (response.status === 404) {
-      // Not found = not registered (not an error)
-      return { verified: false };
-    }
-
-    // Other error
-    const errorText = await response.text();
-    console.warn(`[Branta] Verification failed (${response.status}):`, errorText);
-
-    return { verified: false, error: `API error: ${response.status}` };
+    const brantaClient = new V2BrantaClient(config);
+    const response = await brantaClient.getPayments(paymentString.trim());
+    return response[0] ?? null;
   } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') {
-      console.warn('[Branta] Verification request timed out');
-      return { verified: false, error: 'Request timed out' };
-    }
-
-    console.warn('[Branta] Verification failed:', error);
-    return {
-      verified: false,
-      error: error instanceof Error ? error.message : 'Unknown error'
-    };
+    console.warn('[Branta] getPaymentInfo failed:', error);
+    return null;
   }
 }
+
+/**
+ * Get payment info from a raw QR code string using Branta
+ */
+export async function getPaymentInfoByQRCode(
+  qrText: string,
+  platform?: any
+): Promise<Payment | null> {
+  const config = getBrantaConfig(platform);
+  if (!config || !qrText?.trim()) return null;
+
+  try {
+    const brantaClient = new V2BrantaClient(config);
+    const response = await brantaClient.getPaymentsByQRCode(qrText.trim());
+
+    return response[0] ?? null;
+  } catch (error) {
+    console.warn('[Branta] getPaymentInfoByQRCode failed:', error);
+    return null;
+  }
+}
+

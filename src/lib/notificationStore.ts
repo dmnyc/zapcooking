@@ -2,7 +2,10 @@ import { writable, derived, get } from 'svelte/store';
 import { browser } from '$app/environment';
 import type NDK from '@nostr-dev-kit/ndk';
 import type { NDKEvent, NDKSubscription } from '@nostr-dev-kit/ndk';
-import { hellthreadThreshold } from '$lib/hellthreadFilterSettings';
+import { mutedPubkeys } from '$lib/muteListStore';
+import { isHellthread } from '$lib/notificationUtils';
+import { decode as decodeBolt11 } from '@gandlaf21/bolt11-decode';
+import { extractZapAmountSats } from '$lib/zapAmount';
 
 export interface Notification {
   id: string;
@@ -115,10 +118,70 @@ function createNotificationStore() {
 
 export const notifications = createNotificationStore();
 
-export const unreadCount = derived(
-  notifications,
-  ($notifications) => $notifications.filter((n) => !n.read).length
+/**
+ * Notifications with muted users excluded.
+ * Components should use this for display; raw `notifications` is for persistence/dedup only.
+ */
+export const visibleNotifications = derived(
+  [notifications, mutedPubkeys],
+  ([$notifications, $mutedPubkeys]) =>
+    $mutedPubkeys.size === 0
+      ? $notifications
+      : $notifications.filter((n) => !n.fromPubkey || !$mutedPubkeys.has(n.fromPubkey))
 );
+
+export const unreadCount = derived(
+  visibleNotifications,
+  ($visible) => $visible.filter((n) => !n.read).length
+);
+
+/**
+ * Record NIP-57 zap receipt data to Spark SDK.
+ * Extracts the payment hash from the bolt11 invoice in the zap receipt,
+ * then calls setLnurlMetadata to associate the zap request/receipt with the payment.
+ * This is best-effort and non-blocking.
+ */
+function recordZapToSparkSdk(event: NDKEvent): void {
+  try {
+    const bolt11Tag = event.tags.find((t) => t[0] === 'bolt11')?.[1];
+    const descTag = event.tags.find((t) => t[0] === 'description')?.[1];
+    const preimageTag = event.tags.find((t) => t[0] === 'preimage')?.[1];
+
+    if (!bolt11Tag) return;
+
+    // Extract payment hash from bolt11
+    let paymentHash: string | undefined;
+    try {
+      const decoded = decodeBolt11(bolt11Tag);
+      const hashSection = decoded.sections.find(
+        (s: { name: string; value?: unknown }) => s.name === 'payment_hash'
+      );
+      if (hashSection?.value) {
+        paymentHash = String(hashSection.value);
+      }
+    } catch {
+      // Failed to decode bolt11
+      return;
+    }
+
+    if (!paymentHash) return;
+
+    const zapReceiptJson = JSON.stringify(event.rawEvent());
+    const zapRequestJson = descTag || '';
+
+    // Fire-and-forget: import and call recordNip57ZapData
+    import('$lib/spark').then(({ recordNip57ZapData, walletInitialized }) => {
+      // Only record if Spark wallet is active
+      if (!get(walletInitialized)) return;
+
+      recordNip57ZapData(paymentHash!, zapRequestJson, zapReceiptJson, preimageTag).catch(
+        () => {} // Silently ignore errors
+      );
+    }).catch(() => {});
+  } catch {
+    // Non-fatal: best-effort recording
+  }
+}
 
 // Subscription manager
 let activeSubscription: NDKSubscription | null = null;
@@ -148,49 +211,41 @@ export function subscribeToNotifications(ndk: NDK, userPubkey: string, forceFull
   // Subscribe to reactions, zaps, replies, mentions, and reposts
   activeSubscription = ndk.subscribe(
     [
-      // Reactions to my posts
+      // Reactions to my posts (NIP-25)
       { kinds: [7], '#p': [userPubkey], since },
-      // Zaps to me
+      // Zap receipts (NIP-57)
       { kinds: [9735], '#p': [userPubkey], since },
-      // Replies and mentions
+      // Replies and mentions (NIP-10)
       { kinds: [1], '#p': [userPubkey], since },
-      // Reposts of my posts
-      { kinds: [6], '#p': [userPubkey], since }
+      // Reposts of kind 1 notes (NIP-18)
+      { kinds: [6], '#p': [userPubkey], since },
+      // Generic reposts — recipes, etc. (NIP-18 kind 16)
+      { kinds: [16], '#p': [userPubkey], since }
     ],
     { closeOnEose: false }
   );
 
   activeSubscription.on('event', async (event: NDKEvent) => {
-    // Debug: log all incoming notification events
-    console.log(`[Notifications] Received event kind ${event.kind}:`, {
-      id: event.id?.slice(0, 8),
-      pubkey: event.pubkey?.slice(0, 8),
-      tags: event.tags?.slice(0, 5)
-    });
-
-    // For zap receipts (9735), the pubkey is the zapper service, not the sender
-    // So we should NOT filter these out based on pubkey
+    // For zap receipts (9735), the pubkey is the zapper service, not the sender.
+    // Self-zap filtering happens in parseNotification after extracting the real sender.
     if (event.kind !== 9735 && event.pubkey === userPubkey) {
-      console.log('[Notifications] Ignoring own event (not a zap)');
       return;
     }
 
     // Filter out hellthreads (events with excessive p tags)
     if (isHellthread(event)) {
-      console.log('[Notifications] Ignoring hellthread event');
       return;
     }
 
     const notification = parseNotification(event, userPubkey);
     if (notification) {
-      console.log(`[Notifications] Parsed ${notification.type} notification:`, {
-        id: notification.id?.slice(0, 8),
-        from: notification.fromPubkey?.slice(0, 8),
-        amount: notification.amount
-      });
-
       // Add to store
       notifications.add(notification);
+
+      // Record NIP-57 zap data to Spark SDK for received zaps
+      if (event.kind === 9735) {
+        recordZapToSparkSdk(event);
+      }
 
       // Send local notification if app is backgrounded and permissions are granted
       if (browser) {
@@ -200,8 +255,6 @@ export function subscribeToNotifications(ndk: NDK, userPubkey: string, forceFull
           console.error('[Notifications] Error sending local notification:', error);
         }
       }
-    } else {
-      console.log('[Notifications] Failed to parse notification for kind', event.kind);
     }
   });
 
@@ -247,7 +300,8 @@ export async function fetchOlderNotifications(
         { kinds: [7], '#p': [userPubkey], since, until },
         { kinds: [9735], '#p': [userPubkey], since, until },
         { kinds: [1], '#p': [userPubkey], since, until },
-        { kinds: [6], '#p': [userPubkey], since, until }
+        { kinds: [6], '#p': [userPubkey], since, until },
+        { kinds: [16], '#p': [userPubkey], since, until }
       ],
       { closeOnEose: true }
     );
@@ -302,34 +356,27 @@ function processCollectedEvents(events: NDKEvent[], userPubkey: string): number 
     if (notification) {
       newNotifications.push(notification);
     }
+
+    // Record NIP-57 zap data to Spark SDK for received zaps
+    if (event.kind === 9735) {
+      recordZapToSparkSdk(event);
+    }
   }
 
   // Add all new notifications in bulk (returns actual count added)
   return notifications.addBulk(newNotifications);
 }
 
-/**
- * Check if an event is a hellthread based on number of 'p' tags
- */
-function isHellthread(event: NDKEvent): boolean {
-  const threshold = get(hellthreadThreshold);
-  if (threshold === 0) return false; // Disabled
-
-  if (!event.tags || !Array.isArray(event.tags)) return false;
-
-  const mentionCount = event.tags.filter((tag) => Array.isArray(tag) && tag[0] === 'p').length;
-  return mentionCount >= threshold;
-}
-
-// Clean up content for preview by removing nostr: URIs and cleaning text
+// Clean up content for preview — preserve nostr: references for display-layer resolution
 function cleanContentForPreview(content: string): string {
   if (!content) return '';
 
   let cleaned = content
-    // Remove all nostr: URIs entirely (they don't add value in preview)
-    .replace(/nostr:[a-z0-9]+/gi, '')
-    // Also catch any standalone bech32 identifiers
-    .replace(/\b(npub1|note1|nevent1|naddr1|nprofile1)[a-z0-9]+\b/gi, '')
+    // Remove image URLs (they don't render in text previews)
+    .replace(/https?:\/\/[^\s]+\.(?:jpg|jpeg|png|gif|webp|svg|bmp|avif)(?:\?[^\s]*)?/gi, '')
+    .replace(/https?:\/\/(?:i\.)?(?:nostr\.build|imgur\.com|primal\.b-cdn\.net|image\.nostr\.build|void\.cat|m\.primal\.net|cdn\.satellite\.earth)[^\s]*/gi, '')
+    // Remove standalone bech32 identifiers (without nostr: prefix) — display layer only resolves nostr: URIs
+    .replace(/\b(?:note1|nevent1|naddr1|npub1|nprofile1)[023456789ac-hj-np-z]{20,}\b/gi, ' ')
     // Clean up multiple spaces and newlines
     .replace(/\s+/g, ' ')
     .trim();
@@ -339,7 +386,7 @@ function cleanContentForPreview(content: string): string {
     return '';
   }
 
-  return cleaned.slice(0, 100);
+  return cleaned.slice(0, 300);
 }
 
 function parseNotification(event: NDKEvent, userPubkey: string): Notification | null {
@@ -351,62 +398,46 @@ function parseNotification(event: NDKEvent, userPubkey: string): Notification | 
   };
 
   switch (event.kind) {
-    case 7: // Reaction
-      const reactedEventId = event.tags.find((t) => t[0] === 'e')?.[1];
+    case 7: { // Reaction
+      // NIP-25: "the target event id should be last of the e tags"
+      const eTags7 = event.tags.filter((t) => t[0] === 'e');
+      const reactedEventId = eTags7.length > 0 ? eTags7[eTags7.length - 1][1] : undefined;
+      // NIP-25: content "+" or empty means like/upvote → normalize to ❤️
+      const rawEmoji = event.content;
+      const emoji = rawEmoji && rawEmoji !== '+' ? rawEmoji : '❤️';
       return {
         ...baseNotification,
         type: 'reaction',
         eventId: reactedEventId,
-        emoji: event.content || '❤️'
+        emoji
       };
+    }
 
-    case 9735: // Zap receipt
+    case 9735: { // Zap receipt
       // The zap receipt is published by the zapper service (e.g., Alby)
       // The actual sender info is in the embedded zap request in the 'description' tag
-      let zapAmount = 0;
       let zapSenderPubkey = event.pubkey; // fallback to zapper if we can't parse
+      let zapComment = '';
       try {
         const descTag = event.tags.find((t) => t[0] === 'description')?.[1];
         if (descTag) {
           const zapRequest = JSON.parse(descTag);
-          // The sender's pubkey is in the zap request
           if (zapRequest.pubkey) {
             zapSenderPubkey = zapRequest.pubkey;
           }
-          // Amount is in the zap request tags as 'amount' (in millisats)
-          const amountTag = zapRequest.tags?.find((t: string[]) => t[0] === 'amount');
-          if (amountTag && amountTag[1]) {
-            zapAmount = Math.floor(parseInt(amountTag[1], 10) / 1000); // msats to sats
+          // NIP-57: zap request content is an optional message from the sender
+          if (zapRequest.content) {
+            zapComment = cleanContentForPreview(zapRequest.content);
           }
         }
       } catch (e) {
         console.error('[Notifications] Error parsing zap:', e);
       }
 
-      // Also try to get amount from bolt11 if we didn't get it from description
-      if (zapAmount === 0) {
-        try {
-          const bolt11Tag = event.tags.find((t) => t[0] === 'bolt11')?.[1];
-          if (bolt11Tag) {
-            // Parse amount from bolt11 - look for the amount prefix (e.g., lnbc100n, lnbc1000u, lnbc1m)
-            const amountMatch = bolt11Tag.match(/lnbc(\d+)([munp]?)/i);
-            if (amountMatch) {
-              const num = parseInt(amountMatch[1], 10);
-              const unit = amountMatch[2]?.toLowerCase() || '';
-              // Convert to sats based on unit
-              if (unit === 'm')
-                zapAmount = num * 100000; // milli-bitcoin = 100,000 sats
-              else if (unit === 'u')
-                zapAmount = num * 100; // micro-bitcoin = 100 sats
-              else if (unit === 'n')
-                zapAmount = Math.floor(num / 10); // nano-bitcoin = 0.1 sats
-              else if (unit === 'p')
-                zapAmount = Math.floor(num / 10000); // pico-bitcoin
-              else zapAmount = num; // assume sats if no unit
-            }
-          }
-        } catch {}
-      }
+      // Skip self-zaps (user zapping their own content or someone else)
+      if (zapSenderPubkey === userPubkey) return null;
+
+      const zapAmount = extractZapAmountSats(event).sats;
 
       const zappedEventId = event.tags.find((t) => t[0] === 'e')?.[1];
       return {
@@ -414,19 +445,19 @@ function parseNotification(event: NDKEvent, userPubkey: string): Notification | 
         fromPubkey: zapSenderPubkey,
         type: 'zap',
         eventId: zappedEventId,
-        amount: zapAmount
+        amount: zapAmount,
+        content: zapComment || undefined
       };
+    }
 
-    case 1: // Reply or mention
-      // Distinguish between replies and mentions:
-      // - Reply: Someone is replying to a post (has 'e' tags indicating it's a reply)
-      // - Mention: Someone tagged you in a standalone post (no 'e' tags)
+    case 1: { // Reply or mention
+      // NIP-10: Distinguish replies from mentions.
+      // A reply has e tags with 'reply'/'root' markers or uses deprecated positional e tags.
+      // A mention is a standalone post that p-tags the user but has no e tags (not in a thread).
       const eTags = event.tags.filter((t) => t[0] === 'e');
-
-      // Check if this is a reply to something (has any e tags)
       const isReply = eTags.length > 0;
 
-      // Get the event being replied to (prefer 'reply' marker, then 'root', then first e tag)
+      // Get the event being replied to (prefer 'reply' marker, then 'root', then last e tag per NIP-10)
       let replyToEvent: string | undefined;
       const replyMarkerTag = eTags.find((t) => t[3] === 'reply');
       const rootMarkerTag = eTags.find((t) => t[3] === 'root');
@@ -435,27 +466,28 @@ function parseNotification(event: NDKEvent, userPubkey: string): Notification | 
       } else if (rootMarkerTag) {
         replyToEvent = rootMarkerTag[1];
       } else if (eTags.length > 0) {
-        // No markers - use last e tag (NIP-10 deprecated positional)
+        // No markers — deprecated positional: last e tag is reply target
         replyToEvent = eTags[eTags.length - 1][1];
       }
 
-      // For both mentions and replies, clicking should show the note that mentions/replies
-      // (the notification event itself), not just the post being replied to
       return {
         ...baseNotification,
         type: isReply ? 'comment' : 'mention',
-        eventId: event.id, // The note to view (the mention/reply itself)
-        targetEventId: replyToEvent, // The original post being replied to (if any)
+        eventId: event.id,
+        targetEventId: replyToEvent,
         content: cleanContentForPreview(event.content || '')
       };
+    }
 
-    case 6: // Repost
+    case 6: // Repost (kind 1 notes)
+    case 16: { // Generic repost (recipes, etc. per NIP-18)
       const repostedEventId = event.tags.find((t) => t[0] === 'e')?.[1];
       return {
         ...baseNotification,
         type: 'repost',
         eventId: repostedEventId
       };
+    }
 
     default:
       return null;
@@ -509,6 +541,9 @@ async function sendLocalNotificationForNostrEvent(notification: Notification): P
     switch (notification.type) {
       case 'zap':
         body = `⚡ You received ${notification.amount?.toLocaleString() || 'a'} zap${notification.amount ? ' sats' : ''}`;
+        if (notification.content) {
+          body += `: ${notification.content.slice(0, 50)}${notification.content.length > 50 ? '...' : ''}`;
+        }
         break;
       case 'comment':
         body = '💬 Someone replied to your post';

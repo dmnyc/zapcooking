@@ -5,24 +5,80 @@
 
 import type NDK from '@nostr-dev-kit/ndk';
 import { NDKEvent, NDKRelaySet, type NDKFilter } from '@nostr-dev-kit/ndk';
+import { browser } from '$app/environment';
 import {
 	PRODUCT_KIND,
 	PRODUCT_KIND_LEGACY,
-	PRODUCT_CATEGORIES,
+	MARKETPLACE_LISTING_MAX_AGE_DAYS,
+	RELIST_COOLDOWN_DAYS,
+	normalizeCategory,
 	type Product,
 	type ProductCategory,
 	type ProductFormData,
 	type ProductStatus
 } from './types';
+import { COMMERCE_STATES, type CommerceState } from './commerceState';
 import { addClientTagToEvent } from '$lib/nip89';
+import { SUPPORTED_CURRENCIES, type CurrencyCode } from '$lib/currencyStore';
 
-// Relays that index marketplace events
-const MARKETPLACE_RELAYS = [
-	'wss://kitchen.zap.cooking',
+// Relays that index marketplace events (matches Plebeian Market's relay set)
+export const MARKETPLACE_RELAYS = [
 	'wss://relay.damus.io',
 	'wss://nos.lol',
-	'wss://relay.nostr.band'
+	'wss://relay.nostr.band',
+	'wss://relay.nostr.net'
 ];
+
+// --- In-memory cache for product listings ---
+const PRODUCT_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const productCache = new Map<string, { data: Product[]; staleCount: number; timestamp: number }>();
+
+function getProductCacheKey(options: { category?: ProductCategory; author?: string }): string {
+	return `${options.author || 'all'}:${options.category || 'all'}`;
+}
+
+/** Clear the product cache (call after publishing/deleting a product) */
+export function invalidateProductCache(): void {
+	productCache.clear();
+}
+
+/** Compute the Unix-second cutoff for stale listings */
+function getListingAgeCutoff(): number {
+	return Math.floor(Date.now() / 1000) - 60 * 60 * 24 * MARKETPLACE_LISTING_MAX_AGE_DAYS;
+}
+
+/**
+ * Filter out listings whose created_at is older than MARKETPLACE_LISTING_MAX_AGE_DAYS.
+ * Returns the filtered list and the count of removed stale items.
+ */
+export function filterStaleListings(products: Product[]): { fresh: Product[]; staleCount: number } {
+	const cutoff = getListingAgeCutoff();
+	const fresh: Product[] = [];
+	let staleCount = 0;
+	for (const p of products) {
+		if (p.createdAt < cutoff) {
+			staleCount++;
+		} else {
+			fresh.push(p);
+		}
+	}
+	return { fresh, staleCount };
+}
+
+/**
+ * Fetch products and return both the filtered results and how many stale
+ * listings were hidden. Reads stale count from the per-key cache entry
+ * populated by fetchProducts().
+ */
+export async function fetchProductsWithStaleCount(
+	ndk: NDK,
+	options: Parameters<typeof fetchProducts>[1] = {}
+): Promise<{ products: Product[]; staleCount: number }> {
+	const products = await fetchProducts(ndk, options);
+	const cacheKey = getProductCacheKey(options);
+	const cached = productCache.get(cacheKey);
+	return { products, staleCount: cached?.staleCount ?? 0 };
+}
 
 /**
  * Parse an NDKEvent into a Product object
@@ -38,18 +94,26 @@ export function parseProductEvent(event: NDKEvent): Product | null {
 		const title = getTag('title') || '';
 		const summary = getTag('summary') || '';
 		const priceTag = event.tags.find((t) => t[0] === 'price');
-		const priceSats = priceTag ? parseInt(priceTag[1], 10) : 0;
+		const rawPrice = priceTag?.[1];
+		const parsedPrice = rawPrice != null ? parseFloat(rawPrice) : NaN;
+		const priceValue = Number.isFinite(parsedPrice) ? parsedPrice : 0;
+		// Read currency from price tag unit (3rd element). Normalize 'SAT' → 'SATS'.
+		const rawUnit = priceTag?.[2] || 'SAT';
+		const currencyUnit = rawUnit.toUpperCase() === 'SAT' ? 'SATS' : rawUnit.toUpperCase();
+		const currency: CurrencyCode = SUPPORTED_CURRENCIES.some((c) => c.code === currencyUnit)
+			? (currencyUnit as CurrencyCode)
+			: 'SATS';
+		// priceSats is derived: equals price when currency is SATS, otherwise 0
+		const priceSats = currency === 'SATS' ? Math.round(priceValue) : 0;
 
 		// Get all image tags
 		const images = event.tags.filter((t) => t[0] === 'image').map((t) => t[1]);
 
-		// Category from 't' tag
+		// Category from 't' tag (normalizes legacy values like 'ingredients' → 'food')
 		const categoryTag = getTag('t');
-		const category: ProductCategory = PRODUCT_CATEGORIES.includes(
-			categoryTag as ProductCategory
-		)
-			? (categoryTag as ProductCategory)
-			: 'ingredients';
+		const category: ProductCategory = categoryTag
+			? normalizeCategory(categoryTag)
+			: 'other';
 
 		const status: ProductStatus = (getTag('status') as ProductStatus) || 'active';
 		const lightningAddress = getTag('lightning') || '';
@@ -58,12 +122,21 @@ export function parseProductEvent(event: NDKEvent): Product | null {
 		const location = getTag('location');
 		const publishedAt = parseInt(getTag('published_at') || '0', 10);
 
+		// Read commerce state tag (if seller has set one explicitly)
+		const commerceStateTag = getTag('commerce_state');
+		const commerceState: CommerceState | undefined =
+			commerceStateTag && COMMERCE_STATES.includes(commerceStateTag as CommerceState)
+				? (commerceStateTag as CommerceState)
+				: undefined;
+
 		return {
 			id,
 			pubkey: event.pubkey,
 			title,
 			summary,
 			description: event.content,
+			price: priceValue,
+			currency,
 			priceSats,
 			images,
 			category,
@@ -71,6 +144,7 @@ export function parseProductEvent(event: NDKEvent): Product | null {
 			lightningAddress,
 			requiresShipping,
 			location,
+			commerceState,
 			publishedAt: publishedAt || event.created_at || 0,
 			createdAt: event.created_at || 0,
 			event
@@ -100,7 +174,7 @@ export function createProductEvent(
 		['d', productId],
 		['title', data.title],
 		['summary', data.summary],
-		['price', data.priceSats.toString(), 'SAT'],
+		['price', data.price.toString(), data.currency],
 		['t', data.category],
 		['published_at', Math.floor(Date.now() / 1000).toString()],
 		['lightning', data.lightningAddress],
@@ -118,6 +192,11 @@ export function createProductEvent(
 	// Add optional location
 	if (data.location) {
 		event.tags.push(['location', data.location]);
+	}
+
+	// Add commerce state tag (if seller has set one explicitly)
+	if (data.commerceState) {
+		event.tags.push(['commerce_state', data.commerceState]);
 	}
 
 	// Add client tag (NIP-89)
@@ -142,6 +221,13 @@ export async function fetchProducts(
 		timeoutMs?: number;
 	} = {}
 ): Promise<Product[]> {
+	// Check cache first
+	const cacheKey = getProductCacheKey(options);
+	const cached = productCache.get(cacheKey);
+	if (cached && Date.now() - cached.timestamp < PRODUCT_CACHE_TTL_MS) {
+		return cached.data;
+	}
+
 	// Fetch both standard NIP-99 kind and legacy kind
 	const filter: NDKFilter = {
 		kinds: [PRODUCT_KIND, PRODUCT_KIND_LEGACY] as number[],
@@ -156,96 +242,83 @@ export async function fetchProducts(
 		filter['#t'] = [options.category];
 	}
 
-	const timeoutMs = options.timeoutMs || 15000; // 15 second default timeout
+	const timeoutMs = options.timeoutMs || 6000;
 
-	console.log('[Marketplace] Fetching products with filter:', {
-		kinds: filter.kinds,
-		authors: filter.authors,
-		limit: filter.limit,
-		category: options.category,
-		timeoutMs
-	});
-
-	// Check if NDK has connected relays
-	const connectedRelays = ndk.pool?.relays ? 
+	// Wait briefly if no relays are connected yet
+	const connectedRelays = ndk.pool?.relays ?
 		Array.from(ndk.pool.relays.values()).filter(r => r.status === 1).length : 0;
-	console.log('[Marketplace] Connected relays:', connectedRelays);
 
 	if (connectedRelays === 0) {
-		console.warn('[Marketplace] No connected relays, waiting for connection...');
-		await new Promise(resolve => setTimeout(resolve, 3000));
-		const newConnectedRelays = ndk.pool?.relays ? 
-			Array.from(ndk.pool.relays.values()).filter(r => r.status === 1).length : 0;
-		console.log('[Marketplace] Connected relays after wait:', newConnectedRelays);
+		await new Promise(resolve => setTimeout(resolve, 2000));
 	}
 
 	try {
-		// For public marketplace queries (no author filter), use specific relays
-		// that are known to index all events by kind
+		// Use marketplace relays for all product queries
 		let relaySet: NDKRelaySet | undefined;
-		
-		if (!options.author) {
-			// Create relay set with marketplace-friendly relays
-			console.log('[Marketplace] No author filter, using marketplace relays:', MARKETPLACE_RELAYS);
-			try {
-				relaySet = NDKRelaySet.fromRelayUrls(MARKETPLACE_RELAYS, ndk);
-			} catch (e) {
-				console.warn('[Marketplace] Could not create relay set:', e);
-			}
+		try {
+			relaySet = NDKRelaySet.fromRelayUrls(MARKETPLACE_RELAYS, ndk);
+		} catch (e) {
+			console.warn('[Marketplace] Could not create relay set:', e);
 		}
 
 		// Use subscription-based fetch for better relay compatibility
 		const allEvents = new Set<any>();
-		
+		let timeoutId: ReturnType<typeof setTimeout>;
+
 		const fetchPromise = new Promise<Set<any>>((resolve) => {
-			const sub = ndk.subscribe(filter, { closeOnEose: true, relaySet } as any);
-			
+			const sub = ndk.subscribe(filter, { closeOnEose: true }, relaySet);
+
 			sub.on('event', (event: any) => {
 				allEvents.add(event);
 			});
-			
+
 			sub.on('eose', () => {
-				console.log('[Marketplace] EOSE received, events so far:', allEvents.size);
+				clearTimeout(timeoutId);
 				resolve(allEvents);
 			});
-			
-			// Also resolve on close
+
 			sub.on('close', () => {
+				clearTimeout(timeoutId);
 				resolve(allEvents);
 			});
 		});
 
-		const timeoutPromise = new Promise<Set<any>>((resolve) => 
-			setTimeout(() => {
+		const timeoutPromise = new Promise<Set<any>>((resolve) => {
+			timeoutId = setTimeout(() => {
 				console.warn('[Marketplace] Fetch timed out after', timeoutMs, 'ms, returning', allEvents.size, 'events');
 				resolve(allEvents);
-			}, timeoutMs)
-		);
+			}, timeoutMs);
+		});
 
 		const events = await Promise.race([fetchPromise, timeoutPromise]);
 
-		console.log('[Marketplace] Fetched', events.size, 'events from relays');
-		
 		const products: Product[] = [];
 
+		// Deduplicate by d-tag + pubkey (parameterized replaceable events).
+		// Keep the newest event when the same product appears from multiple relays.
+		const seen = new Map<string, Product>();
 		for (const event of events) {
-			console.log('[Marketplace] Processing event:', {
-				id: event.id?.substring(0, 16),
-				kind: event.kind,
-				pubkey: event.pubkey?.substring(0, 16)
-			});
 			const product = parseProductEvent(event);
-			if (product && product.status === 'active') {
-				products.push(product);
+			if (product && product.status === 'active' && product.images.length > 0) {
+				const key = `${product.pubkey}:${product.id}`;
+				const existing = seen.get(key);
+				if (!existing || product.createdAt > existing.createdAt) {
+					seen.set(key, product);
+				}
 			}
 		}
+		products.push(...seen.values());
 
-		console.log('[Marketplace] Parsed', products.length, 'active products');
+		// Filter out stale listings older than MARKETPLACE_LISTING_MAX_AGE_DAYS
+		const { fresh, staleCount } = filterStaleListings(products);
 
 		// Sort by published date, newest first
-		products.sort((a, b) => b.publishedAt - a.publishedAt);
+		fresh.sort((a, b) => b.publishedAt - a.publishedAt);
 
-		return products;
+		// Cache the result (including stale count for fetchProductsWithStaleCount)
+		productCache.set(cacheKey, { data: fresh, staleCount, timestamp: Date.now() });
+
+		return fresh;
 	} catch (error) {
 		console.error('[Marketplace] Failed to fetch products:', error);
 		return [];
@@ -287,6 +360,7 @@ export async function publishProduct(
 			console.warn('[Marketplace] Could not publish to marketplace relays:', e);
 		}
 
+		invalidateProductCache();
 		return { success: true, event };
 	} catch (error) {
 		console.error('[Marketplace] Failed to publish product:', error);
@@ -335,7 +409,7 @@ export async function deleteProduct(
 			console.warn('[Marketplace] Could not publish deletion to marketplace relays:', e);
 		}
 		
-		console.log('[Marketplace] Product deleted:', product.id);
+		invalidateProductCache();
 		return { success: true };
 	} catch (error) {
 		console.error('[Marketplace] Failed to delete product:', error);
@@ -346,8 +420,117 @@ export async function deleteProduct(
 	}
 }
 
+// --- Relist cooldown (localStorage) ---
+const RELIST_STORAGE_KEY = 'zc_relist_cooldowns';
+
+function getRelistCooldowns(): Record<string, number> {
+	if (!browser) return {};
+	try {
+		return JSON.parse(localStorage.getItem(RELIST_STORAGE_KEY) || '{}');
+	} catch {
+		return {};
+	}
+}
+
+function setRelistCooldown(productDTag: string): void {
+	if (!browser) return;
+	const cooldowns = getRelistCooldowns();
+	cooldowns[productDTag] = Date.now();
+	localStorage.setItem(RELIST_STORAGE_KEY, JSON.stringify(cooldowns));
+}
+
+/** Returns the remaining cooldown in ms, or 0 if relist is allowed. */
+export function getRelistCooldownRemaining(productDTag: string): number {
+	const cooldowns = getRelistCooldowns();
+	const lastRelist = cooldowns[productDTag];
+	if (!lastRelist) return 0;
+	const cooldownMs = RELIST_COOLDOWN_DAYS * 24 * 60 * 60 * 1000;
+	const remaining = lastRelist + cooldownMs - Date.now();
+	return Math.max(0, remaining);
+}
+
 /**
- * Format price in sats with optional locale formatting
+ * Relist a product: publish a fresh event with updated timestamps,
+ * then delete the old event via NIP-09.
+ */
+export async function relistProduct(
+	ndk: NDK,
+	product: Product
+): Promise<{ success: boolean; event?: NDKEvent; error?: string }> {
+	// Check cooldown
+	const remaining = getRelistCooldownRemaining(product.id);
+	if (remaining > 0) {
+		const days = Math.ceil(remaining / (24 * 60 * 60 * 1000));
+		return { success: false, error: `You can relist this item again in ${days} day${days === 1 ? '' : 's'}` };
+	}
+
+	try {
+		// Build a new event from the existing product's data, keeping the same d-tag
+		const newEvent = new NDKEvent(ndk);
+		newEvent.kind = PRODUCT_KIND;
+		newEvent.content = product.description;
+
+		const now = Math.floor(Date.now() / 1000).toString();
+		newEvent.tags = [
+			['d', product.id],
+			['title', product.title],
+			['summary', product.summary],
+			['price', product.price.toString(), product.currency],
+			['t', product.category],
+			['published_at', now],
+			['lightning', product.lightningAddress],
+			['shipping', product.requiresShipping ? 'true' : 'false'],
+			['status', 'active']
+		];
+
+		for (const imageUrl of product.images) {
+			if (imageUrl) newEvent.tags.push(['image', imageUrl]);
+		}
+		if (product.location) {
+			newEvent.tags.push(['location', product.location]);
+		}
+		if (product.commerceState) {
+			newEvent.tags.push(['commerce_state', product.commerceState]);
+		}
+
+		addClientTagToEvent(newEvent);
+
+		await newEvent.sign();
+		await newEvent.publish();
+
+		// Also publish to marketplace relays
+		try {
+			const marketplaceRelaySet = NDKRelaySet.fromRelayUrls(MARKETPLACE_RELAYS, ndk);
+			await newEvent.publish(marketplaceRelaySet);
+		} catch {
+			// non-critical
+		}
+
+		// Delete the old event via NIP-09
+		try {
+			await deleteProduct(ndk, product);
+		} catch {
+			// Old event deletion is best-effort; the new event replaces it via d-tag anyway
+			console.warn('[Marketplace] Old event deletion failed (non-critical)');
+		}
+
+		// Record cooldown
+		setRelistCooldown(product.id);
+		invalidateProductCache();
+
+		return { success: true, event: newEvent };
+	} catch (error) {
+		console.error('[Marketplace] Failed to relist product:', error);
+		return {
+			success: false,
+			error: error instanceof Error ? error.message : 'Failed to relist product'
+		};
+	}
+}
+
+/**
+ * Format price in sats with locale formatting.
+ * @deprecated Use formatSats() from currencyConversion.ts instead.
  */
 export function formatSatsPrice(sats: number): string {
 	return sats.toLocaleString() + ' sats';

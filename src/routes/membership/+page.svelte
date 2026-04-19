@@ -1,8 +1,12 @@
 <script lang="ts">
   import { browser } from '$app/environment';
   import { goto } from '$app/navigation';
+  import { onDestroy } from 'svelte';
   import { userPublickey } from '$lib/nostr';
   import { membershipStore, formatMembershipExpiry } from '$lib/membershipStore';
+  import { membershipStatusMap, queueMembershipLookup, type MembershipStatus } from '$lib/stores/membershipStatus';
+  import CustomAvatar from '../../components/CustomAvatar.svelte';
+  import CustomName from '../../components/CustomName.svelte';
   import PricingToggle from './PricingToggle.svelte';
 
   export let data;
@@ -46,6 +50,171 @@
     && currentMembership.paymentMethod === 'card'
     && currentMembership.expiresAt > Date.now()
     && currentMembership.invoiceId;
+
+  $: isFoundersMember = apiMembershipStatus?.tier === 'founders';
+  // Lifetime = founders or expiry 8+ years out (matches formatExpiresAt logic without coupling to its string)
+  $: isLifetimeMember = isFoundersMember || (() => {
+    if (!apiMembershipStatus?.expiresAt) return false;
+    try {
+      const yearsAway = (new Date(apiMembershipStatus.expiresAt).getTime() - Date.now()) / (1000 * 60 * 60 * 24 * 365);
+      return yearsAway >= 8;
+    } catch { return false; }
+  })();
+
+  let cancellingMembership = false;
+  let cancelError: string | null = null;
+
+  async function handleCancelMembership() {
+    if (!browser) return;
+
+    cancellingMembership = true;
+    cancelError = null;
+
+    // Try Stripe portal first — works for any card member regardless of local state.
+    // Falls back to email if no Stripe subscription is found (404).
+    try {
+      const response = await fetch('/api/stripe/create-portal-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pubkey: $userPublickey,
+          returnUrl: window.location.href,
+        }),
+      });
+
+      if (response.ok) {
+        const { url } = await response.json();
+        if (url) {
+          window.location.href = url;
+          return;
+        }
+      }
+
+      // 404 = no Stripe subscription found → fall through to email
+      if (response.status !== 404) {
+        const errData = await response.json().catch(() => ({ error: 'Failed to open cancellation portal' }));
+        throw new Error(errData.error || 'Failed to open cancellation portal');
+      }
+    } catch (err) {
+      // If we got a real error (not a 404 fallthrough), show it and stop
+      if (err instanceof Error) {
+        console.error('[Membership] Cancel error:', err);
+        cancelError = err.message;
+        cancellingMembership = false;
+        return;
+      }
+    }
+
+    // Fallback: Lightning / other members without Stripe subscription
+    cancellingMembership = false;
+    window.location.href = 'mailto:support@zap.cooking?subject=Membership%20Cancellation%20Request&body=Hi%2C%20I%20would%20like%20to%20cancel%20my%20zap.cooking%20membership.%0A%0AMy%20pubkey%3A%20' + encodeURIComponent($userPublickey || '');
+  }
+
+  // --- API-based membership status (membershipStatusMap) ---
+  let membershipMap: Record<string, MembershipStatus> = {};
+  const unsubscribe = membershipStatusMap.subscribe((value) => {
+    membershipMap = value;
+  });
+  onDestroy(unsubscribe);
+
+  $: if ($userPublickey) queueMembershipLookup($userPublickey);
+
+  $: normalizedPubkey = String($userPublickey || '').trim().toLowerCase();
+  $: apiMembershipStatus = membershipMap[normalizedPubkey];
+  $: isActiveMemberApi = Boolean(apiMembershipStatus?.active);
+
+  function formatExpiresAt(expiresAt: string | undefined): string {
+    if (!expiresAt) return '—';
+    try {
+      const date = new Date(expiresAt);
+      // If expiry is 8+ years away, show "Lifetime" instead of a date
+      const yearsAway = (date.getTime() - Date.now()) / (1000 * 60 * 60 * 24 * 365);
+      if (yearsAway >= 8) return 'Lifetime';
+      return date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+    } catch {
+      return '—';
+    }
+  }
+
+  // --- Member stats ---
+  import { ndk } from '$lib/nostr';
+  import { onMount } from 'svelte';
+  import CookingPotIcon from 'phosphor-svelte/lib/CookingPot';
+  import StarIcon from 'phosphor-svelte/lib/Star';
+  import ShieldCheckIcon from 'phosphor-svelte/lib/ShieldCheck';
+  import LightningIcon from 'phosphor-svelte/lib/Lightning';
+  import RobotIcon from 'phosphor-svelte/lib/Robot';
+  import StorefrontIcon from 'phosphor-svelte/lib/Storefront';
+  import CrownIcon from 'phosphor-svelte/lib/Crown';
+
+  let recipeCount: number | null = null;
+  let memberSince: string | null = null;
+
+  // Compute member since date from founders data or API status
+  $: if (apiMembershipStatus && data.founders) {
+    const founderRecord = data.founders.find((f: any) => f.pubkey === normalizedPubkey);
+    if (founderRecord?.joined) {
+      memberSince = new Date(founderRecord.joined).toLocaleDateString(undefined, { year: 'numeric', month: 'long' });
+    } else {
+      memberSince = null;
+    }
+  }
+
+  // Fetch recipe count for the user (kind 30023 = long-form recipes)
+  onMount(async () => {
+    if (!$userPublickey || !$ndk) return;
+    try {
+      const events = await $ndk.fetchEvents({
+        kinds: [30023],
+        authors: [$userPublickey]
+      });
+      recipeCount = events.size;
+    } catch (e) {
+      console.warn('[Membership] Failed to fetch recipe count:', e);
+    }
+  });
+
+  // Perks by tier
+  const TIER_PERKS: Record<string, { icon: typeof CookingPotIcon; label: string }[]> = {
+    cook_plus: [
+      { icon: RobotIcon, label: 'AI Recipe Extraction' },
+      { icon: ShieldCheckIcon, label: 'Verified NIP-05 Identity' },
+      { icon: StorefrontIcon, label: 'Market Access' },
+      { icon: StarIcon, label: 'Priority Relay Access' },
+    ],
+    pro_kitchen: [
+      { icon: RobotIcon, label: 'AI Recipe Extraction' },
+      { icon: LightningIcon, label: 'Lightning-Gated Recipes' },
+      { icon: ShieldCheckIcon, label: 'Verified NIP-05 Identity' },
+      { icon: StorefrontIcon, label: 'Market Access' },
+      { icon: StarIcon, label: 'Priority Relay Access' },
+      { icon: CookingPotIcon, label: 'Zappy AI Assistant' },
+    ],
+    founders: [
+      { icon: CrownIcon, label: 'Lifetime Access — All Features' },
+      { icon: RobotIcon, label: 'AI Recipe Extraction' },
+      { icon: LightningIcon, label: 'Lightning-Gated Recipes' },
+      { icon: ShieldCheckIcon, label: 'Verified NIP-05 Identity' },
+      { icon: StorefrontIcon, label: 'Market Access' },
+      { icon: StarIcon, label: 'Priority Relay Access' },
+      { icon: CookingPotIcon, label: 'Zappy AI Assistant' },
+    ],
+  };
+
+  $: currentPerks = isFoundersMember
+    ? TIER_PERKS['founders']
+    : TIER_PERKS[apiMembershipStatus?.tier || ''] || TIER_PERKS['cook_plus'];
+
+  // Toggle for showing sales/pricing content when active member clicks "Upgrade"
+  let showUpgradeOptions = false;
+
+  function handleShowUpgrade() {
+    showUpgradeOptions = true;
+    // Scroll to pricing after DOM update
+    setTimeout(() => {
+      document.getElementById('pricing')?.scrollIntoView({ behavior: 'smooth' });
+    }, 50);
+  }
 
   let managingSubscription = false;
   let manageError: string | null = null;
@@ -124,6 +293,126 @@
 </svelte:head>
 
 <div class="membership-page">
+  {#if $userPublickey && isActiveMemberApi}
+    <section class="member-dashboard">
+      <!-- Header with identity and badge -->
+      <div class="member-dashboard-header">
+        <div class="member-dashboard-identity">
+          <div class="member-avatar-glow" class:founders-glow={isFoundersMember}>
+            <CustomAvatar pubkey={$userPublickey} size={56} interactive={false} />
+          </div>
+          <div class="member-dashboard-identity-text">
+            <CustomName pubkey={$userPublickey} className="member-dashboard-display-name" />
+            <span class="member-dashboard-tier">
+              {#if apiMembershipStatus?.tier === 'founders'}
+                Founders Club
+              {:else if apiMembershipStatus?.tier === 'pro_kitchen'}
+                Pro Kitchen
+              {:else if apiMembershipStatus?.tier === 'cook_plus'}
+                Cook+
+              {:else}
+                Member
+              {/if}
+            </span>
+          </div>
+        </div>
+        <span class="member-dashboard-active-badge">Active</span>
+      </div>
+
+      <!-- Stats row -->
+      <div class="member-dashboard-stats">
+        <div class="member-dashboard-stat">
+          <span class="member-dashboard-stat-label">Expires</span>
+          <span class="member-dashboard-stat-value">{formatExpiresAt(apiMembershipStatus?.expiresAt)}</span>
+        </div>
+        {#if memberSince}
+          <div class="member-dashboard-stat">
+            <span class="member-dashboard-stat-label">Member Since</span>
+            <span class="member-dashboard-stat-value">{memberSince}</span>
+          </div>
+        {/if}
+        <div class="member-dashboard-stat">
+          <span class="member-dashboard-stat-label">Recipes Published</span>
+          <span class="member-dashboard-stat-value">
+            {#if recipeCount !== null}
+              {recipeCount}
+            {:else}
+              ...
+            {/if}
+          </span>
+        </div>
+      </div>
+
+      <!-- Perks -->
+      <div class="member-dashboard-perks">
+        <h4 class="member-dashboard-perks-title">Your Perks</h4>
+        <div class="member-dashboard-perks-grid">
+          {#each currentPerks as perk}
+            <div class="member-dashboard-perk">
+              <svelte:component this={perk.icon} size={16} weight="bold" />
+              <span>{perk.label}</span>
+            </div>
+          {/each}
+        </div>
+      </div>
+
+      <!-- Actions -->
+      <div class="member-dashboard-actions">
+        {#if hasActiveCardMembership}
+          {#if manageError}
+            <div class="manage-error">{manageError}</div>
+          {/if}
+          <button
+            class="manage-subscription-button"
+            on:click={handleManageSubscription}
+            disabled={managingSubscription}
+          >
+            {#if managingSubscription}
+              Opening portal...
+            {:else}
+              Manage Subscription
+            {/if}
+          </button>
+        {/if}
+        {#if !showUpgradeOptions && !isLifetimeMember}
+          <button class="member-dashboard-upgrade-button" on:click={handleShowUpgrade}>
+            Upgrade Plan
+          </button>
+        {/if}
+      </div>
+
+      <!-- Cancel Membership -->
+      <div class="member-dashboard-cancel">
+        {#if isLifetimeMember}
+          <p class="cancel-note">Your Founders Club membership is lifetime — no renewal or cancellation needed.</p>
+        {:else}
+          {#if cancelError}
+            <p class="cancel-error">{cancelError}</p>
+          {/if}
+          <button
+            class="cancel-membership-link"
+            on:click={handleCancelMembership}
+            disabled={cancellingMembership}
+          >
+            {#if cancellingMembership}
+              Opening cancellation portal...
+            {:else}
+              Cancel Membership
+            {/if}
+          </button>
+          <p class="cancel-note">
+            {#if hasActiveCardMembership}
+              You'll be redirected to our payment provider to complete cancellation.
+            {:else}
+              Contact support to cancel your membership. Your access continues until the expiration date.
+            {/if}
+          </p>
+        {/if}
+      </div>
+    </section>
+  {/if}
+
+  {#if !isActiveMemberApi || showUpgradeOptions}
   <section class="hero">
     <h1>Your Kitchen, Supercharged</h1>
     <p>AI-powered recipe tools, a private Nostr relay, and Bitcoin-native payments — all in one membership.</p>
@@ -265,6 +554,14 @@
                 <span class="checkmark">✓</span>
                 <span class="feature-text">Access to pantry.zap.cooking relay</span>
               </li>
+              <li>
+                <span class="checkmark">✓</span>
+                <span class="feature-text">Nourish recipe intelligence</span>
+              </li>
+              <li>
+                <span class="checkmark">✓</span>
+                <span class="feature-text">Buy and sell on the Market</span>
+              </li>
             </ul>
           </div>
         </div>
@@ -301,8 +598,8 @@
     </section>
   {/if}
 
-  <!-- Active Membership Management -->
-  {#if hasActiveCardMembership && currentMembership}
+  <!-- Active Membership Management (legacy card, hidden when API dashboard shows) -->
+  {#if hasActiveCardMembership && currentMembership && !isActiveMemberApi}
     <section class="active-membership">
       <div class="active-membership-card">
         <div class="active-membership-header">
@@ -311,7 +608,7 @@
         </div>
         <div class="active-membership-details">
           <p class="membership-tier-name">
-            {currentMembership.tier === 'cook' ? 'Cook+' : 'Pro Kitchen'}
+            {currentMembership.tier === 'cook_plus' ? 'Cook+' : currentMembership.tier === 'founders' ? 'Founders Club' : 'Pro Kitchen'}
           </p>
           <p class="membership-expiry">
             Expires {formatMembershipExpiry(currentMembership.expiresAt)}
@@ -368,20 +665,23 @@
         </div>
         
         <div class="tier-benefits">
-          <!-- Premium Features -->
+          <!-- Premium Tools -->
           <div class="benefit-section">
-            <h4 class="section-header">Premium Features</h4>
+            <h4 class="section-header">Premium Tools</h4>
             <ul class="benefit-list">
               <li>
                 <span class="feature-icon">✨</span>
                 <div class="feature-content">
-                  <a href="/extract" class="feature-link">Sous Chef - Extract recipes from any link or photo instantly</a>
+                  <a href="/souschef" class="feature-link">Sous Chef - Extract recipes from any link, photo, or pasted text instantly</a>
                   <span class="feature-subtext">Save time - let it do the work</span>
                 </div>
               </li>
               <li>
-                <span class="checkmark">✓</span>
-                <span class="feature-text">Verified @zap.cooking NIP-05 identity</span>
+                <span class="feature-icon">🌱</span>
+                <div class="feature-content">
+                  <a href="/nourish" class="feature-link">Nourish - Recipe intelligence scores for gut health, protein, and real food</a>
+                  <span class="feature-subtext">Understand what your food is doing for you</span>
+                </div>
               </li>
             </ul>
           </div>
@@ -394,7 +694,15 @@
             <ul class="benefit-list">
               <li>
                 <span class="checkmark">✓</span>
+                <span class="feature-text">Verified @zap.cooking NIP-05 identity</span>
+              </li>
+              <li>
+                <span class="checkmark">✓</span>
                 <span class="feature-text">Access to pantry.zap.cooking private relay</span>
+              </li>
+              <li>
+                <span class="checkmark">✓</span>
+                <a href="/market" class="feature-link">Buy and sell on the Market</a>
               </li>
               <li>
                 <span class="checkmark">✓</span>
@@ -462,7 +770,7 @@
             <ul class="benefit-list">
               <li>
                 <span class="checkmark">✓</span>
-                <span class="feature-text muted-text">Everything in Cook+ (Sous Chef, NIP-05 identity, pantry relay access, collections, badge, early access, voting)</span>
+                <span class="feature-text muted-text">Everything in Cook+ (Sous Chef, Nourish, NIP-05 identity, Market access, pantry relay, collections, badge, early access, voting)</span>
               </li>
             </ul>
           </div>
@@ -481,10 +789,6 @@
                 <span class="checkmark">✓</span>
                 <span class="feature-text">Priority recipe promotion</span>
               </li>
-              <li>
-                <span class="checkmark">✓</span>
-                <span class="feature-text">Access to sell on Marketplace (coming soon)</span>
-              </li>
             </ul>
           </div>
 
@@ -497,13 +801,21 @@
               <li>
                 <span class="feature-icon">🤖</span>
                 <div class="feature-content">
-                  <a href="/zappy" class="feature-link">Zappy - Kitchen assistant to scan your fridge, generate recipes, and recommend what to make tonight</a>
+                  <a href="/zappy" class="feature-link">Zappy - Scan your fridge, generate recipes, and plan what to make tonight</a>
                   <span class="feature-subtext">Your personal kitchen companion</span>
                 </div>
               </li>
               <li>
-                <span class="checkmark">✓</span>
-                <span class="feature-text">Sous Chef features</span>
+                <span class="feature-icon">✨</span>
+                <div class="feature-content">
+                  <span class="feature-text">Sous Chef features</span>
+                </div>
+              </li>
+              <li>
+                <span class="feature-icon">🌱</span>
+                <div class="feature-content">
+                  <span class="feature-text">Nourish recipe intelligence</span>
+                </div>
               </li>
             </ul>
           </div>
@@ -519,9 +831,227 @@
       </div>
     </div>
   </section>
+  {/if}
 </div>
 
 <style>
+  /* Member Dashboard */
+  .member-dashboard {
+    background: var(--color-bg-secondary);
+    border: 1px solid var(--color-input-border);
+    border-radius: 16px;
+    padding: 1.75rem;
+    margin-bottom: 2rem;
+    background-image: linear-gradient(135deg, rgba(249, 115, 22, 0.05) 0%, transparent 60%);
+  }
+
+  .member-dashboard-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 1.25rem;
+  }
+
+  .member-dashboard-identity {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .member-avatar-glow {
+    border-radius: 9999px;
+    box-shadow: 0 0 12px rgba(245, 158, 11, 0.4), 0 0 24px rgba(249, 115, 22, 0.15);
+  }
+
+  .member-avatar-glow.founders-glow {
+    box-shadow: 0 0 14px rgba(245, 158, 11, 0.5), 0 0 28px rgba(249, 115, 22, 0.25), 0 0 48px rgba(249, 115, 22, 0.1);
+  }
+
+  .member-dashboard-identity-text {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+  }
+
+  .member-dashboard-tier {
+    font-size: 0.8rem;
+    color: var(--color-primary, #f97316);
+    font-weight: 500;
+  }
+
+  .member-dashboard :global(.member-dashboard-display-name) {
+    font-weight: 600;
+    font-size: 1.05rem;
+    color: var(--color-text-primary);
+    cursor: default;
+  }
+
+  .member-dashboard :global(.member-dashboard-display-name:hover) {
+    color: var(--color-text-primary);
+  }
+
+  .member-dashboard-active-badge {
+    background: rgba(34, 197, 94, 0.15);
+    color: #22c55e;
+    padding: 0.25rem 0.75rem;
+    border-radius: 9999px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    flex-shrink: 0;
+  }
+
+  .member-dashboard-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+    padding: 1rem 0;
+    border-top: 1px solid var(--color-input-border);
+    border-bottom: 1px solid var(--color-input-border);
+  }
+
+  .member-dashboard-stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.25rem;
+    text-align: center;
+  }
+
+  .member-dashboard-stat-value {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--color-text-primary);
+  }
+
+  .member-dashboard-stat-label {
+    font-size: 0.7rem;
+    color: var(--color-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .member-dashboard-perks {
+    margin-bottom: 1.5rem;
+  }
+
+  .member-dashboard-perks-title {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--color-text-secondary);
+    margin-bottom: 0.75rem;
+    text-align: center;
+  }
+
+  .member-dashboard-perks-grid {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.5rem;
+  }
+
+  .member-dashboard-perk {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.8rem;
+    color: var(--color-text-primary);
+    padding: 0.5rem 0.75rem;
+    border-radius: 8px;
+    background: rgba(249, 115, 22, 0.06);
+    border: 1px solid rgba(249, 115, 22, 0.12);
+  }
+
+  .member-dashboard-perk :global(svg) {
+    color: #f59e0b;
+    flex-shrink: 0;
+  }
+
+  .member-dashboard-actions {
+    display: flex;
+    gap: 0.75rem;
+  }
+
+  .member-dashboard-actions .manage-subscription-button {
+    flex: 1;
+  }
+
+  .member-dashboard-upgrade-button {
+    flex: 1;
+    padding: 0.875rem 1.5rem;
+    background: var(--color-primary);
+    border: 2px solid var(--color-primary);
+    border-radius: 10px;
+    color: white;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .member-dashboard-upgrade-button:hover {
+    background: #d63a00;
+    border-color: #d63a00;
+  }
+
+  .member-dashboard .manage-error {
+    margin-bottom: 0.75rem;
+  }
+
+  @media (max-width: 480px) {
+    .member-dashboard-header {
+      flex-wrap: wrap;
+      gap: 0.75rem;
+    }
+
+    .member-dashboard-actions {
+      flex-direction: column;
+    }
+  }
+
+  .member-dashboard-cancel {
+    margin-top: 1.5rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid var(--color-input-border);
+    text-align: center;
+  }
+
+  .cancel-membership-link {
+    font-size: 0.8rem;
+    color: var(--color-text-secondary);
+    text-decoration: underline;
+    cursor: pointer;
+    background: none;
+    border: none;
+    padding: 0;
+    transition: color 0.15s;
+  }
+
+  .cancel-membership-link:hover:not(:disabled) {
+    color: #ef4444;
+  }
+
+  .cancel-membership-link:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    text-decoration: none;
+  }
+
+  .cancel-note {
+    font-size: 0.75rem;
+    color: var(--color-text-secondary);
+    opacity: 0.7;
+    margin-top: 0.375rem;
+  }
+
+  .cancel-error {
+    font-size: 0.75rem;
+    color: #ef4444;
+    margin-bottom: 0.375rem;
+  }
+
   .membership-page {
     max-width: 1200px;
     margin: 0 auto;

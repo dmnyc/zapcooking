@@ -14,6 +14,7 @@
   import PostModal from '../components/PostModal.svelte';
   import LongformEditorModal from '../components/reads/LongformEditorModal.svelte';
   import WalletWelcomeModal from '../components/WalletWelcomeModal.svelte';
+  import ToastContainer from '../components/ToastContainer.svelte';
   import { createAuthManager, type AuthState } from '$lib/authManager';
   import {
     stopMessageSubscription,
@@ -27,7 +28,8 @@
   import ErrorBoundary from '../components/ErrorBoundary.svelte';
   import OfflineIndicator from '../components/OfflineIndicator.svelte';
   import { theme } from '$lib/themeStore';
-  import { initializeWalletManager, walletConnected } from '$lib/wallet';
+  import { initializeWalletManager, walletConnected, clearAllWallets } from '$lib/wallet';
+  import { disconnectWallet as disconnectSparkWallet, clearAllSparkWallets } from '$lib/spark';
   import { loadOneTapZapSettings } from '$lib/autoZapSettings';
   import { weblnConnected } from '$lib/wallet/webln';
   import { bitcoinConnectEnabled, bitcoinConnectWalletInfo } from '$lib/wallet/bitcoinConnect';
@@ -246,6 +248,9 @@
           clearUnwrapCache();
           stopGroupSubscription();
           clearGroups();
+          disconnectSparkWallet().catch(() => {});
+          clearAllWallets();
+          clearAllSparkWallets();
         }
 
         if (browser && state.isAuthenticated && state.publicKey) {
@@ -262,7 +267,8 @@
           walletWelcomeForce = localStorage.getItem(WALLET_WELCOME_FORCE_KEY) === '1';
         }
 
-        if (browser && state.isAuthenticated && state.publicKey && !hasWallet) {
+        const isOnboardingFlow = $page.url.pathname.startsWith('/login') || $page.url.pathname.startsWith('/onboarding');
+        if (browser && state.isAuthenticated && state.publicKey && !hasWallet && !isOnboardingFlow) {
           if (walletWelcomeForce || !walletWelcomeSeen) {
             walletWelcomeOpen = true;
             if (walletWelcomeForce) {
@@ -304,6 +310,20 @@
       walletWelcomeForce = localStorage.getItem(WALLET_WELCOME_FORCE_KEY) === '1';
     }
   });
+
+  // Show wallet welcome after leaving login/onboarding (e.g. after suggested follows completes)
+  $: {
+    const onboardingFlow = $page.url.pathname.startsWith('/login') || $page.url.pathname.startsWith('/onboarding');
+    if (browser && !walletWelcomeOpen && !onboardingFlow && authState.isAuthenticated && !hasWallet) {
+      const forceFlag = localStorage.getItem(WALLET_WELCOME_FORCE_KEY) === '1';
+      if (forceFlag || !walletWelcomeSeen) {
+        walletWelcomeOpen = true;
+        if (forceFlag) {
+          localStorage.removeItem(WALLET_WELCOME_FORCE_KEY);
+        }
+      }
+    }
+  }
 
   $: if (walletWelcomeOpen && hasWallet) {
     markWalletWelcomeSeen();
@@ -371,6 +391,7 @@
       <PostModal bind:open={$postComposerOpen} />
       <LongformEditorModal />
       <WalletWelcomeModal bind:open={walletWelcomeOpen} onDismiss={markWalletWelcomeSeen} />
+      <ToastContainer />
     </div>
   </div>
 </ErrorBoundary>

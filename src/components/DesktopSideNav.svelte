@@ -2,26 +2,28 @@
   import { page } from '$app/stores';
   import { unreadCount } from '$lib/notificationStore';
   import { triggerNotificationsNav } from '$lib/notificationsNav';
+  import { triggerExploreNav } from '$lib/exploreNav';
+  import { goto } from '$app/navigation';
   import { theme } from '$lib/themeStore';
   import SVGNostrCookingWithText from '../assets/nostr.cooking-withtext.svg';
   import { walletConnected } from '$lib/wallet';
   import { weblnConnected } from '$lib/wallet/webln';
   import { bitcoinConnectEnabled, bitcoinConnectWalletInfo } from '$lib/wallet/bitcoinConnect';
 
-  import ChatCircleDotsIcon from 'phosphor-svelte/lib/ChatCircleDots';
   import ForkKnifeIcon from 'phosphor-svelte/lib/ForkKnife';
-  import CompassIcon from 'phosphor-svelte/lib/Compass';
+  import ChartBarHorizontalIcon from 'phosphor-svelte/lib/ChartBarHorizontal';
+  import FlameIcon from 'phosphor-svelte/lib/Flame';
   import BellIcon from 'phosphor-svelte/lib/Bell';
-  import NewspaperIcon from 'phosphor-svelte/lib/Newspaper';
   import EnvelopeSimpleIcon from 'phosphor-svelte/lib/EnvelopeSimple';
 
   import CookbookIcon from 'phosphor-svelte/lib/BookOpen';
-  import UsersThreeIcon from 'phosphor-svelte/lib/UsersThree';
   import ShoppingCartIcon from 'phosphor-svelte/lib/ShoppingCart';
   import WalletIcon from 'phosphor-svelte/lib/Wallet';
-
+  import CrownSimpleIcon from 'phosphor-svelte/lib/CrownSimple';
+  import HandshakeIcon from 'phosphor-svelte/lib/Handshake';
+  import StorefrontIcon from 'phosphor-svelte/lib/Storefront';
+  import LeafIcon from 'phosphor-svelte/lib/Leaf';
   import { totalUnreadCount } from '$lib/stores/messages';
-  import { totalGroupUnreadCount } from '$lib/stores/groups';
   import { userSidePanelOpen } from '$lib/stores/userSidePanel';
 
   $: pathname = $page.url.pathname;
@@ -37,15 +39,15 @@
     label: string;
     icon: any;
     match?: (path: string) => boolean;
-    badge?: 'notificationsDot' | 'walletConnect' | 'members' | 'messagesDot' | 'groupsDot';
+    badge?: 'notificationsDot' | 'walletConnect' | 'members' | 'messagesDot';
     external?: boolean;
   };
 
   const primary: NavItem[] = [
     {
       href: '/community',
-      label: 'Community',
-      icon: ChatCircleDotsIcon,
+      label: 'Feed',
+      icon: FlameIcon,
       match: (p) => p === '/' || p.startsWith('/community')
     },
     {
@@ -55,16 +57,16 @@
       match: (p) => p.startsWith('/recent')
     },
     {
-      href: '/explore',
-      label: 'Explore',
-      icon: CompassIcon,
-      match: (p) => p.startsWith('/explore')
+      href: '/polls',
+      label: 'Polls',
+      icon: ChartBarHorizontalIcon,
+      match: (p) => p.startsWith('/polls')
     },
     {
-      href: '/reads',
-      label: 'Reads',
-      icon: NewspaperIcon,
-      match: (p) => p.startsWith('/reads')
+      href: '/market',
+      label: 'Market',
+      icon: StorefrontIcon,
+      match: (p) => p.startsWith('/market') || p.startsWith('/my-store')
     },
     {
       href: '/notifications',
@@ -72,13 +74,6 @@
       icon: BellIcon,
       match: (p) => p.startsWith('/notifications'),
       badge: 'notificationsDot'
-    },
-    {
-      href: '/groups',
-      label: 'Groups',
-      icon: UsersThreeIcon,
-      match: (p) => p.startsWith('/groups'),
-      badge: 'groupsDot'
     },
     {
       href: '/messages',
@@ -108,6 +103,24 @@
       icon: WalletIcon,
       match: (p) => p.startsWith('/wallet'),
       badge: 'walletConnect'
+    },
+    {
+      href: '/nourish',
+      label: 'Nourish',
+      icon: LeafIcon,
+      match: (p) => p.startsWith('/nourish')
+    },
+    {
+      href: '/membership',
+      label: 'Membership',
+      icon: CrownSimpleIcon,
+      match: (p) => p.startsWith('/membership')
+    },
+    {
+      href: '/sponsors',
+      label: 'Sponsors',
+      icon: HandshakeIcon,
+      match: (p) => p.startsWith('/sponsors')
     }
   ];
 
@@ -119,7 +132,7 @@
       'items-center',
       'gap-3',
       'px-3',
-      'py-2.5',
+      'py-1.5',
       'rounded-xl',
       'transition-colors',
       'cursor-pointer',
@@ -129,9 +142,16 @@
 
   function handleNotificationsClick(event: MouseEvent, isActive: boolean) {
     triggerNotificationsNav();
-    // If we're already on the page, prevent navigation and just refresh/scroll
     if (isActive) {
       event.preventDefault();
+    }
+  }
+
+  function handleLogoClick() {
+    if ($page.url.pathname === '/explore') {
+      triggerExploreNav();
+    } else {
+      goto('/explore');
     }
   }
 
@@ -142,16 +162,24 @@
   class:opacity-0={$userSidePanelOpen}
   class:pointer-events-none={$userSidePanelOpen}
 >
-  <div class="h-full overflow-y-auto p-3" style="background-color: var(--color-bg-primary);">
+  <div class="h-full overflow-y-auto scrollbar-hide p-3" style="background-color: var(--color-bg-primary);">
     <!-- Logo aligned with header position -->
-    <a href="/community" class="block pl-2 py-3">
+    <button
+      on:click={handleLogoClick}
+      class="block pl-2 py-2 cursor-pointer transition-transform duration-150 active:scale-95 active:opacity-80"
+    >
       <img
-        src={isDarkMode ? '/zap_cooking_logo_white.svg' : SVGNostrCookingWithText}
-        class="w-40"
+        src={SVGNostrCookingWithText}
+        class="logo-light w-40 dark:hidden"
         alt="Zap Cooking"
       />
-    </a>
-    <nav class="flex flex-col gap-4 mt-4">
+      <img
+        src="/zap_cooking_logo_white.svg"
+        class="logo-dark w-40 hidden dark:block"
+        alt="Zap Cooking"
+      />
+    </button>
+    <nav class="flex flex-col gap-3 mt-3">
       <div>
         <h3
           class="px-3 pb-2 font-semibold uppercase tracking-wider"
@@ -178,7 +206,7 @@
                   <svelte:component
                     this={item.icon}
                     size={20}
-                    weight={(item.href === '/notifications' && $unreadCount > 0) || (item.href === '/messages' && $totalUnreadCount > 0) || (item.href === '/groups' && $totalGroupUnreadCount > 0) ? 'fill' : 'regular'}
+                    weight={(item.href === '/notifications' && $unreadCount > 0) || (item.href === '/messages' && $totalUnreadCount > 0) ? 'fill' : 'regular'}
                   />
                   {#if item.badge === 'notificationsDot' && $unreadCount > 0}
                     <span
@@ -188,13 +216,6 @@
                     ></span>
                   {/if}
                   {#if item.badge === 'messagesDot' && $totalUnreadCount > 0}
-                    <span
-                      class="absolute top-1.5 right-1.5 w-2.5 h-2.5 rounded-full bg-red-500 border-2"
-                      style="border-color: var(--color-bg-primary);"
-                      aria-hidden="true"
-                    ></span>
-                  {/if}
-                  {#if item.badge === 'groupsDot' && $totalGroupUnreadCount > 0}
                     <span
                       class="absolute top-1.5 right-1.5 w-2.5 h-2.5 rounded-full bg-red-500 border-2"
                       style="border-color: var(--color-bg-primary);"
@@ -217,7 +238,7 @@
         </ul>
       </div>
 
-      <div class="mt-2">
+      <div class="mt-1">
         <h3
           class="px-3 pb-2 font-semibold uppercase tracking-wider"
           style="color: var(--color-caption); font-size: 12px;"

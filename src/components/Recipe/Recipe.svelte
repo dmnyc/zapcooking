@@ -1,5 +1,6 @@
 <script lang="ts">
   import { NDKEvent } from '@nostr-dev-kit/ndk';
+  import { browser } from '$app/environment';
   import TagLinks from './TagLinks.svelte';
   import { ndk, userPublickey } from '$lib/nostr';
   import BookmarkIcon from 'phosphor-svelte/lib/BookmarkSimple';
@@ -30,7 +31,7 @@
   import TotalComments from './TotalComments.svelte';
   import { getPlaceholderImage } from '$lib/placeholderImages';
   import NoteRepost from '../NoteRepost.svelte';
-  import Comments from '../Comments.svelte';
+  import CommentThread from '../comments/CommentThread.svelte';
   import RecipeReactionPills from './RecipeReactionPills.svelte';
   import TopZappers from './TopZappers.svelte';
   import ZapModal from '../ZapModal.svelte';
@@ -45,16 +46,23 @@
     RECIPE_TAGS,
     RECIPE_TAG_PREFIX_NEW
   } from '$lib/consts';
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { resolveProfileByPubkey } from '$lib/profileResolver';
   import { buildCanonicalRecipeShareUrl } from '$lib/utils/share';
   import DirectionsPhases from './DirectionsPhases.svelte';
+  import Ingredients from './Ingredients.svelte';
   import AddToListModal from '../grocery/AddToListModal.svelte';
   import PrintRecipeModal from './PrintRecipeModal.svelte';
   import GatedRecipePayment from '../GatedRecipePayment.svelte';
   import { checkIfGated, backfillGatedRecipe } from '$lib/nip108/client';
   import type { GatedRecipeMetadata } from '$lib/nip108/types';
   import { GATED_RECIPE_KIND } from '$lib/consts';
+  import LeafIcon from 'phosphor-svelte/lib/Leaf';
+  import NourishModal from '../nourish/NourishModal.svelte';
+  import NourishPill from '../nourish/NourishPill.svelte';
+  import { fetchNourishEvent } from '$lib/nourish/nourishRelay';
+  import { getNourishCache } from '$lib/nourish/cache';
+  import { membershipStatusMap, queueMembershipLookup, type MembershipStatus } from '$lib/stores/membershipStatus';
 
   export let event: NDKEvent;
   export let isPremium = false;
@@ -80,6 +88,62 @@
   let deleteConfirmOpen = false;
   let isDeleting = false;
   let isEditingRecipe = false;
+  let nourishModalOpen = false;
+  let nourishPreviewScore: number | null = null;
+  let nourishGut: number | null = null;
+  let nourishProtein: number | null = null;
+  let nourishRealFood: number | null = null;
+
+  // Load Nourish score preview (non-blocking, client-only)
+  let lastNourishEventId: string | null = null;
+
+  $: if (browser && event && isActualRecipe) {
+    loadNourishPreview();
+  }
+
+  function applyNourishScores(scores: import('$lib/nourish/types').NourishScores) {
+    nourishPreviewScore = scores.overall.score;
+    nourishGut = scores.gut.score;
+    nourishProtein = scores.protein.score;
+    nourishRealFood = scores.realFood.score;
+  }
+
+  function loadNourishPreview() {
+    // Reset when event changes (e.g., recipe prop swap) to avoid showing stale scores
+    if (lastNourishEventId !== event.id) {
+      lastNourishEventId = event.id;
+      nourishPreviewScore = null;
+      nourishGut = null;
+      nourishProtein = null;
+      nourishRealFood = null;
+    }
+
+    const targetEventId = event.id;
+
+    // Check localStorage first (instant)
+    const cached = getNourishCache(targetEventId);
+    if (cached) {
+      applyNourishScores(cached.scores);
+      return;
+    }
+    // Check relay in background
+    const recipePubkey = event.author?.hexpubkey || event.pubkey;
+    const recipeDTag = event.tags.find((t: string[]) => t[0] === 'd')?.[1] || '';
+    if (recipePubkey && recipeDTag && $ndk) {
+      fetchNourishEvent($ndk, recipePubkey, recipeDTag).then((result) => {
+        // Ignore stale result if event changed while fetching
+        if (event.id !== targetEventId) return;
+        if (result) applyNourishScores(result.scores);
+      }).catch(() => {});
+    }
+  }
+
+  // Membership check for Nourish
+  let membershipMap: Record<string, MembershipStatus> = {};
+  const unsubMembership = membershipStatusMap.subscribe((v) => { membershipMap = v; });
+  $: if ($userPublickey) queueMembershipLookup($userPublickey);
+  $: normalizedPk = String($userPublickey || '').trim().toLowerCase();
+  $: hasMembership = Boolean(membershipMap[normalizedPk]?.active);
 
   // Check if current user owns this recipe
   $: isOwner = $userPublickey && $userPublickey === event.author.pubkey;
@@ -89,6 +153,8 @@
   $: isActualRecipe =
     event &&
     event.tags.some((tag) => tag[0] === 't' && RECIPE_TAGS.includes(tag[1]?.toLowerCase() || ''));
+
+  onDestroy(() => { unsubMembership(); });
 
   // Gated recipe state
   let gatedMetadata: GatedRecipeMetadata | null = null;
@@ -544,12 +610,32 @@
     // Match "## Details" followed by content until next "##" heading or end
     const detailsSectionRegex = /## Details\s*\n[\s\S]*?(?=\n## |$)/i;
     if (detailsSectionRegex.test(beforeDirections)) {
-      markdownBeforeDirections = beforeDirections.replace(detailsSectionRegex, '').trim();
+      beforeDirections = beforeDirections.replace(detailsSectionRegex, '').trim();
+    }
+
+    // Extract the Ingredients list so it can render as a checkbox component
+    // outside the prose markdown. Strip the section from the prose-rendered
+    // chunk so we don't get a duplicate bullet list.
+    const ingredientsSectionRegex = /## Ingredients\s*\n([\s\S]*?)(?=\n## |$)/i;
+    const ingredientsMatch = beforeDirections.match(ingredientsSectionRegex);
+    if (ingredientsMatch) {
+      const items: string[] = [];
+      const lines = ingredientsMatch[1].split('\n');
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('- ')) items.push(trimmed.substring(2).trim());
+        else if (trimmed.startsWith('* ')) items.push(trimmed.substring(2).trim());
+        else if (trimmed && !trimmed.startsWith('#')) items.push(trimmed);
+      }
+      ingredientItems = items;
+      markdownBeforeDirections = beforeDirections.replace(ingredientsSectionRegex, '').trim();
     } else {
+      ingredientItems = [];
       markdownBeforeDirections = beforeDirections;
     }
   }
 
+  let ingredientItems: string[] = [];
   let markdownBeforeDirections = '';
   let markdownAfterDirections = '';
 
@@ -577,6 +663,9 @@
   {recipeDetails}
   {directionsPhases}
 />
+
+<!-- Nourish Modal -->
+<NourishModal bind:open={nourishModalOpen} {event} {hasMembership} />
 
 <!-- Delete Confirmation Modal -->
 <Modal bind:open={deleteConfirmOpen} noHeader>
@@ -774,6 +863,7 @@
               {/if}
             </button>
           </div>
+          <div class="flex items-center gap-2">
           <!-- 3-dot menu for recipe actions -->
           <div class="relative">
             <button
@@ -845,6 +935,17 @@
                   <PrinterIcon size={18} />
                   Print
                 </button>
+                <button
+                  class="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm hover:bg-accent-gray transition-colors"
+                  style="color: var(--color-text-primary);"
+                  on:click={() => {
+                    menuOpen = false;
+                    goto(`/boost?recipe=${computedNaddr}`);
+                  }}
+                >
+                  <LightningIcon size={18} />
+                  Boost this recipe
+                </button>
                 {#if isOwner}
                   <hr class="my-1 border-t" style="border-color: var(--color-input-border);" />
                   <button
@@ -860,6 +961,7 @@
                 {/if}
               </div>
             {/if}
+          </div>
           </div>
         </div>
       </div>
@@ -887,16 +989,9 @@
           }
         }}
         scrollToIngredients={() => {
-          // Try to find Ingredients section and scroll to it
           setTimeout(() => {
-            const headings = document.querySelectorAll('article .prose h2');
-            for (const heading of headings) {
-              const text = heading.textContent?.trim().toLowerCase();
-              if (text === 'ingredients') {
-                heading.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                break;
-              }
-            }
+            const el = document.getElementById('ingredients-section');
+            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
           }, 100);
         }}
       />
@@ -906,6 +1001,29 @@
         <p class="text-lg text-caption leading-relaxed whitespace-pre-line">
           {event.tags.find((e) => e[0] === 'summary')?.[1]}
         </p>
+      {/if}
+
+      <!-- Nourish Section — recipe intelligence, part of the recipe body -->
+      {#if isActualRecipe}
+        <div class="nourish-section print:hidden">
+          {#if nourishPreviewScore !== null}
+            <NourishPill
+              overall={nourishPreviewScore}
+              gut={nourishGut}
+              protein={nourishProtein}
+              realFood={nourishRealFood}
+              onClick={() => { nourishModalOpen = true; }}
+            />
+          {:else}
+            <button
+              class="nourish-empty-prompt"
+              on:click={() => { nourishModalOpen = true; }}
+            >
+              <LeafIcon size={16} weight="regular" />
+              <span>Nourish — explore this recipe's profile</span>
+            </button>
+          {/if}
+        </div>
       {/if}
 
       <!-- Content before Directions -->
@@ -944,9 +1062,15 @@
         </div>
       {/if}
 
-      <!-- Collapsible Directions -->
+      <!-- Ingredients with checkboxes — persisted per recipe so checks
+           survive reloads while cooking -->
+      {#if ingredientItems.length > 0}
+        <Ingredients items={ingredientItems} recipeId={event.id} />
+      {/if}
+
+      <!-- Directions with checkboxes -->
       {#if directionsPhases.length > 0}
-        <DirectionsPhases phases={directionsPhases} />
+        <DirectionsPhases phases={directionsPhases} recipeId={event.id} />
       {/if}
 
       <!-- Content after Directions -->
@@ -984,7 +1108,7 @@
           {/if}
         </div>
       {/if}
-      <Comments {event} />
+      <CommentThread variant="recipe" {event} />
     </div>
 
     <!-- Image Lightbox Modal -->
@@ -1084,6 +1208,33 @@
 </article>
 
 <style>
+  /* Nourish section — sits in recipe body between summary and ingredients */
+  .nourish-section {
+    padding: 0.5rem 0;
+  }
+
+  /* Empty state — subtle prompt for un-analyzed recipes */
+  .nourish-empty-prompt {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.375rem 0.75rem;
+    border-radius: 9999px;
+    border: 1px dashed var(--color-input-border, rgba(255, 255, 255, 0.1));
+    background: transparent;
+    color: var(--color-text-secondary);
+    opacity: 0.5;
+    font-size: 0.75rem;
+    font-family: inherit;
+    cursor: pointer;
+    transition: opacity 150ms, border-color 150ms, color 150ms;
+  }
+  .nourish-empty-prompt:hover {
+    opacity: 1;
+    border-color: rgba(34, 197, 94, 0.3);
+    color: #22c55e;
+  }
+
   /* Dark mode support for prose content */
   :global(.prose) {
     color: var(--color-text-primary);

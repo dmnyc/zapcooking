@@ -3,16 +3,23 @@
 	import { goto } from '$app/navigation';
 	import { ndk, userPublickey } from '$lib/nostr';
 	import { publishProduct } from '$lib/marketplace/products';
+	import { fetchKitchenByPubkey } from '$lib/marketplace/kitchens';
 	import type { ProductFormData } from '$lib/marketplace/types';
+	import type { CurrencyCode } from '$lib/currencyStore';
 	import ProductForm from '../../../components/marketplace/ProductForm.svelte';
+	import SellerAcknowledgmentModal from '../../../components/marketplace/SellerAcknowledgmentModal.svelte';
 	import PanLoader from '../../../components/PanLoader.svelte';
 	import ArrowLeftIcon from 'phosphor-svelte/lib/ArrowLeft';
 	import LockIcon from 'phosphor-svelte/lib/Lock';
 
+	const SELLER_ACK_KEY = 'zc_seller_ack';
+
 	let checkingMembership = true;
 	let hasActiveMembership = false;
+	let needsAcknowledgment = false;
 	let isSubmitting = false;
 	let error: string | null = null;
+	let storeCurrency: CurrencyCode = 'USD';
 
 	onMount(async () => {
 		// Check if logged in
@@ -23,6 +30,23 @@
 
 		// Check membership status
 		await checkMembership();
+
+		// Check if seller has already acknowledged marketplace terms
+		if (hasActiveMembership) {
+			const ack = localStorage.getItem(SELLER_ACK_KEY);
+			if (!ack) {
+				needsAcknowledgment = true;
+			}
+			// Fetch store's default currency
+			try {
+				const kitchen = await fetchKitchenByPubkey($ndk, $userPublickey);
+				if (kitchen?.defaultCurrency) {
+					storeCurrency = kitchen.defaultCurrency;
+				}
+			} catch {
+				// Non-critical — default to USD
+			}
+		}
 	});
 
 	async function checkMembership() {
@@ -118,6 +142,13 @@
 		</div>
 
 	<!-- Has membership - show form -->
+	{:else if needsAcknowledgment}
+		<SellerAcknowledgmentModal on:accept={() => {
+			const record = JSON.stringify({ npub: $userPublickey, timestamp: Date.now() });
+			localStorage.setItem(SELLER_ACK_KEY, record);
+			needsAcknowledgment = false;
+		}} />
+
 	{:else}
 		{#if error}
 			<div class="mb-6 p-4 rounded-xl bg-red-500/10 border border-red-500/30">
@@ -127,6 +158,7 @@
 
 		<ProductForm
 			{isSubmitting}
+			defaultCurrency={storeCurrency}
 			on:submit={handleSubmit}
 			on:cancel={handleCancel}
 		/>
