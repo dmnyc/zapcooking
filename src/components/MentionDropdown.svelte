@@ -15,7 +15,7 @@
 </script>
 
 <script lang="ts">
-	import { createEventDispatcher } from 'svelte';
+	import { createEventDispatcher, onMount, tick } from 'svelte';
 	import CustomAvatar from './CustomAvatar.svelte';
 	import type { MentionSuggestion } from '$lib/mentionComposer';
 
@@ -27,34 +27,134 @@
 
 	const dispatch = createEventDispatcher<{ select: MentionSuggestion }>();
 
-	// Capture caret viewport position when dropdown opens
 	let fixedTop = 0;
 	let fixedLeft = 0;
+	let fixedMaxHeight = 240;
+	let dropdownEl: HTMLDivElement;
 
-	$: if (show) {
+	const GAP = 4;
+	const MARGIN = 8;
+	const DEFAULT_HEIGHT = 220;
+	const DEFAULT_WIDTH = 280;
+	const MOBILE_BREAKPOINT = 640;
+
+	function findEditable(node: Node | null | undefined): HTMLElement | null {
+		if (!node) return null;
+		const el = node.nodeType === Node.ELEMENT_NODE ? (node as HTMLElement) : node.parentElement;
+		return el?.closest?.('[contenteditable="true"], [contenteditable=""]') ?? null;
+	}
+
+	function computePosition() {
+		if (!show || !dropdownEl) return;
 		const sel = window.getSelection();
-		if (sel && sel.rangeCount) {
-			const rect = sel.getRangeAt(0).getBoundingClientRect();
-			if (rect.height > 0) {
-				fixedTop = rect.bottom + 4;
-				fixedLeft = rect.left;
-			} else {
-				const parentRect = sel.anchorNode?.parentElement?.getBoundingClientRect();
-				fixedTop = (parentRect?.bottom ?? 0) + 4;
-				fixedLeft = parentRect?.left ?? 0;
+		if (!sel || !sel.rangeCount) return;
+
+		let caretRect = sel.getRangeAt(0).getBoundingClientRect();
+		if (caretRect.height === 0) {
+			const parentRect = sel.anchorNode?.parentElement?.getBoundingClientRect();
+			if (!parentRect) return;
+			caretRect = parentRect;
+		}
+
+		const vv = window.visualViewport;
+		const vpTop = vv?.offsetTop ?? 0;
+		const vpLeft = vv?.offsetLeft ?? 0;
+		const vpHeight = vv?.height ?? window.innerHeight;
+		const vpWidth = vv?.width ?? window.innerWidth;
+		const vpBottom = vpTop + vpHeight;
+		const vpRight = vpLeft + vpWidth;
+
+		const isMobile = vpWidth <= MOBILE_BREAKPOINT;
+
+		// Anchor the dropdown to the containing contenteditable on mobile so
+		// it appears below the input element rather than in the middle of its
+		// unused vertical space — keeps the text the user is typing visible.
+		let anchorBottom = caretRect.bottom;
+		let anchorTop = caretRect.top;
+		let anchorLeft = caretRect.left;
+
+		if (isMobile) {
+			const editable = findEditable(sel.anchorNode);
+			if (editable) {
+				const rect = editable.getBoundingClientRect();
+				anchorBottom = rect.bottom;
+				anchorTop = rect.top;
+				anchorLeft = rect.left;
 			}
 		}
+
+		const height = dropdownEl.offsetHeight || DEFAULT_HEIGHT;
+		const width = dropdownEl.offsetWidth || DEFAULT_WIDTH;
+
+		const spaceBelow = vpBottom - anchorBottom - GAP - MARGIN;
+		const spaceAbove = anchorTop - vpTop - GAP - MARGIN;
+
+		// Prefer below, but flip above when below doesn't fit and above has
+		// more room (common on mobile when the keyboard is open and the
+		// caret sits near the bottom of the visual viewport).
+		let top: number;
+		let available: number;
+		if (spaceBelow >= Math.min(height, DEFAULT_HEIGHT) || spaceBelow >= spaceAbove) {
+			top = anchorBottom + GAP;
+			available = Math.max(120, spaceBelow);
+		} else {
+			const usedHeight = Math.min(height || DEFAULT_HEIGHT, Math.max(120, spaceAbove));
+			top = Math.max(vpTop + MARGIN, anchorTop - GAP - usedHeight);
+			available = Math.max(120, spaceAbove);
+		}
+
+		let left = anchorLeft;
+		if (left + width > vpRight - MARGIN) {
+			left = vpRight - width - MARGIN;
+		}
+		if (left < vpLeft + MARGIN) {
+			left = vpLeft + MARGIN;
+		}
+
+		fixedTop = top;
+		fixedLeft = left;
+		fixedMaxHeight = available;
 	}
+
+	async function schedulePosition() {
+		await tick();
+		computePosition();
+	}
+
+	// Recompute when dropdown opens or its size changes (new suggestions,
+	// searching indicator, etc.) — each of these can grow/shrink the
+	// dropdown and change whether "below" still fits.
+	$: if (show) {
+		void suggestions;
+		void searching;
+		void query;
+		schedulePosition();
+	}
+
+	onMount(() => {
+		const handler = () => {
+			if (show) computePosition();
+		};
+		window.addEventListener('resize', handler);
+		window.visualViewport?.addEventListener('resize', handler);
+		window.visualViewport?.addEventListener('scroll', handler);
+		return () => {
+			window.removeEventListener('resize', handler);
+			window.visualViewport?.removeEventListener('resize', handler);
+			window.visualViewport?.removeEventListener('scroll', handler);
+		};
+	});
 </script>
 
 {#if show}
 	<div
+		bind:this={dropdownEl}
 		use:portal
 		class="mention-dropdown"
-		style="border-color: var(--color-input-border); top: {fixedTop}px; left: {fixedLeft}px;"
+		style="border-color: var(--color-input-border); top: {fixedTop}px; left: {fixedLeft}px; max-height: {fixedMaxHeight}px;"
 	>
 		{#if suggestions.length > 0}
-			<div class="mention-dropdown-content">
+			<div class="mention-dropdown-content" style="max-height: {Math.max(80, fixedMaxHeight - 8)}px;">
 				{#each suggestions as suggestion, index}
 					<button
 						type="button"
