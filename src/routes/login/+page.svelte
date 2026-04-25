@@ -14,6 +14,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { DEFAULT_PROFILE_IMAGE } from '$lib/consts';
   import { theme } from '$lib/themeStore';
+  import { showToast } from '$lib/toast';
   import { platformIsIOS } from '$lib/platform';
   import LoginFormIOS from '../../components/LoginFormIOS.svelte';
   import SuggestedFollowsModal from '../../components/SuggestedFollowsModal.svelte';
@@ -304,9 +305,13 @@
     }
   }
 
-  function copyToClipboard(text: string) {
-    if (browser) {
-      navigator.clipboard.writeText(text);
+  async function copyToClipboard(text: string) {
+    if (!browser) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast('success', 'Link copied to clipboard');
+    } catch (err) {
+      showToast('error', "Couldn't copy link — please try again.");
     }
   }
 
@@ -497,6 +502,13 @@
     <svelte:fragment slot="title">🔑 Log in with Private Key</svelte:fragment>
     <div class="flex flex-col gap-4">
       <div class="text-sm text-caption">Enter your private key (nsec1...) or hex format</div>
+      <div class="bg-input border rounded-lg p-3" style="border-color: var(--color-input-border)">
+        <p class="text-sm text-caption">
+          🔒 Your key stays on this device — it's stored locally in your browser and never sent to
+          our servers. Keep your own backup copy somewhere safe; if you lose it, no one can recover
+          it for you.
+        </p>
+      </div>
       <input
         bind:value={nsecInput}
         placeholder="nsec1..."
@@ -614,10 +626,26 @@
         <div class="flex flex-col items-center gap-4">
           <!-- QR Code - Centered with proper padding -->
           <div
-            class="bg-white rounded-lg qr-container"
+            class="bg-white rounded-lg qr-container relative"
             style="--qr-size: 280px; --qr-padding: 16px;"
           >
             <QRCode value={nip46PairingUri} size={248} padding={null} />
+            <!-- Center: pan icon on the QR, fades into the pattern -->
+            <div
+              class="absolute inset-0 flex items-center justify-center m-auto rounded-full pointer-events-none"
+              style="
+                width: 56px; height: 56px;
+                background: radial-gradient(circle at center, #ffffff 0%, rgba(255,255,255,0.92) 40%, rgba(255,255,255,0.4) 65%, transparent 85%);
+              "
+            >
+              <img
+                src="/pan-qr-center.svg"
+                alt=""
+                class="block"
+                style="width: 44px; height: 44px; object-fit: contain;"
+                role="presentation"
+              />
+            </div>
           </div>
 
           <!-- Status -->

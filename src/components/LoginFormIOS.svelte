@@ -370,6 +370,13 @@
   <svelte:fragment slot="title">🔑 Log in with Private Key</svelte:fragment>
   <div class="flex flex-col gap-4">
     <div class="text-sm text-caption">Enter your private key (nsec1...) or hex format</div>
+    <div class="bg-input border rounded-lg p-3" style="border-color: var(--color-input-border)">
+      <p class="text-sm text-caption">
+        🔒 Your key stays on this device — it's stored locally in your browser and never sent to
+        our servers. Keep your own backup copy somewhere safe; if you lose it, no one can recover
+        it for you.
+      </p>
+    </div>
     <input
       bind:value={nsecInput}
       placeholder="nsec1..."
