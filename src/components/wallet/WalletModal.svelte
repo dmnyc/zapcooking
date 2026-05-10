@@ -2,11 +2,17 @@
   import Modal from '../Modal.svelte';
   import WalletPanel from './WalletPanel.svelte';
   import { walletModalOpen, closeWallet } from '$lib/wallet/walletModalStore';
+  import { weblnConnected } from '$lib/wallet/webln';
+  import { bitcoinConnectEnabled } from '$lib/wallet/bitcoinConnect';
+
+  // WebLN and Bitcoin Connect views have less content (no transaction
+  // list, no Send/Receive flow) — shrink the modal accordingly.
+  $: externalWallet = $weblnConnected || $bitcoinConnectEnabled;
 </script>
 
 <Modal bind:open={$walletModalOpen} cleanup={closeWallet} compact>
   <span slot="title" />
-  <div class="wallet-modal-body">
+  <div class="wallet-modal-body" class:wallet-modal-body--external={externalWallet}>
     {#if $walletModalOpen}
       <WalletPanel />
     {/if}
@@ -91,6 +97,39 @@
       width: 720px !important;
       height: 780px !important;
       max-height: min(840px, 86vh) !important;
+    }
+  }
+  /* External-wallet mode (WebLN, Bitcoin Connect): just balance +
+     connection card. Sized to fit that content with a little room. */
+  :global(dialog:has(.wallet-modal-body--external)) {
+    height: 380px !important;
+  }
+  @media (min-width: 768px) {
+    :global(dialog:has(.wallet-modal-body--external)) {
+      height: 420px !important;
+    }
+  }
+  @media (min-width: 1024px) {
+    :global(dialog:has(.wallet-modal-body--external)) {
+      height: 460px !important;
+      max-height: min(520px, 86vh) !important;
+    }
+  }
+  /* Connect-step sub-screens inside the picker (NWC connect, Spark
+     create / restore options). Slightly taller than external since
+     they have an input + primary button + restore section. */
+  :global(dialog:has(.picker-view--connect-step)) {
+    height: 480px !important;
+  }
+  @media (min-width: 768px) {
+    :global(dialog:has(.picker-view--connect-step)) {
+      height: 520px !important;
+    }
+  }
+  @media (min-width: 1024px) {
+    :global(dialog:has(.picker-view--connect-step)) {
+      height: 560px !important;
+      max-height: min(620px, 86vh) !important;
     }
   }
   /* Body extends horizontally past the inner wrapper's padding so it

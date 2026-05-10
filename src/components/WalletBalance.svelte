@@ -34,14 +34,13 @@
     disableBitcoinConnect
   } from '$lib/wallet/bitcoinConnect';
   import LightningIcon from 'phosphor-svelte/lib/Lightning';
-  import WalletIcon from 'phosphor-svelte/lib/Wallet';
-  import ArrowsClockwiseIcon from 'phosphor-svelte/lib/ArrowsClockwise';
-  import GearIcon from 'phosphor-svelte/lib/Gear';
+  import ArrowClockwiseIcon from 'phosphor-svelte/lib/ArrowClockwise';
   import SignOutIcon from 'phosphor-svelte/lib/SignOut';
   import CaretDownIcon from 'phosphor-svelte/lib/CaretDown';
+  import CaretRightIcon from 'phosphor-svelte/lib/CaretRight';
   import CheckIcon from 'phosphor-svelte/lib/Check';
   import EyeIcon from 'phosphor-svelte/lib/Eye';
-  import EyeSlashIcon from 'phosphor-svelte/lib/EyeSlash';
+  import EyeClosedIcon from 'phosphor-svelte/lib/EyeClosed';
   import SparkLogo from './icons/SparkLogo.svelte';
   import NwcLogo from './icons/NwcLogo.svelte';
   import WeblnLogo from './icons/WeblnLogo.svelte';
@@ -166,24 +165,17 @@
           class="flex flex-col gap-3 bg-input rounded-2xl drop-shadow px-4 py-4 min-w-[220px] max-w-[280px]"
           style="color: var(--color-text-primary)"
         >
-          <!-- Current wallet info -->
+          <!-- Current wallet — pill button that opens the wallet modal -->
           <button
-            class="flex items-center gap-2 pb-2 border-b w-full text-left hover:opacity-80 transition-opacity cursor-pointer"
-            style="border-color: var(--color-input-border);"
+            class="wallet-name-pill flex items-center justify-between gap-2 w-full px-4 py-2 rounded-full text-left transition-colors cursor-pointer"
+            style="background-color: var(--color-bg-secondary); border: 1px solid var(--color-input-border);"
             on:click={() => {
               dropdownActive = false;
               openWallet();
             }}
           >
-            <div
-              class="w-5 h-5 rounded-full bg-gradient-to-br from-orange-500 to-amber-500 flex items-center justify-center flex-shrink-0"
-            >
-              <WeblnLogo size={12} className="text-white" />
-            </div>
-            <div class="flex-1 min-w-0">
-              <div class="font-medium text-sm truncate">{$weblnWalletName || 'Browser Wallet'}</div>
-              <div class="text-xs text-caption">WebLN</div>
-            </div>
+            <span class="font-medium text-sm truncate">{$weblnWalletName || 'Browser Wallet'}</span>
+            <CaretRightIcon size={14} class="text-caption flex-shrink-0" />
           </button>
 
           <!-- Actions -->
@@ -192,10 +184,10 @@
             on:click={toggleBalanceVisibility}
           >
             {#if $balanceVisible}
-              <EyeSlashIcon size={16} />
+              <EyeClosedIcon size={18} weight="bold" />
               Hide Balance
             {:else}
-              <EyeIcon size={16} />
+              <EyeIcon size={18} weight="bold" />
               Show Balance
             {/if}
           </button>
@@ -206,20 +198,9 @@
             disabled={weblnBalanceLoading}
           >
             <span class:animate-spin={weblnBalanceLoading}>
-              <ArrowsClockwiseIcon size={16} />
+              <ArrowClockwiseIcon size={18} weight="bold" />
             </span>
             Refresh Balance
-          </button>
-
-          <button
-            class="flex items-center gap-2 text-sm hover:text-primary transition-colors cursor-pointer"
-            on:click={() => {
-              dropdownActive = false;
-              openWallet();
-            }}
-          >
-            <GearIcon size={16} />
-            Wallet Settings
           </button>
 
           <div class="border-t" style="border-color: var(--color-input-border);"></div>
@@ -279,26 +260,19 @@
           class="flex flex-col gap-3 bg-input rounded-2xl drop-shadow px-4 py-4 min-w-[220px] max-w-[280px]"
           style="color: var(--color-text-primary)"
         >
-          <!-- Current wallet info -->
+          <!-- Current wallet — pill button that opens the wallet modal -->
           <button
-            class="flex items-center gap-2 pb-2 border-b w-full text-left hover:opacity-80 transition-opacity cursor-pointer"
-            style="border-color: var(--color-input-border);"
+            class="wallet-name-pill flex items-center justify-between gap-2 w-full px-4 py-2 rounded-full text-left transition-colors cursor-pointer"
+            style="background-color: var(--color-bg-secondary); border: 1px solid var(--color-input-border);"
             on:click={() => {
               dropdownActive = false;
               openWallet();
             }}
           >
-            <div
-              class="w-5 h-5 rounded-full bg-gradient-to-br from-yellow-500 to-orange-500 flex items-center justify-center flex-shrink-0"
-            >
-              <BitcoinConnectLogo size={12} className="text-white" />
-            </div>
-            <div class="flex-1 min-w-0">
-              <div class="font-medium text-sm truncate">
-                {$bitcoinConnectWalletInfo.alias || 'Bitcoin Connect'}
-              </div>
-              <div class="text-xs text-caption">External Wallet</div>
-            </div>
+            <span class="font-medium text-sm truncate">
+              {$bitcoinConnectWalletInfo.alias || 'Bitcoin Connect'}
+            </span>
+            <CaretRightIcon size={14} class="text-caption flex-shrink-0" />
           </button>
 
           <!-- Actions -->
@@ -307,10 +281,10 @@
             on:click={toggleBalanceVisibility}
           >
             {#if $balanceVisible}
-              <EyeSlashIcon size={16} />
+              <EyeClosedIcon size={18} weight="bold" />
               Hide Balance
             {:else}
-              <EyeIcon size={16} />
+              <EyeIcon size={18} weight="bold" />
               Show Balance
             {/if}
           </button>
@@ -321,20 +295,9 @@
             disabled={$bitcoinConnectBalanceLoading}
           >
             <span class:animate-spin={$bitcoinConnectBalanceLoading}>
-              <ArrowsClockwiseIcon size={16} />
+              <ArrowClockwiseIcon size={18} weight="bold" />
             </span>
             Refresh Balance
-          </button>
-
-          <button
-            class="flex items-center gap-2 text-sm hover:text-primary transition-colors cursor-pointer"
-            on:click={() => {
-              dropdownActive = false;
-              openWallet();
-            }}
-          >
-            <GearIcon size={16} />
-            Wallet Settings
           </button>
 
           <div class="border-t" style="border-color: var(--color-input-border);"></div>
@@ -385,20 +348,21 @@
           style="color: var(--color-text-primary)"
         >
           <!-- Current wallet info (clickable to open wallet page) -->
+          <!-- Current wallet — pill button that opens the wallet modal -->
           <button
-            class="flex items-center gap-2 pb-2 border-b w-full text-left hover:opacity-80 transition-opacity cursor-pointer"
-            style="border-color: var(--color-input-border);"
+            class="wallet-name-pill flex items-center justify-between gap-2 w-full px-4 py-2 rounded-full text-left transition-colors cursor-pointer"
+            style="background-color: var(--color-bg-secondary); border: 1px solid var(--color-input-border);"
             on:click={goToWallet}
           >
-            <WalletIcon size={18} class="text-amber-500 flex-shrink-0" />
-            <div class="flex-1 min-w-0">
-              <div class="font-medium text-sm truncate">{$activeWallet.name}</div>
-            </div>
-            {#if $activeWallet.kind === 4}
-              <SparkLogo size={16} className="flex-shrink-0" />
-            {:else if $activeWallet.kind === 3}
-              <NwcLogo size={16} className="flex-shrink-0" />
-            {/if}
+            <span class="flex items-center gap-2 min-w-0">
+              <span class="font-medium text-sm truncate">{$activeWallet.name}</span>
+              {#if $activeWallet.kind === 4}
+                <SparkLogo size={14} className="flex-shrink-0 opacity-70" />
+              {:else if $activeWallet.kind === 3}
+                <NwcLogo size={14} className="flex-shrink-0 opacity-70" />
+              {/if}
+            </span>
+            <CaretRightIcon size={14} class="text-caption flex-shrink-0" />
           </button>
 
           <!-- Wallet switcher (if multiple wallets) -->
@@ -434,10 +398,10 @@
             on:click={toggleBalanceVisibility}
           >
             {#if $balanceVisible}
-              <EyeSlashIcon size={16} />
+              <EyeClosedIcon size={18} weight="bold" />
               Hide Balance
             {:else}
-              <EyeIcon size={16} />
+              <EyeIcon size={18} weight="bold" />
               Show Balance
             {/if}
           </button>
@@ -448,17 +412,9 @@
             disabled={$walletLoading}
           >
             <span class:animate-spin={$walletLoading}>
-              <ArrowsClockwiseIcon size={16} />
+              <ArrowClockwiseIcon size={18} weight="bold" />
             </span>
             Refresh Balance
-          </button>
-
-          <button
-            class="flex items-center gap-2 text-sm hover:text-primary transition-colors cursor-pointer"
-            on:click={goToWallet}
-          >
-            <GearIcon size={16} />
-            Wallet Settings
           </button>
         </div>
       </div>
@@ -501,3 +457,25 @@
     </div>
   </div>
 {/if}
+
+<style>
+  /* Highlight state for the pill that opens the wallet modal — subtle
+     amber glow + brighter border on hover and keyboard focus so the
+     button reads clearly as the primary action in the dropdown. */
+  .wallet-name-pill {
+    transition:
+      background-color 0.15s ease-out,
+      border-color 0.15s ease-out,
+      box-shadow 0.15s ease-out;
+  }
+  .wallet-name-pill:hover,
+  .wallet-name-pill:focus-visible {
+    border-color: rgba(251, 191, 36, 0.5) !important;
+    background-color: rgba(251, 191, 36, 0.08) !important;
+    box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.12);
+    outline: none;
+  }
+  .wallet-name-pill:active {
+    transform: translateY(1px);
+  }
+</style>

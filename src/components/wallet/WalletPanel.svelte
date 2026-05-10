@@ -103,7 +103,6 @@
   import WalletIcon from 'phosphor-svelte/lib/Wallet';
   import PlusIcon from 'phosphor-svelte/lib/Plus';
   import TrashIcon from 'phosphor-svelte/lib/Trash';
-  import ArrowsClockwiseIcon from 'phosphor-svelte/lib/ArrowsClockwise';
   import CloudArrowUpIcon from 'phosphor-svelte/lib/CloudArrowUp';
   import ArrowUpIcon from 'phosphor-svelte/lib/ArrowUp';
   import ArrowDownIcon from 'phosphor-svelte/lib/ArrowDown';
@@ -112,7 +111,9 @@
   import CheckCircleIcon from 'phosphor-svelte/lib/CheckCircle';
   import WarningIcon from 'phosphor-svelte/lib/Warning';
   import EyeIcon from 'phosphor-svelte/lib/Eye';
+  import EyeClosedIcon from 'phosphor-svelte/lib/EyeClosed';
   import EyeSlashIcon from 'phosphor-svelte/lib/EyeSlash';
+  import ArrowClockwiseIcon from 'phosphor-svelte/lib/ArrowClockwise';
   import CaretDownIcon from 'phosphor-svelte/lib/CaretDown';
   import GearIcon from 'phosphor-svelte/lib/Gear';
   import KeyIcon from 'phosphor-svelte/lib/Key';
@@ -234,7 +235,6 @@
   let showSyncConfirmModal = false;
   let showNwcSyncConfirmModal = false;
   let showDeleteAddressConfirmModal = false;
-  let showRemoveBitcoinConnectModal = false;
   let showRecoveryHelpModal = false;
   let showCheckRelayBackupsModal = false;
   let checkRelayBackupsWalletType: 'spark' | 'nwc' = 'spark';
@@ -846,6 +846,25 @@
   function handlePanelScroll() {
     if (!panelScrollEl) return;
     isPanelScrolled = panelScrollEl.scrollTop > 4;
+  }
+
+  // Clicking the compact (sticky) balance card scrolls the wallet
+  // panel back to the top, restoring the full balance card with
+  // Send/Receive buttons. Clicks on inner controls (eye, refresh) are
+  // ignored so their own actions still fire normally.
+  function handleBalanceCardClick(e: MouseEvent | KeyboardEvent) {
+    if (!isPanelScrolled || !panelScrollEl) return;
+    const target = e.target as HTMLElement | null;
+    if (target?.closest('button')) return;
+    panelScrollEl.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function handleBalanceCardKeydown(e: KeyboardEvent) {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const target = e.target as HTMLElement | null;
+    if (target?.closest('button')) return;
+    e.preventDefault();
+    handleBalanceCardClick(e);
   }
 
   // Attach/detach the scroll listener whenever .wallet-scroll mounts or
@@ -2573,19 +2592,20 @@
         <div class="flex items-start justify-between mb-2">
           <div>
             <div class="text-4xl font-bold text-primary-color flex items-center gap-3">
-              <div
-                class="w-8 h-8 rounded-full bg-gradient-to-br from-orange-500 to-amber-500 flex items-center justify-center flex-shrink-0"
-              >
-                <WeblnLogo size={18} className="text-white" />
-              </div>
-              {#if weblnBalanceLoading}
-                <span class="animate-pulse">...</span>
+              <LightningIcon size={32} weight="fill" class="text-amber-500 flex-shrink-0" />
+              {#if weblnBalance === null && weblnBalanceLoading}
+                <span
+                  class="inline-block w-32 h-9 rounded-lg animate-pulse"
+                  style="background: var(--color-input-bg);"
+                ></span>
               {:else if weblnBalance === null}
                 <span class="text-2xl text-caption">Balance not available</span>
               {:else if $balanceVisible}
-                {formatBalance(weblnBalance)}
+                <span class:balance-refreshing={weblnBalanceLoading}
+                  >{formatBalance(weblnBalance)}</span
+                >
               {:else}
-                ***
+                <span class:balance-refreshing={weblnBalanceLoading}>***</span>
               {/if}
             </div>
             {#if weblnBalance !== null}
@@ -2594,31 +2614,31 @@
               </div>
             {/if}
           </div>
-          <div class="flex flex-col items-end gap-2">
+          <div class="flex items-center gap-3 flex-shrink-0">
             <CurrencySelector compact />
-            <div class="flex items-center gap-3">
-              <button
-                class="flex items-center gap-1 text-sm text-caption hover:text-primary transition-colors cursor-pointer"
-                on:click={toggleBalanceVisibility}
-                title={$balanceVisible ? 'Hide balance' : 'Show balance'}
-              >
-                {#if $balanceVisible}
-                  <EyeSlashIcon size={16} />
-                {:else}
-                  <EyeIcon size={16} />
-                {/if}
-              </button>
-              <button
-                class="text-caption hover:text-primary transition-colors cursor-pointer disabled:opacity-50"
-                on:click={refreshWeblnBalance}
-                disabled={weblnBalanceLoading}
-                title="Refresh balance"
-              >
-                <span class:animate-spin={weblnBalanceLoading}>
-                  <ArrowsClockwiseIcon size={16} />
-                </span>
-              </button>
-            </div>
+            <button
+              class="flex items-center justify-center text-caption hover:text-primary transition-colors cursor-pointer"
+              on:click={toggleBalanceVisibility}
+              title={$balanceVisible ? 'Hide balance' : 'Show balance'}
+              aria-label={$balanceVisible ? 'Hide balance' : 'Show balance'}
+            >
+              {#if $balanceVisible}
+                <EyeClosedIcon size={18} weight="bold" />
+              {:else}
+                <EyeIcon size={18} weight="bold" />
+              {/if}
+            </button>
+            <button
+              class="flex items-center justify-center text-caption hover:text-primary transition-colors cursor-pointer disabled:opacity-50"
+              on:click={refreshWeblnBalance}
+              disabled={weblnBalanceLoading}
+              title="Refresh balance"
+              aria-label="Refresh balance"
+            >
+              <span class:animate-spin={weblnBalanceLoading}>
+                <ArrowClockwiseIcon size={18} weight="bold" />
+              </span>
+            </button>
           </div>
         </div>
       </div>
@@ -2630,9 +2650,19 @@
         <div
           class="balance-card mb-8 rounded-2xl"
           class:balance-card--compact={isPanelScrolled}
+          class:cursor-pointer={isPanelScrolled}
           style="background-color: var(--color-input-bg);"
+          role={isPanelScrolled ? 'button' : 'presentation'}
+          tabindex={isPanelScrolled ? 0 : -1}
+          aria-label={isPanelScrolled ? 'Expand balance' : undefined}
+          on:click={handleBalanceCardClick}
+          on:keydown={handleBalanceCardKeydown}
         >
-          <div class="flex items-start justify-between balance-row">
+          <div
+            class="flex justify-between balance-row"
+            class:items-start={!isPanelScrolled}
+            class:items-center={isPanelScrolled}
+          >
             <div>
               <div
                 class="balance-amount font-bold text-primary-color flex items-center gap-3"
@@ -2644,15 +2674,17 @@
                   weight="fill"
                   class="text-amber-500 flex-shrink-0"
                 />
-                {#if $walletLoading || $walletBalance === null}
+                {#if $walletBalance === null}
                   <span
                     class="inline-block w-32 h-9 rounded-lg animate-pulse"
                     style="background: var(--color-input-bg);"
                   ></span>
                 {:else if $balanceVisible}
-                  {formatBalance($walletBalance)}
+                  <span class:balance-refreshing={$walletLoading}
+                    >{formatBalance($walletBalance)}</span
+                  >
                 {:else}
-                  ***
+                  <span class:balance-refreshing={$walletLoading}>***</span>
                 {/if}
               </div>
               {#if !isPanelScrolled}
@@ -2664,39 +2696,39 @@
                      truth for the syncing state in the wallet UI. -->
                 {#if $activeWallet?.kind === 4 && $sparkSyncing}
                   <div class="text-xs text-caption flex items-center gap-1 mt-1 ml-11">
-                    <ArrowsClockwiseIcon size={12} class="animate-spin" />
+                    <ArrowClockwiseIcon size={12} weight="bold" class="animate-spin" />
                     Syncing wallet...
                   </div>
                 {/if}
               {/if}
             </div>
-            <div class="flex flex-col items-end gap-2">
+            <div class="flex items-center gap-3 flex-shrink-0">
               {#if !isPanelScrolled}
                 <CurrencySelector compact />
               {/if}
-              <div class="flex items-center gap-3">
-                <button
-                  class="flex items-center gap-1 text-sm text-caption hover:text-primary transition-colors cursor-pointer"
-                  on:click={toggleBalanceVisibility}
-                  title={$balanceVisible ? 'Hide balance' : 'Show balance'}
-                >
-                  {#if $balanceVisible}
-                    <EyeSlashIcon size={16} />
-                  {:else}
-                    <EyeIcon size={16} />
-                  {/if}
-                </button>
-                <button
-                  class="text-caption hover:text-primary transition-colors cursor-pointer disabled:opacity-50"
-                  on:click={refreshAll}
-                  disabled={$walletLoading || isLoadingHistory}
-                  title="Refresh wallet"
-                >
-                  <span class:animate-spin={$walletLoading || isLoadingHistory}>
-                    <ArrowsClockwiseIcon size={16} />
-                  </span>
-                </button>
-              </div>
+              <button
+                class="flex items-center justify-center text-caption hover:text-primary transition-colors cursor-pointer"
+                on:click={toggleBalanceVisibility}
+                title={$balanceVisible ? 'Hide balance' : 'Show balance'}
+                aria-label={$balanceVisible ? 'Hide balance' : 'Show balance'}
+              >
+                {#if $balanceVisible}
+                  <EyeClosedIcon size={18} weight="bold" />
+                {:else}
+                  <EyeIcon size={18} weight="bold" />
+                {/if}
+              </button>
+              <button
+                class="flex items-center justify-center text-caption hover:text-primary transition-colors cursor-pointer disabled:opacity-50"
+                on:click={refreshAll}
+                disabled={$walletLoading || isLoadingHistory}
+                title="Refresh wallet"
+                aria-label="Refresh wallet"
+              >
+                <span class:animate-spin={$walletLoading || isLoadingHistory}>
+                  <ArrowClockwiseIcon size={18} weight="bold" />
+                </span>
+              </button>
             </div>
           </div>
 
@@ -2847,8 +2879,9 @@
                 disabled={isLoadingDeposits}
                 title="Refresh deposits"
               >
-                <ArrowsClockwiseIcon
+                <ArrowClockwiseIcon
                   size={16}
+                  weight="bold"
                   class="text-amber-500 {isLoadingDeposits ? 'animate-spin' : ''}"
                 />
               </button>
@@ -2899,7 +2932,7 @@
                       disabled={isClaimingDeposit}
                     >
                       {#if isClaimingDeposit && claimingTxid === deposit.txid}
-                        <ArrowsClockwiseIcon size={16} class="animate-spin" />
+                        <ArrowClockwiseIcon size={16} weight="bold" class="animate-spin" />
                         Claiming...
                       {:else}
                         <ArrowDownIcon size={16} />
@@ -2932,7 +2965,7 @@
               <div
                 class="w-16 h-16 rounded-full bg-gradient-to-br from-orange-500 to-amber-500 flex items-center justify-center mb-4"
               >
-                <WeblnLogo size={40} className="text-white" />
+                <LightningIcon size={32} weight="fill" class="text-white" />
               </div>
               <p class="font-medium mb-1" style="color: var(--color-text-primary)">
                 {$weblnWalletName || 'Browser Wallet'}
@@ -2951,34 +2984,38 @@
           {#if $wallets.length === 0 && !$weblnConnected}
             <div class="flex flex-col items-center">
               {#if $bitcoinConnectEnabled}
-                <!-- Bitcoin Connect balance card — matches the layout
-                     of the regular balance frame so the user gets the
-                     same prominent balance read-out. -->
+                <!-- Bitcoin Connect balance card — same shape as the
+                     regular balance card. The connection identity +
+                     Disconnect action live in a separate card below
+                     (mirrors the WebLN pattern). -->
                 <div
-                  class="w-full p-5 rounded-2xl"
+                  class="w-full p-5 rounded-2xl mb-3"
                   style="background-color: var(--color-input-bg);"
                 >
-                  <div class="flex items-start justify-between mb-3">
+                  <div class="flex items-start justify-between">
                     <div class="min-w-0">
                       <div
                         class="text-4xl font-bold flex items-center gap-3"
                         style="color: var(--color-text-primary)"
                       >
-                        <div
-                          class="w-8 h-8 rounded-full bg-gradient-to-br from-orange-500 to-amber-500 flex items-center justify-center flex-shrink-0"
-                        >
-                          <BitcoinConnectLogo size={18} className="text-white" />
-                        </div>
-                        {#if $bitcoinConnectBalanceLoading}
+                        <LightningIcon
+                          size={32}
+                          weight="fill"
+                          class="text-amber-500 flex-shrink-0"
+                        />
+                        {#if $bitcoinConnectBalance === null && $bitcoinConnectBalanceLoading}
                           <span
                             class="inline-block w-32 h-9 rounded-lg animate-pulse"
                             style="background: var(--color-input-bg);"
                           ></span>
                         {:else if $bitcoinConnectBalance !== null}
                           {#if $balanceVisible}
-                            {$bitcoinConnectBalance.toLocaleString()}
+                            <span class:balance-refreshing={$bitcoinConnectBalanceLoading}
+                              >{formatBalance($bitcoinConnectBalance)}</span
+                            >
                           {:else}
-                            ***
+                            <span class:balance-refreshing={$bitcoinConnectBalanceLoading}>***</span
+                            >
                           {/if}
                         {:else}
                           <span class="text-2xl text-caption">Balance unavailable</span>
@@ -2992,70 +3029,70 @@
                           />
                         </div>
                       {/if}
-                      <div class="ml-11 mt-1 text-xs text-caption truncate">
-                        {$bitcoinConnectWalletInfo.alias || 'External wallet'}
-                      </div>
                     </div>
-                    <div class="flex flex-col items-end gap-2 flex-shrink-0">
+                    <div class="flex items-center gap-3 flex-shrink-0">
                       <CurrencySelector compact />
-                      <div class="flex items-center gap-3">
-                        <button
-                          class="flex items-center gap-1 text-sm text-caption hover:text-primary transition-colors cursor-pointer"
-                          on:click={toggleBalanceVisibility}
-                          title={$balanceVisible ? 'Hide balance' : 'Show balance'}
-                        >
-                          {#if $balanceVisible}
-                            <EyeSlashIcon size={16} />
-                          {:else}
-                            <EyeIcon size={16} />
-                          {/if}
-                        </button>
-                        <button
-                          class="text-caption hover:text-primary transition-colors cursor-pointer disabled:opacity-50"
-                          on:click={refreshBitcoinConnectBalance}
-                          disabled={$bitcoinConnectBalanceLoading}
-                          title="Refresh balance"
-                        >
-                          <span class:animate-spin={$bitcoinConnectBalanceLoading}>
-                            <ArrowsClockwiseIcon size={16} />
-                          </span>
-                        </button>
-                      </div>
+                      <button
+                        class="flex items-center justify-center text-caption hover:text-primary transition-colors cursor-pointer"
+                        on:click={toggleBalanceVisibility}
+                        title={$balanceVisible ? 'Hide balance' : 'Show balance'}
+                        aria-label={$balanceVisible ? 'Hide balance' : 'Show balance'}
+                      >
+                        {#if $balanceVisible}
+                          <EyeClosedIcon size={18} weight="bold" />
+                        {:else}
+                          <EyeIcon size={18} weight="bold" />
+                        {/if}
+                      </button>
+                      <button
+                        class="flex items-center justify-center text-caption hover:text-primary transition-colors cursor-pointer disabled:opacity-50"
+                        on:click={refreshBitcoinConnectBalance}
+                        disabled={$bitcoinConnectBalanceLoading}
+                        title="Refresh balance"
+                        aria-label="Refresh balance"
+                      >
+                        <span class:animate-spin={$bitcoinConnectBalanceLoading}>
+                          <ArrowClockwiseIcon size={18} weight="bold" />
+                        </span>
+                      </button>
                     </div>
                   </div>
+                </div>
 
-                  <p class="text-xs text-caption">
-                    Payments use Bitcoin Connect{#if $bitcoinConnectWalletInfo.pubkey}
-                      <span class="font-mono"
-                        >&middot; {$bitcoinConnectWalletInfo.pubkey.slice(
-                          0,
-                          8
-                        )}...{$bitcoinConnectWalletInfo.pubkey.slice(-8)}</span
-                      >
-                    {/if}
-                  </p>
-
-                  <div class="flex gap-3 mt-6">
-                    <button
-                      class="flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-sm font-medium transition-colors cursor-pointer hover:bg-white/5"
-                      style="border: 1px solid var(--color-input-border); color: var(--color-text-primary);"
-                      on:click={refreshBitcoinConnectBalance}
-                      disabled={$bitcoinConnectBalanceLoading}
-                    >
-                      <span class:animate-spin={$bitcoinConnectBalanceLoading}>
-                        <ArrowsClockwiseIcon size={16} />
-                      </span>
-                      Refresh
-                    </button>
-                    <button
-                      class="flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-sm font-medium text-red-500 hover:bg-red-500/10 transition-colors cursor-pointer"
-                      style="border: 1px solid var(--color-input-border);"
-                      on:click={() => (showRemoveBitcoinConnectModal = true)}
-                    >
-                      <TrashIcon size={16} />
-                      Disconnect
-                    </button>
+                <!-- Bitcoin Connect connection card — mirrors the
+                     WebLN connection card structure. -->
+                <div
+                  class="w-full p-8 rounded-2xl text-center flex flex-col items-center mb-3"
+                  style="background-color: var(--color-input-bg); border: 1px solid var(--color-input-border);"
+                >
+                  <div
+                    class="w-16 h-16 rounded-full bg-gradient-to-br from-orange-500 to-amber-500 flex items-center justify-center mb-4"
+                  >
+                    <BitcoinConnectLogo size={32} className="text-white" />
                   </div>
+                  <p class="font-medium mb-1" style="color: var(--color-text-primary)">
+                    {$bitcoinConnectWalletInfo.alias || 'External wallet'}
+                  </p>
+                  <p class="text-sm text-caption mb-1">
+                    External wallet connected via Bitcoin Connect
+                  </p>
+                  {#if $bitcoinConnectWalletInfo.pubkey}
+                    <p class="text-xs text-caption font-mono mb-4">
+                      {$bitcoinConnectWalletInfo.pubkey.slice(
+                        0,
+                        8
+                      )}...{$bitcoinConnectWalletInfo.pubkey.slice(-8)}
+                    </p>
+                  {:else}
+                    <div class="mb-4"></div>
+                  {/if}
+                  <button
+                    class="px-5 py-2.5 rounded-full font-semibold text-sm text-caption hover:text-red-500 transition-colors cursor-pointer"
+                    style="border: 1px solid var(--color-input-border);"
+                    on:click={handleDisableBitcoinConnect}
+                  >
+                    Disconnect Bitcoin Connect
+                  </button>
                 </div>
               {:else}
                 <div
@@ -3974,7 +4011,10 @@
 
   <!-- Wallet picker (inline; combines empty-state and add-wallet flow) -->
   {#if showPicker}
-    <div class="wallet-scroll picker-view">
+    <div
+      class="wallet-scroll picker-view"
+      class:picker-view--connect-step={selectedWalletType !== null}
+    >
       {#if selectedWalletType !== null}
         <!-- Sub-screen back-bar — returns to picker home (wallet type
              selection) rather than dismissing the picker entirely. -->
@@ -3998,18 +4038,23 @@
           </h2>
         </div>
       {:else if !hasAnyWallet}
-        <div class="text-center mb-8 mt-4">
+        <div class="text-center mb-6">
           <div
-            class="welcome-bolt w-20 h-20 mx-auto rounded-full bg-gradient-to-br from-amber-500/20 to-orange-500/20 flex items-center justify-center mb-5"
+            class="welcome-bolt w-16 h-16 mx-auto rounded-full bg-gradient-to-br from-amber-500/20 to-orange-500/20 flex items-center justify-center mb-3"
           >
-            <LightningIcon size={40} weight="fill" class="text-amber-500" />
+            <LightningIcon size={32} weight="fill" class="text-amber-500" />
           </div>
-          <h2 class="text-2xl font-bold mb-3" style="color: var(--color-text-primary)">
+          <h2 class="text-2xl font-bold mb-2" style="color: var(--color-text-primary)">
             Zap Cooking is better with zaps!
           </h2>
-          <p class="text-sm text-caption max-w-sm mx-auto leading-relaxed">
-            Connect a Lightning wallet to send zaps, receive payments, and support creators.
-          </p>
+          <div class="text-sm text-caption max-w-md mx-auto leading-relaxed space-y-2 text-left">
+            <p>
+              Connect a Lightning wallet to send value directly to creators and help
+              <span class="font-semibold text-orange-500">#Nostrichefs</span>
+              keep publishing great recipes, tips, and stories.
+            </p>
+            <p>If you don't have a wallet yet, you can create your first one right now.</p>
+          </div>
         </div>
       {:else}
         <div class="flex items-center gap-2 mb-6">
@@ -4391,9 +4436,22 @@
         </div>
       {/if}
 
-      <!-- Bottom Cancel/Close button removed: redundant with the
-           wallet modal's X (no-wallet path) and the top back-bar
-           (has-wallet path). -->
+      <!-- "Maybe later" dismiss for the no-wallet welcome state. The X
+           top-right also closes the modal, but a soft text link in the
+           setup flow gives users a low-pressure way out. Hidden when a
+           wallet type has been selected (sub-screens have their own
+           back-bar) or when the user is just adding another wallet. -->
+      {#if !hasAnyWallet && !selectedWalletType}
+        <div class="mt-6 mb-2 text-center">
+          <button
+            type="button"
+            class="text-sm text-caption hover:text-primary transition-colors cursor-pointer"
+            on:click={dismissPicker}
+          >
+            Maybe later
+          </button>
+        </div>
+      {/if}
     </div>
   {/if}
 
@@ -4827,41 +4885,9 @@
   {/if}
 
   <!-- Remove Bitcoin Connect Confirmation Modal -->
-  {#if showRemoveBitcoinConnectModal && portalTarget}
-    <div use:portal={portalTarget}>
-      <div
-        class="fixed inset-0 bg-black/50 flex z-50 p-4"
-        style="display: flex; align-items: center; justify-content: center;"
-      >
-        <div
-          class="rounded-2xl p-6 max-w-sm w-full max-h-[90vh] overflow-y-auto"
-          style="background-color: var(--color-bg-primary);"
-        >
-          <h2 class="text-xl font-bold mb-2" style="color: var(--color-text-primary)">
-            Remove External Wallet
-          </h2>
-          <p class="text-caption mb-6">
-            Are you sure you want to disconnect your external wallet? You can reconnect it at any
-            time from the wallet settings.
-          </p>
-          <div class="flex gap-3">
-            <Button on:click={() => (showRemoveBitcoinConnectModal = false)} class="flex-1">
-              Cancel
-            </Button>
-            <button
-              class="flex-1 px-4 py-2 rounded-full bg-red-500 hover:bg-red-600 text-white font-medium transition-colors cursor-pointer"
-              on:click={() => {
-                handleDisableBitcoinConnect();
-                showRemoveBitcoinConnectModal = false;
-              }}
-            >
-              Remove
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  {/if}
+  <!-- Remove External Wallet confirmation modal removed — Bitcoin
+       Connect disconnect now fires directly from the connection card
+       (matches the WebLN disconnect flow). -->
 
   <!-- Delete Lightning Address Confirmation Modal -->
   {#if showDeleteAddressConfirmModal && portalTarget}
@@ -5087,7 +5113,7 @@
               disabled={isPreparingOnchain || !sendInput.trim() || sendAmount <= 0}
             >
               {#if isPreparingOnchain}
-                <span class="animate-spin"><ArrowsClockwiseIcon size={20} /></span>
+                <span class="animate-spin"><ArrowClockwiseIcon size={20} weight="bold" /></span>
                 Getting fees...
               {:else}
                 Get Fee Quote
@@ -5209,7 +5235,7 @@
                   disabled={isSendingOnchain}
                 >
                   {#if isSendingOnchain}
-                    <span class="animate-spin"><ArrowsClockwiseIcon size={20} /></span>
+                    <span class="animate-spin"><ArrowClockwiseIcon size={20} weight="bold" /></span>
                     Sending...
                   {:else}
                     Confirm Send
@@ -5226,7 +5252,7 @@
             disabled={isSending || !sendInput.trim() || (isLightningAddress && sendAmount <= 0)}
           >
             {#if isSending}
-              <span class="animate-spin"><ArrowsClockwiseIcon size={20} /></span>
+              <span class="animate-spin"><ArrowClockwiseIcon size={20} weight="bold" /></span>
               Sending...
             {:else}
               <ArrowUpIcon size={20} weight="bold" />
@@ -5398,7 +5424,8 @@
               class="w-full"
             >
               {#if isGeneratingOnchainAddress}
-                <span class="animate-spin mr-2"><ArrowsClockwiseIcon size={16} /></span>
+                <span class="animate-spin mr-2"><ArrowClockwiseIcon size={16} weight="bold" /></span
+                >
                 Generating...
               {:else}
                 Generate Bitcoin Address
@@ -5564,7 +5591,7 @@
                 parseInt(customReceiveAmount) <= 0}
             >
               {#if isGeneratingInvoice}
-                <span class="animate-spin"><ArrowsClockwiseIcon size={20} /></span>
+                <span class="animate-spin"><ArrowClockwiseIcon size={20} weight="bold" /></span>
               {:else}
                 Generate
               {/if}
@@ -6062,34 +6089,34 @@
       font-size 0.18s ease-out,
       gap 0.18s ease-out;
   }
+  /* Gentle pulse on the balance number itself when a refresh is in
+     flight — keeps the value readable instead of replacing it with a
+     skeleton. */
+  :global(.balance-refreshing) {
+    animation: balance-refresh-pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes balance-refresh-pulse {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.5;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    :global(.balance-refreshing) {
+      animation: none;
+    }
+  }
 
-  /* Welcome bolt — two diagonal bands sweep across in the same
-     direction (background glow + foreground shine), so the whole icon
-     reads as a single coordinated motion rather than a spin + sweep. */
+  /* Welcome bolt — single diagonal shine sweep across the icon. Kept
+     deliberately simple to avoid layered animations in the same area. */
   .welcome-bolt {
     position: relative;
     overflow: hidden;
     isolation: isolate;
   }
-  /* Background amber glow — slower, softer, wider than the shine. */
-  .welcome-bolt::before {
-    content: '';
-    position: absolute;
-    inset: -25%;
-    background: linear-gradient(
-      120deg,
-      transparent 0%,
-      transparent 30%,
-      rgba(251, 191, 36, 0.45) 50%,
-      transparent 70%,
-      transparent 100%
-    );
-    transform: translateX(-110%);
-    animation: bolt-shine 2.8s ease-in-out infinite;
-    z-index: -1;
-    pointer-events: none;
-  }
-  /* Foreground white shine — tracks the same diagonal as the glow. */
   .welcome-bolt::after {
     content: '';
     position: absolute;
@@ -6097,14 +6124,15 @@
     background: linear-gradient(
       120deg,
       transparent 0%,
-      transparent 42%,
-      rgba(255, 255, 255, 0.28) 50%,
-      transparent 58%,
+      transparent 40%,
+      rgba(255, 255, 255, 0.22) 50%,
+      transparent 60%,
       transparent 100%
     );
     transform: translateX(-110%);
     animation: bolt-shine 2.8s ease-in-out infinite;
     pointer-events: none;
+    will-change: transform;
   }
   @keyframes bolt-shine {
     0% {
@@ -6116,7 +6144,6 @@
     }
   }
   @media (prefers-reduced-motion: reduce) {
-    .welcome-bolt::before,
     .welcome-bolt::after {
       animation: none;
     }
