@@ -14,12 +14,10 @@
   import PostModal from '../components/PostModal.svelte';
   import LongformEditorModal from '../components/reads/LongformEditorModal.svelte';
   import WalletWelcomeModal from '../components/WalletWelcomeModal.svelte';
+  import WalletModal from '../components/wallet/WalletModal.svelte';
   import ToastContainer from '../components/ToastContainer.svelte';
   import { createAuthManager, type AuthState } from '$lib/authManager';
-  import {
-    stopMessageSubscription,
-    clearMessages
-  } from '$lib/stores/messages';
+  import { stopMessageSubscription, clearMessages } from '$lib/stores/messages';
   import { clearDecryptCache } from '$lib/encryptionService';
   import { clearUnwrapCache } from '$lib/nip17';
   import { stopGroupSubscription, clearGroups } from '$lib/stores/groups';
@@ -276,8 +274,15 @@
           walletWelcomeForce = localStorage.getItem(WALLET_WELCOME_FORCE_KEY) === '1';
         }
 
-        const isOnboardingFlow = $page.url.pathname.startsWith('/login') || $page.url.pathname.startsWith('/onboarding');
-        if (browser && state.isAuthenticated && state.publicKey && !hasWallet && !isOnboardingFlow) {
+        const isOnboardingFlow =
+          $page.url.pathname.startsWith('/login') || $page.url.pathname.startsWith('/onboarding');
+        if (
+          browser &&
+          state.isAuthenticated &&
+          state.publicKey &&
+          !hasWallet &&
+          !isOnboardingFlow
+        ) {
           if (walletWelcomeForce || !walletWelcomeSeen) {
             walletWelcomeOpen = true;
             if (walletWelcomeForce) {
@@ -337,8 +342,15 @@
 
   // Show wallet welcome after leaving login/onboarding (e.g. after suggested follows completes)
   $: {
-    const onboardingFlow = $page.url.pathname.startsWith('/login') || $page.url.pathname.startsWith('/onboarding');
-    if (browser && !walletWelcomeOpen && !onboardingFlow && authState.isAuthenticated && !hasWallet) {
+    const onboardingFlow =
+      $page.url.pathname.startsWith('/login') || $page.url.pathname.startsWith('/onboarding');
+    if (
+      browser &&
+      !walletWelcomeOpen &&
+      !onboardingFlow &&
+      authState.isAuthenticated &&
+      !hasWallet
+    ) {
       const forceFlag = localStorage.getItem(WALLET_WELCOME_FORCE_KEY) === '1';
       if (forceFlag || !walletWelcomeSeen) {
         walletWelcomeOpen = true;
@@ -412,7 +424,8 @@
           <Header />
         </div>
         <div
-          class="px-4 min-w-0 max-w-full {$page.url.pathname.startsWith('/messages') || $page.url.pathname.startsWith('/groups')
+          class="px-4 min-w-0 max-w-full {$page.url.pathname.startsWith('/messages') ||
+          $page.url.pathname.startsWith('/groups')
             ? ''
             : 'pb-16 lg:pb-8'}"
         >
@@ -432,6 +445,7 @@
       <PostModal bind:open={$postComposerOpen} />
       <LongformEditorModal />
       <WalletWelcomeModal bind:open={walletWelcomeOpen} onDismiss={markWalletWelcomeSeen} />
+      <WalletModal />
       <ToastContainer />
     </div>
   </div>

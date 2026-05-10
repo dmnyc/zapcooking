@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { goto } from '$app/navigation';
   import { browser } from '$app/environment';
   import { clickOutside } from '$lib/clickOutside';
   import { fade } from 'svelte/transition';
@@ -18,6 +17,8 @@
     setActiveWallet,
     toggleBalanceVisibility
   } from '$lib/wallet';
+  import { openWallet } from '$lib/wallet/walletModalStore';
+  import { dismissCookingToolsTip } from '$lib/cookingToolsTip';
   import {
     weblnConnected,
     weblnWalletName,
@@ -102,7 +103,12 @@
 
   function goToWallet() {
     dropdownActive = false;
-    goto('/wallet');
+    openWallet();
+  }
+
+  function toggleDropdown() {
+    if (!dropdownActive) dismissCookingToolsTip();
+    dropdownActive = !dropdownActive;
   }
 
   async function handleRefreshBitcoinConnect() {
@@ -127,7 +133,7 @@
     <button
       class="flex items-center gap-1.5 px-3 py-1.5 rounded-full transition-colors cursor-pointer text-sm font-medium"
       style="background-color: var(--color-input-bg); color: var(--color-text-primary); border: 1px solid var(--color-input-border);"
-      on:click={() => (dropdownActive = !dropdownActive)}
+      on:click={toggleDropdown}
     >
       <div
         class="w-4 h-4 rounded-full bg-gradient-to-br from-orange-500 to-amber-500 flex items-center justify-center flex-shrink-0"
@@ -166,7 +172,7 @@
             style="border-color: var(--color-input-border);"
             on:click={() => {
               dropdownActive = false;
-              goto('/wallet');
+              openWallet();
             }}
           >
             <div
@@ -209,7 +215,7 @@
             class="flex items-center gap-2 text-sm hover:text-primary transition-colors cursor-pointer"
             on:click={() => {
               dropdownActive = false;
-              goto('/wallet');
+              openWallet();
             }}
           >
             <GearIcon size={16} />
@@ -240,7 +246,7 @@
     <button
       class="flex items-center gap-1.5 px-3 py-1.5 rounded-full transition-colors cursor-pointer text-sm font-medium"
       style="background-color: var(--color-input-bg); color: var(--color-text-primary); border: 1px solid var(--color-input-border);"
-      on:click={() => (dropdownActive = !dropdownActive)}
+      on:click={toggleDropdown}
     >
       <div
         class="w-4 h-4 rounded-full bg-gradient-to-br from-yellow-500 to-orange-500 flex items-center justify-center flex-shrink-0"
@@ -279,7 +285,7 @@
             style="border-color: var(--color-input-border);"
             on:click={() => {
               dropdownActive = false;
-              goto('/wallet');
+              openWallet();
             }}
           >
             <div
@@ -324,7 +330,7 @@
             class="flex items-center gap-2 text-sm hover:text-primary transition-colors cursor-pointer"
             on:click={() => {
               dropdownActive = false;
-              goto('/wallet');
+              openWallet();
             }}
           >
             <GearIcon size={16} />
@@ -351,7 +357,7 @@
     <button
       class="flex items-center gap-1.5 px-3 py-1.5 rounded-full transition-colors cursor-pointer text-sm font-medium"
       style="background-color: var(--color-input-bg); color: var(--color-text-primary); border: 1px solid var(--color-input-border);"
-      on:click={() => (dropdownActive = !dropdownActive)}
+      on:click={toggleDropdown}
     >
       <LightningIcon size={16} weight="fill" class="text-amber-500" />
       {#if $walletLoading || $walletBalance === null}

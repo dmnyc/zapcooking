@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { goto } from '$app/navigation';
   import { portal } from './Modal.svelte';
+  import { openWallet } from '$lib/wallet/walletModalStore';
   import Button from './Button.svelte';
   import LightningIcon from 'phosphor-svelte/lib/Lightning';
   import { theme } from '$lib/themeStore';
@@ -36,7 +36,7 @@
 
   function goToWallet() {
     open = false;
-    goto('/wallet');
+    openWallet('setup');
   }
 </script>
 
@@ -52,25 +52,58 @@
     <div class="welcome-anim-layer pointer-events-none" aria-hidden="true">
       <div class="absolute inset-0 opacity-5">
         <div class="absolute top-10 left-10 text-6xl lightning-pulse">⚡</div>
-        <div class="absolute top-32 right-20 text-4xl lightning-pulse" style="animation-delay: 0.5s;">⚡</div>
-        <div class="absolute bottom-20 left-32 text-5xl lightning-pulse" style="animation-delay: 1s;">⚡</div>
-        <div class="absolute bottom-40 right-10 text-3xl lightning-pulse" style="animation-delay: 1.5s;">⚡</div>
-        <div class="absolute top-1/2 left-10 text-4xl lightning-pulse" style="animation-delay: 2s;">⚡</div>
+        <div
+          class="absolute top-32 right-20 text-4xl lightning-pulse"
+          style="animation-delay: 0.5s;"
+        >
+          ⚡
+        </div>
+        <div
+          class="absolute bottom-20 left-32 text-5xl lightning-pulse"
+          style="animation-delay: 1s;"
+        >
+          ⚡
+        </div>
+        <div
+          class="absolute bottom-40 right-10 text-3xl lightning-pulse"
+          style="animation-delay: 1.5s;"
+        >
+          ⚡
+        </div>
+        <div class="absolute top-1/2 left-10 text-4xl lightning-pulse" style="animation-delay: 2s;">
+          ⚡
+        </div>
       </div>
       <div class="absolute inset-0 opacity-10">
-        <div class="absolute top-20 left-1/4 text-3xl animate-bounce" style="animation-delay: 0.2s;">🍳</div>
-        <div class="absolute top-40 right-1/3 text-2xl animate-bounce" style="animation-delay: 0.8s;">🥘</div>
-        <div class="absolute bottom-32 left-1/3 text-2xl animate-bounce" style="animation-delay: 1.2s;">👨‍🍳</div>
-        <div class="absolute bottom-20 right-1/4 text-3xl animate-bounce" style="animation-delay: 0.6s;">🍽️</div>
+        <div
+          class="absolute top-20 left-1/4 text-3xl animate-bounce"
+          style="animation-delay: 0.2s;"
+        >
+          🍳
+        </div>
+        <div
+          class="absolute top-40 right-1/3 text-2xl animate-bounce"
+          style="animation-delay: 0.8s;"
+        >
+          🥘
+        </div>
+        <div
+          class="absolute bottom-32 left-1/3 text-2xl animate-bounce"
+          style="animation-delay: 1.2s;"
+        >
+          👨‍🍳
+        </div>
+        <div
+          class="absolute bottom-20 right-1/4 text-3xl animate-bounce"
+          style="animation-delay: 0.6s;"
+        >
+          🍽️
+        </div>
       </div>
     </div>
 
     <!-- Layer 3: Dialog card (top) -->
-    <div
-      on:click|self={handleDismiss}
-      role="presentation"
-      class="welcome-card-layer"
-    >
+    <div on:click|self={handleDismiss} role="presentation" class="welcome-card-layer">
       <dialog
         transition:scale={{ duration: 250 }}
         aria-labelledby="welcome-title"
@@ -138,8 +171,15 @@
   }
 
   @keyframes lightningPulse {
-    0%, 100% { opacity: 1; transform: scale(1); }
-    50% { opacity: 0.8; transform: scale(1.05); }
+    0%,
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+    50% {
+      opacity: 0.8;
+      transform: scale(1.05);
+    }
   }
 
   .welcome-blur-layer {
