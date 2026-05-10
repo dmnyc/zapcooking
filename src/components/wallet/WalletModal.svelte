@@ -38,14 +38,30 @@
   .wallet-modal-body :global(button:not([class*='bg-'])) {
     background-color: transparent;
   }
+  /* Toast notifications spawned by WalletPanel match the wallet
+     modal's width at each breakpoint so they read as part of the
+     same surface rather than as a viewport-wide banner. */
+  :global(.wallet-toast) {
+    max-width: 480px !important;
+  }
+  @media (min-width: 768px) {
+    :global(.wallet-toast) {
+      max-width: 640px !important;
+    }
+  }
+  @media (min-width: 1024px) {
+    :global(.wallet-toast) {
+      max-width: 720px !important;
+    }
+  }
   /* Pin the wallet modal to a fixed size, kill the dialog's padding so
      the body can sit flush with the dialog's edges, and disable the
      dialog's own scrolling — the body handles scroll instead. */
   :global(dialog:has(.wallet-modal-body)) {
     width: 480px !important;
     max-width: calc(100% - 2rem) !important;
-    height: 640px !important;
-    max-height: calc(100vh - 2rem) !important;
+    height: 560px !important;
+    max-height: calc(100vh - 6rem) !important;
     min-height: 0 !important;
     overflow: hidden !important;
     padding: 0 !important;
@@ -62,8 +78,8 @@
   @media (min-width: 768px) {
     :global(dialog:has(.wallet-modal-body)) {
       width: 640px !important;
-      height: 800px !important;
-      max-height: 88vh !important;
+      height: 720px !important;
+      max-height: 84vh !important;
     }
     :global(dialog:has(.wallet-modal-body) > div) {
       padding-left: 1.5rem !important;
@@ -73,8 +89,8 @@
   @media (min-width: 1024px) {
     :global(dialog:has(.wallet-modal-body)) {
       width: 720px !important;
-      height: 860px !important;
-      max-height: min(960px, 90vh) !important;
+      height: 780px !important;
+      max-height: min(840px, 86vh) !important;
     }
   }
   /* Body extends horizontally past the inner wrapper's padding so it
