@@ -5,6 +5,7 @@
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
   import Modal from '../../components/Modal.svelte';
+  import CloseIcon from 'phosphor-svelte/lib/XCircle';
   import type { PageData } from './$types';
   import QRCode from 'svelte-qrcode';
 
@@ -491,505 +492,554 @@
   <LoginFormIOS />
 {:else}
   <!-- Private Key Modal -->
-  <Modal bind:open={nsecModal} on:close={modalCleanup}>
-    <svelte:fragment slot="title">
-      <span class="login-modal-title-wrap">
-        <span class="login-modal-logo-wrap" aria-hidden="true">
-          <img src="/zap_cooking_logo_black.svg" alt="" class="dark:hidden" />
-          <img src="/zap_cooking_logo_white.svg" alt="" class="hidden dark:block" />
-        </span>
-        <span class="login-modal-title-text">🔑 Log in with Private Key</span>
-      </span>
-    </svelte:fragment>
-    <div class="flex flex-col gap-4 login-modal-body">
-      <div class="bg-input border rounded-lg p-3" style="border-color: var(--color-input-border)">
-        <p class="text-sm text-caption">
-          Your key stays in this browser only — it isn't sent to any server. Keep a backup of your
-          nsec; if you lose it, you lose access to your account.
-        </p>
-      </div>
-      <div class="text-sm text-caption">Enter your private key (nsec1...) or hex format</div>
-      <input
-        bind:value={nsecInput}
-        placeholder="nsec1..."
-        class="input block w-full sm:text-sm p-3"
-        disabled={authState.isLoading}
-      />
-      {#if nsecError}
-        <div class="text-sm" style="color: var(--color-danger, #ef4444)">{nsecError}</div>
-      {/if}
-      <div class="flex gap-2">
-        <Button on:click={loginWithPrivateKey} primary={true} disabled={authState.isLoading}>
-          {authState.isLoading ? '⚡ Connecting...' : '⚡ Login'}
-        </Button>
+  <Modal bind:open={nsecModal} cleanup={modalCleanup} noHeader>
+    <div class="login-modal-body">
+      <button type="button" class="login-modal-logo-btn" aria-label="Close" on:click={modalCleanup}>
+        <img src="/zap_cooking_logo_black.svg" alt="" aria-hidden="true" class="dark:hidden" />
+        <img
+          src="/zap_cooking_logo_white.svg"
+          alt=""
+          aria-hidden="true"
+          class="hidden dark:block"
+        />
+      </button>
+      <button
+        type="button"
+        class="login-modal-close-btn"
+        aria-label="Close"
+        on:click={modalCleanup}
+      >
+        <CloseIcon size={24} />
+      </button>
+      <h2 class="login-modal-title">🔑 Log in with Private Key</h2>
+      <div class="flex flex-col gap-4">
+        <div class="bg-input border rounded-lg p-3" style="border-color: var(--color-input-border)">
+          <p class="text-sm text-caption">
+            Your key stays in this browser only — it isn't sent to any server. Keep a backup of your
+            nsec; if you lose it, you lose access to your account.
+          </p>
+        </div>
+        <div class="text-sm text-caption">Enter your private key (nsec1...) or hex format</div>
+        <input
+          bind:value={nsecInput}
+          placeholder="nsec1..."
+          class="input block w-full sm:text-sm p-3"
+          disabled={authState.isLoading}
+        />
+        {#if nsecError}
+          <div class="text-sm" style="color: var(--color-danger, #ef4444)">{nsecError}</div>
+        {/if}
+        <div class="flex gap-2">
+          <Button on:click={loginWithPrivateKey} primary={true} disabled={authState.isLoading}>
+            {authState.isLoading ? '⚡ Connecting...' : '⚡ Login'}
+          </Button>
+        </div>
       </div>
     </div>
   </Modal>
 
   <!-- Bunker (NIP-46) Modal -->
-  <Modal bind:open={bunkerModal} on:close={modalCleanup}>
-    <svelte:fragment slot="title">
-      <span class="login-modal-title-wrap">
-        <span class="login-modal-logo-wrap" aria-hidden="true">
-          <img src="/zap_cooking_logo_black.svg" alt="" class="dark:hidden" />
-          <img src="/zap_cooking_logo_white.svg" alt="" class="hidden dark:block" />
-        </span>
-        <span class="login-modal-title-text">🔐 Paste bunker URI</span>
-      </span>
-    </svelte:fragment>
-    <div class="flex flex-col gap-4 login-modal-body">
-      <div class="bg-input border rounded-lg p-3" style="border-color: var(--color-input-border)">
-        <p class="text-sm text-caption">
-          Use a remote signer so your private key never touches this device. This is the most secure
-          way to sign in.
-        </p>
-      </div>
-
-      <div>
-        <label
-          for="bunker-input"
-          class="block text-sm font-medium mb-1.5"
-          style="color: var(--color-text-primary)"
-        >
-          NIP-46 Connection String
-        </label>
-        <textarea
-          id="bunker-input"
-          bind:value={bunkerConnectionString}
-          placeholder="bunker://pubkey?relay=wss://relay.example.com&#10;or&#10;npub1... wss://relay.example.com"
-          rows="3"
-          class="input block w-full sm:text-sm p-3 font-mono text-xs"
-          disabled={bunkerConnecting}
-        ></textarea>
-        <p class="text-xs text-caption mt-1.5">
-          Paste a bunker URI (or npub with relay hints) from your signer app. Do not paste
-          nostrconnect:// here.
-        </p>
-      </div>
-
-      {#if bunkerError}
-        <div
-          class="bg-input border rounded-lg p-2.5"
-          style="border-color: var(--color-danger, #ef4444)"
-        >
-          <p class="text-sm" style="color: var(--color-danger, #ef4444)">{bunkerError}</p>
-        </div>
-      {/if}
-
-      {#if bunkerConnecting}
-        <div
-          class="bg-input border rounded-lg p-3"
-          style="border-color: var(--color-primary, #f97316)"
-        >
-          <div class="flex items-center gap-2">
-            <div
-              class="animate-spin h-4 w-4 border-2 border-orange-500 border-t-transparent rounded-full"
-            ></div>
-            <p class="text-sm" style="color: var(--color-text-primary)">
-              Connecting to bunker... This may take a moment.
-            </p>
-          </div>
-          <p class="text-xs text-caption mt-1">
-            Check your signer app to approve the connection request.
+  <Modal bind:open={bunkerModal} cleanup={modalCleanup} noHeader>
+    <div class="login-modal-body">
+      <button type="button" class="login-modal-logo-btn" aria-label="Close" on:click={modalCleanup}>
+        <img src="/zap_cooking_logo_black.svg" alt="" aria-hidden="true" class="dark:hidden" />
+        <img
+          src="/zap_cooking_logo_white.svg"
+          alt=""
+          aria-hidden="true"
+          class="hidden dark:block"
+        />
+      </button>
+      <button
+        type="button"
+        class="login-modal-close-btn"
+        aria-label="Close"
+        on:click={modalCleanup}
+      >
+        <CloseIcon size={24} />
+      </button>
+      <h2 class="login-modal-title">🔐 Paste bunker URI</h2>
+      <div class="flex flex-col gap-4">
+        <div class="bg-input border rounded-lg p-3" style="border-color: var(--color-input-border)">
+          <p class="text-sm text-caption">
+            Use a remote signer so your private key never touches this device. This is the most
+            secure way to sign in.
           </p>
         </div>
-      {/if}
 
-      <div class="flex gap-2">
-        <Button
-          on:click={loginWithBunker}
-          primary={true}
-          disabled={bunkerConnecting || !bunkerConnectionString.trim()}
-        >
-          {bunkerConnecting ? '⏳ Connecting...' : '🔐 Connect'}
-        </Button>
+        <div>
+          <label
+            for="bunker-input"
+            class="block text-sm font-medium mb-1.5"
+            style="color: var(--color-text-primary)"
+          >
+            NIP-46 Connection String
+          </label>
+          <textarea
+            id="bunker-input"
+            bind:value={bunkerConnectionString}
+            placeholder="bunker://pubkey?relay=wss://relay.example.com&#10;or&#10;npub1... wss://relay.example.com"
+            rows="3"
+            class="input block w-full sm:text-sm p-3 font-mono text-xs"
+            disabled={bunkerConnecting}
+          ></textarea>
+          <p class="text-xs text-caption mt-1.5">
+            Paste a bunker URI (or npub with relay hints) from your signer app. Do not paste
+            nostrconnect:// here.
+          </p>
+        </div>
+
+        {#if bunkerError}
+          <div
+            class="bg-input border rounded-lg p-2.5"
+            style="border-color: var(--color-danger, #ef4444)"
+          >
+            <p class="text-sm" style="color: var(--color-danger, #ef4444)">{bunkerError}</p>
+          </div>
+        {/if}
+
+        {#if bunkerConnecting}
+          <div
+            class="bg-input border rounded-lg p-3"
+            style="border-color: var(--color-primary, #f97316)"
+          >
+            <div class="flex items-center gap-2">
+              <div
+                class="animate-spin h-4 w-4 border-2 border-orange-500 border-t-transparent rounded-full"
+              ></div>
+              <p class="text-sm" style="color: var(--color-text-primary)">
+                Connecting to bunker... This may take a moment.
+              </p>
+            </div>
+            <p class="text-xs text-caption mt-1">
+              Check your signer app to approve the connection request.
+            </p>
+          </div>
+        {/if}
+
+        <div class="flex gap-2">
+          <Button
+            on:click={loginWithBunker}
+            primary={true}
+            disabled={bunkerConnecting || !bunkerConnectionString.trim()}
+          >
+            {bunkerConnecting ? '⏳ Connecting...' : '🔐 Connect'}
+          </Button>
+        </div>
       </div>
     </div>
   </Modal>
 
   <!-- Universal NIP-46 Pairing Modal -->
-  <Modal bind:open={nip46UniversalModal} on:close={modalCleanup}>
-    <svelte:fragment slot="title">
-      <span class="login-modal-title-wrap">
-        <span class="login-modal-logo-wrap" aria-hidden="true">
-          <img src="/zap_cooking_logo_black.svg" alt="" class="dark:hidden" />
-          <img src="/zap_cooking_logo_white.svg" alt="" class="hidden dark:block" />
-        </span>
-        <span class="login-modal-title-text"
-          ><span class="mr-2">📷</span>Scan QR / Universal pairing</span
-        >
-      </span>
-    </svelte:fragment>
-    <div class="flex flex-col gap-4 login-modal-body">
-      <div class="bg-input border rounded-lg p-3" style="border-color: var(--color-input-border)">
-        <p class="text-sm text-caption">
-          Use a remote signer so your private key never touches this device. This is the most secure
-          way to sign in.
-        </p>
-      </div>
-
-      {#if nip46PairingError}
-        <div
-          class="bg-input border rounded-lg p-2.5"
-          style="border-color: var(--color-danger, #ef4444)"
-        >
-          <p class="text-sm" style="color: var(--color-danger, #ef4444)">{nip46PairingError}</p>
+  <Modal bind:open={nip46UniversalModal} cleanup={modalCleanup} noHeader>
+    <div class="login-modal-body">
+      <button type="button" class="login-modal-logo-btn" aria-label="Close" on:click={modalCleanup}>
+        <img src="/zap_cooking_logo_black.svg" alt="" aria-hidden="true" class="dark:hidden" />
+        <img
+          src="/zap_cooking_logo_white.svg"
+          alt=""
+          aria-hidden="true"
+          class="hidden dark:block"
+        />
+      </button>
+      <button
+        type="button"
+        class="login-modal-close-btn"
+        aria-label="Close"
+        on:click={modalCleanup}
+      >
+        <CloseIcon size={24} />
+      </button>
+      <h2 class="login-modal-title">
+        <span class="mr-2">📷</span>Scan QR / Universal pairing
+      </h2>
+      <div class="flex flex-col gap-4">
+        <div class="bg-input border rounded-lg p-3" style="border-color: var(--color-input-border)">
+          <p class="text-sm text-caption">
+            Use a remote signer so your private key never touches this device. This is the most
+            secure way to sign in.
+          </p>
         </div>
-      {/if}
 
-      {#if nip46PairingUri}
-        <div class="flex flex-col items-center gap-4">
-          <!-- QR Code - Centered with proper padding -->
+        {#if nip46PairingError}
           <div
-            class="bg-white rounded-lg qr-container"
-            style="--qr-size: 280px; --qr-padding: 16px;"
+            class="bg-input border rounded-lg p-2.5"
+            style="border-color: var(--color-danger, #ef4444)"
           >
-            <QRCode value={nip46PairingUri} size={248} padding={null} />
+            <p class="text-sm" style="color: var(--color-danger, #ef4444)">{nip46PairingError}</p>
           </div>
+        {/if}
 
-          <!-- Status -->
-          <div class="text-center">
-            <p class="text-sm font-medium mb-1" style="color: var(--color-text-primary)">
-              {nip46PairingStatus}
-            </p>
-            <p class="text-xs text-caption">Approve the connection in your signer app (Amber)</p>
-          </div>
+        {#if nip46PairingUri}
+          <div class="flex flex-col items-center gap-4">
+            <!-- QR Code - Centered with proper padding -->
+            <div
+              class="bg-white rounded-lg qr-container"
+              style="--qr-size: 280px; --qr-padding: 16px;"
+            >
+              <QRCode value={nip46PairingUri} size={248} padding={null} />
+            </div>
 
-          <!-- Action Buttons -->
-          <div class="flex flex-col gap-2 w-full">
-            {#if isAndroid}
+            <!-- Status -->
+            <div class="text-center">
+              <p class="text-sm font-medium mb-1" style="color: var(--color-text-primary)">
+                {nip46PairingStatus}
+              </p>
+              <p class="text-xs text-caption">Approve the connection in your signer app (Amber)</p>
+            </div>
+
+            <!-- Action Buttons -->
+            <div class="flex flex-col gap-2 w-full">
+              {#if isAndroid}
+                <Button
+                  on:click={() => window.open(nip46PairingUri, '_system')}
+                  primary={true}
+                  class="w-full"
+                >
+                  📱 Open Signer
+                </Button>
+              {/if}
               <Button
-                on:click={() => window.open(nip46PairingUri, '_system')}
-                primary={true}
+                on:click={() => copyToClipboard(nip46PairingUri)}
+                primary={false}
                 class="w-full"
               >
-                📱 Open Signer
+                📋 Copy Link
               </Button>
-            {/if}
-            <Button
-              on:click={() => copyToClipboard(nip46PairingUri)}
-              primary={false}
-              class="w-full"
-            >
-              📋 Copy Link
-            </Button>
+            </div>
           </div>
-        </div>
-      {:else if nip46PairingStatus}
-        <div class="flex items-center justify-center gap-2 py-8">
-          <div
-            class="animate-spin h-5 w-5 border-2 border-orange-500 border-t-transparent rounded-full"
-          ></div>
-          <p class="text-sm" style="color: var(--color-text-primary)">{nip46PairingStatus}</p>
-        </div>
-      {/if}
+        {:else if nip46PairingStatus}
+          <div class="flex items-center justify-center gap-2 py-8">
+            <div
+              class="animate-spin h-5 w-5 border-2 border-orange-500 border-t-transparent rounded-full"
+            ></div>
+            <p class="text-sm" style="color: var(--color-text-primary)">{nip46PairingStatus}</p>
+          </div>
+        {/if}
+      </div>
     </div>
   </Modal>
 
   <!-- Generate Keys Modal -->
-  <Modal bind:open={generateModal} on:close={modalCleanup}>
-    <svelte:fragment slot="title">
-      <span class="login-modal-title-wrap">
-        <span class="login-modal-logo-wrap" aria-hidden="true">
-          <img src="/zap_cooking_logo_black.svg" alt="" class="dark:hidden" />
-          <img src="/zap_cooking_logo_white.svg" alt="" class="hidden dark:block" />
-        </span>
-        <span class="login-modal-title-text"
-          >{generatedKeys
-            ? backupStep === 2
-              ? 'Add a display name and bio (optional)'
-              : '🔐 Save your backup key'
-            : '🎉 Your Zap Cooking profile is almost ready!'}</span
-        >
-      </span>
-    </svelte:fragment>
-    <div class="flex flex-col gap-4 login-modal-body">
-      {#if !generatedKeys}
-        <div class="space-y-4">
-          <div
-            class="bg-input border rounded-lg p-4"
-            style="border-color: var(--color-input-border)"
-          >
-            <div class="text-sm font-medium mb-2" style="color: var(--color-text-primary)">
-              🔐 Your profile, your keys
+  <Modal bind:open={generateModal} cleanup={modalCleanup} noHeader>
+    <div class="login-modal-body">
+      <button type="button" class="login-modal-logo-btn" aria-label="Close" on:click={modalCleanup}>
+        <img src="/zap_cooking_logo_black.svg" alt="" aria-hidden="true" class="dark:hidden" />
+        <img
+          src="/zap_cooking_logo_white.svg"
+          alt=""
+          aria-hidden="true"
+          class="hidden dark:block"
+        />
+      </button>
+      <button
+        type="button"
+        class="login-modal-close-btn"
+        aria-label="Close"
+        on:click={modalCleanup}
+      >
+        <CloseIcon size={24} />
+      </button>
+      <h2 class="login-modal-title">
+        {generatedKeys
+          ? backupStep === 2
+            ? 'Add a display name and bio (optional)'
+            : '🔐 Save your backup key'
+          : '🎉 Your Zap Cooking profile is almost ready!'}
+      </h2>
+      <div class="flex flex-col gap-4">
+        {#if !generatedKeys}
+          <div class="space-y-4">
+            <div
+              class="bg-input border rounded-lg p-4"
+              style="border-color: var(--color-input-border)"
+            >
+              <div class="text-sm font-medium mb-2" style="color: var(--color-text-primary)">
+                🔐 Your profile, your keys
+              </div>
+              <p class="text-sm text-caption mb-3">
+                Zap Cooking uses Nostr, which means you own your profile and data.
+              </p>
+              <ul class="text-sm text-caption space-y-1.5">
+                <li class="flex items-start gap-2">
+                  <span class="text-caption">•</span>
+                  <span>Your profile will be created on this device</span>
+                </li>
+                <li class="flex items-start gap-2">
+                  <span class="text-caption">•</span>
+                  <span>You'll see a backup key after creation</span>
+                </li>
+                <li class="flex items-start gap-2">
+                  <span class="text-caption">•</span>
+                  <span>Saving it lets you recover your profile later</span>
+                </li>
+              </ul>
             </div>
-            <p class="text-sm text-caption mb-3">
-              Zap Cooking uses Nostr, which means you own your profile and data.
+
+            <p class="text-sm text-caption">
+              When you continue, we'll create your profile and show you a backup key to save for
+              safekeeping.
             </p>
-            <ul class="text-sm text-caption space-y-1.5">
-              <li class="flex items-start gap-2">
-                <span class="text-caption">•</span>
-                <span>Your profile will be created on this device</span>
-              </li>
-              <li class="flex items-start gap-2">
-                <span class="text-caption">•</span>
-                <span>You'll see a backup key after creation</span>
-              </li>
-              <li class="flex items-start gap-2">
-                <span class="text-caption">•</span>
-                <span>Saving it lets you recover your profile later</span>
-              </li>
-            </ul>
-          </div>
 
-          <p class="text-sm text-caption">
-            When you continue, we'll create your profile and show you a backup key to save for
-            safekeeping.
-          </p>
-
-          <div>
-            <Button on:click={generateNewKeys} primary={true} class="w-full">
-              ⚡ Create Profile
-            </Button>
-            <p class="text-xs text-caption text-center mt-2">Takes less than 10 seconds</p>
-          </div>
-        </div>
-      {:else}
-        <div class="space-y-4">
-          <!-- Calm intro message -->
-          {#if backupStep === 1}
-            <div class="bg-green-50 border border-green-200 rounded-lg p-3">
-              <p class="text-sm text-green-700">
-                ✓ Your profile has been created. Save your backup key below to recover it later.
-              </p>
-            </div>
-          {/if}
-
-          {#if backupStep === 1}
-            <p class="text-xs text-caption uppercase tracking-wide mb-2">Step 1</p>
-            <!-- Backup Key (Private) - Hidden by default -->
             <div>
-              <p class="block text-sm font-medium mb-1" style="color: var(--color-text-primary)">
-                Backup key (private)
-              </p>
-              {#if showPrivateKey}
+              <Button on:click={generateNewKeys} primary={true} class="w-full">
+                ⚡ Create Profile
+              </Button>
+              <p class="text-xs text-caption text-center mt-2">Takes less than 10 seconds</p>
+            </div>
+          </div>
+        {:else}
+          <div class="space-y-4">
+            <!-- Calm intro message -->
+            {#if backupStep === 1}
+              <div class="bg-green-50 border border-green-200 rounded-lg p-3">
+                <p class="text-sm text-green-700">
+                  ✓ Your profile has been created. Save your backup key below to recover it later.
+                </p>
+              </div>
+            {/if}
+
+            {#if backupStep === 1}
+              <p class="text-xs text-caption uppercase tracking-wide mb-2">Step 1</p>
+              <!-- Backup Key (Private) - Hidden by default -->
+              <div>
+                <p class="block text-sm font-medium mb-1" style="color: var(--color-text-primary)">
+                  Backup key (private)
+                </p>
+                {#if showPrivateKey}
+                  <div class="flex flex-col sm:flex-row gap-2">
+                    <textarea
+                      id="private-key-textarea"
+                      readonly
+                      value={nip19.nsecEncode(generatedKeys.privateKey)}
+                      rows="2"
+                      class="flex-1 min-w-0 input text-sm font-mono p-3"
+                    ></textarea>
+                    <button
+                      on:click={() =>
+                        generatedKeys &&
+                        copyToClipboard(nip19.nsecEncode(generatedKeys.privateKey))}
+                      class="flex-shrink-0 px-3 py-2 bg-accent-gray hover:opacity-80 rounded-lg text-sm font-medium transition-colors"
+                      style="color: var(--color-text-primary)"
+                    >
+                      Copy
+                    </button>
+                  </div>
+                  <div class="flex items-center justify-between mt-1.5">
+                    <p class="text-xs text-amber-600">
+                      ⚠️ Anyone with this key can control your profile. Never share it.
+                    </p>
+                    <button
+                      on:click={() => (showPrivateKey = false)}
+                      class="text-xs text-caption hover:opacity-80 underline"
+                    >
+                      Hide
+                    </button>
+                  </div>
+                {:else}
+                  <div class="flex flex-col sm:flex-row gap-2">
+                    <div
+                      class="flex-1 min-w-0 bg-input border rounded-lg p-3 text-sm text-caption font-mono overflow-hidden whitespace-nowrap"
+                      style="border-color: var(--color-input-border)"
+                    >
+                      ••••••••••••••••••••••••••••••••
+                    </div>
+                    <button
+                      on:click={() => (showPrivateKey = true)}
+                      class="flex-shrink-0 px-3 py-2 bg-accent-gray hover:opacity-80 rounded-lg text-sm font-medium transition-colors"
+                      style="color: var(--color-text-primary)"
+                    >
+                      Reveal
+                    </button>
+                  </div>
+                  <p class="text-xs text-caption mt-1.5">Reveal to copy and save securely</p>
+                {/if}
+              </div>
+
+              <!-- Public Identity (npub) -->
+              <div>
+                <label
+                  for="public-key-input"
+                  class="block text-sm font-medium mb-1"
+                  style="color: var(--color-text-primary)">Public identity (npub)</label
+                >
                 <div class="flex flex-col sm:flex-row gap-2">
-                  <textarea
-                    id="private-key-textarea"
+                  <input
+                    id="public-key-input"
                     readonly
-                    value={nip19.nsecEncode(generatedKeys.privateKey)}
-                    rows="2"
+                    value={nip19.npubEncode(generatedKeys.publicKey)}
                     class="flex-1 min-w-0 input text-sm font-mono p-3"
-                  ></textarea>
+                  />
                   <button
                     on:click={() =>
-                      generatedKeys && copyToClipboard(nip19.nsecEncode(generatedKeys.privateKey))}
-                    class="flex-shrink-0 px-3 py-2 bg-accent-gray hover:opacity-80 rounded-lg text-sm font-medium transition-colors"
+                      generatedKeys && copyToClipboard(nip19.npubEncode(generatedKeys.publicKey))}
+                    class="flex-shrink-0 px-3 py-2 bg-accent-gray hover:opacity-80 rounded-lg text-sm transition-colors"
                     style="color: var(--color-text-primary)"
                   >
                     Copy
                   </button>
                 </div>
-                <div class="flex items-center justify-between mt-1.5">
-                  <p class="text-xs text-amber-600">
-                    ⚠️ Anyone with this key can control your profile. Never share it.
-                  </p>
-                  <button
-                    on:click={() => (showPrivateKey = false)}
-                    class="text-xs text-caption hover:opacity-80 underline"
-                  >
-                    Hide
-                  </button>
-                </div>
-              {:else}
-                <div class="flex flex-col sm:flex-row gap-2">
-                  <div
-                    class="flex-1 min-w-0 bg-input border rounded-lg p-3 text-sm text-caption font-mono overflow-hidden whitespace-nowrap"
-                    style="border-color: var(--color-input-border)"
-                  >
-                    ••••••••••••••••••••••••••••••••
-                  </div>
-                  <button
-                    on:click={() => (showPrivateKey = true)}
-                    class="flex-shrink-0 px-3 py-2 bg-accent-gray hover:opacity-80 rounded-lg text-sm font-medium transition-colors"
-                    style="color: var(--color-text-primary)"
-                  >
-                    Reveal
-                  </button>
-                </div>
-                <p class="text-xs text-caption mt-1.5">Reveal to copy and save securely</p>
-              {/if}
-            </div>
-
-            <!-- Public Identity (npub) -->
-            <div>
-              <label
-                for="public-key-input"
-                class="block text-sm font-medium mb-1"
-                style="color: var(--color-text-primary)">Public identity (npub)</label
-              >
-              <div class="flex flex-col sm:flex-row gap-2">
-                <input
-                  id="public-key-input"
-                  readonly
-                  value={nip19.npubEncode(generatedKeys.publicKey)}
-                  class="flex-1 min-w-0 input text-sm font-mono p-3"
-                />
-                <button
-                  on:click={() =>
-                    generatedKeys && copyToClipboard(nip19.npubEncode(generatedKeys.publicKey))}
-                  class="flex-shrink-0 px-3 py-2 bg-accent-gray hover:opacity-80 rounded-lg text-sm transition-colors"
-                  style="color: var(--color-text-primary)"
-                >
-                  Copy
-                </button>
+                <p class="text-xs text-caption mt-1.5">
+                  This is safe to share - it's your public identity
+                </p>
               </div>
-              <p class="text-xs text-caption mt-1.5">
-                This is safe to share - it's your public identity
-              </p>
-            </div>
 
-            <div
-              class="bg-input border rounded-lg p-3"
-              style="border-color: var(--color-input-border)"
-            >
-              <p class="text-sm text-caption">
-                Download a backup file with your keys and safety notes.
-              </p>
-              <Button on:click={downloadKeysBackup} primary={true} class="w-full mt-3">
-                Download backup file
+              <div
+                class="bg-input border rounded-lg p-3"
+                style="border-color: var(--color-input-border)"
+              >
+                <p class="text-sm text-caption">
+                  Download a backup file with your keys and safety notes.
+                </p>
+                <Button on:click={downloadKeysBackup} primary={true} class="w-full mt-3">
+                  Download backup file
+                </Button>
+              </div>
+
+              <Button
+                on:click={() => (backupStep = 2)}
+                primary={false}
+                class="w-full {!backupDownloaded ? 'opacity-50 cursor-not-allowed' : ''}"
+                disabled={!backupDownloaded}
+              >
+                ⚡ Next
               </Button>
-            </div>
+              {#if !backupDownloaded}
+                <p class="text-xs text-caption text-center">
+                  Download the backup file to continue.
+                </p>
+              {/if}
+            {:else}
+              <p class="text-xs text-caption uppercase tracking-wide mb-2">Step 2</p>
 
-            <Button
-              on:click={() => (backupStep = 2)}
-              primary={false}
-              class="w-full {!backupDownloaded ? 'opacity-50 cursor-not-allowed' : ''}"
-              disabled={!backupDownloaded}
-            >
-              ⚡ Next
-            </Button>
-            {#if !backupDownloaded}
-              <p class="text-xs text-caption text-center">Download the backup file to continue.</p>
-            {/if}
-          {:else}
-            <p class="text-xs text-caption uppercase tracking-wide mb-2">Step 2</p>
-
-            <div class="space-y-3 mb-4">
-              <!-- Profile Photo -->
-              <div>
-                <div class="flex items-center gap-3 mb-2">
-                  <div class="relative">
-                    {#if newAccountPicture}
-                      <img
-                        src={newAccountPicture}
-                        alt="Profile preview"
-                        class="w-14 h-14 rounded-full object-cover border-2"
-                        style="border-color: var(--color-input-border)"
-                      />
-                    {:else}
-                      <div
-                        class="w-14 h-14 rounded-full bg-input border-2 border-dashed flex items-center justify-center"
-                        style="border-color: var(--color-input-border)"
-                      >
-                        <span class="text-caption text-xl">👤</span>
-                      </div>
-                    {/if}
-                  </div>
-                  <div class="flex-1">
-                    <input
-                      type="file"
-                      accept="image/*"
-                      class="hidden"
-                      bind:this={fileInput}
-                      on:change={uploadProfilePicture}
-                      disabled={uploadingPicture || authState.isLoading}
-                    />
-                    <div class="flex items-center gap-2">
-                      <button
-                        on:click={() => fileInput?.click()}
-                        disabled={uploadingPicture || authState.isLoading}
-                        class="text-sm text-orange-500 hover:text-orange-600 font-medium transition-colors disabled:opacity-50"
-                      >
-                        {#if uploadingPicture}
-                          Uploading...
-                        {:else if newAccountPicture}
-                          Change photo
-                        {:else}
-                          Upload photo
-                        {/if}
-                      </button>
-                      {#if !newAccountPicture && !uploadingPicture}
-                        <span class="text-caption">|</span>
-                        <button
-                          on:click={() => (showPictureUrlInput = !showPictureUrlInput)}
-                          class="text-sm text-caption hover:opacity-80 transition-colors"
+              <div class="space-y-3 mb-4">
+                <!-- Profile Photo -->
+                <div>
+                  <div class="flex items-center gap-3 mb-2">
+                    <div class="relative">
+                      {#if newAccountPicture}
+                        <img
+                          src={newAccountPicture}
+                          alt="Profile preview"
+                          class="w-14 h-14 rounded-full object-cover border-2"
+                          style="border-color: var(--color-input-border)"
+                        />
+                      {:else}
+                        <div
+                          class="w-14 h-14 rounded-full bg-input border-2 border-dashed flex items-center justify-center"
+                          style="border-color: var(--color-input-border)"
                         >
-                          Paste URL
-                        </button>
+                          <span class="text-caption text-xl">👤</span>
+                        </div>
                       {/if}
                     </div>
-                    {#if pictureUploadError && !showPictureUrlInput}
-                      <p class="text-xs text-red-500 mt-0.5">{pictureUploadError}</p>
-                    {:else if newAccountPicture}
-                      <p class="text-xs text-caption mt-0.5">Looking good!</p>
-                    {/if}
+                    <div class="flex-1">
+                      <input
+                        type="file"
+                        accept="image/*"
+                        class="hidden"
+                        bind:this={fileInput}
+                        on:change={uploadProfilePicture}
+                        disabled={uploadingPicture || authState.isLoading}
+                      />
+                      <div class="flex items-center gap-2">
+                        <button
+                          on:click={() => fileInput?.click()}
+                          disabled={uploadingPicture || authState.isLoading}
+                          class="text-sm text-orange-500 hover:text-orange-600 font-medium transition-colors disabled:opacity-50"
+                        >
+                          {#if uploadingPicture}
+                            Uploading...
+                          {:else if newAccountPicture}
+                            Change photo
+                          {:else}
+                            Upload photo
+                          {/if}
+                        </button>
+                        {#if !newAccountPicture && !uploadingPicture}
+                          <span class="text-caption">|</span>
+                          <button
+                            on:click={() => (showPictureUrlInput = !showPictureUrlInput)}
+                            class="text-sm text-caption hover:opacity-80 transition-colors"
+                          >
+                            Paste URL
+                          </button>
+                        {/if}
+                      </div>
+                      {#if pictureUploadError && !showPictureUrlInput}
+                        <p class="text-xs text-red-500 mt-0.5">{pictureUploadError}</p>
+                      {:else if newAccountPicture}
+                        <p class="text-xs text-caption mt-0.5">Looking good!</p>
+                      {/if}
+                    </div>
                   </div>
+
+                  <!-- URL Input (shown on demand or after upload failure) -->
+                  {#if showPictureUrlInput && !newAccountPicture}
+                    <div class="flex gap-2 mt-2">
+                      <input
+                        type="url"
+                        bind:value={pictureUrlInput}
+                        placeholder="https://example.com/photo.jpg"
+                        class="flex-1 input text-sm p-2"
+                        disabled={authState.isLoading}
+                      />
+                      <button
+                        on:click={applyPictureUrl}
+                        disabled={!pictureUrlInput.trim() || authState.isLoading}
+                        class="px-3 py-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+                      >
+                        Apply
+                      </button>
+                    </div>
+                    {#if pictureUploadError}
+                      <p class="text-xs text-red-500 mt-1">{pictureUploadError}</p>
+                    {/if}
+                  {/if}
                 </div>
 
-                <!-- URL Input (shown on demand or after upload failure) -->
-                {#if showPictureUrlInput && !newAccountPicture}
-                  <div class="flex gap-2 mt-2">
-                    <input
-                      type="url"
-                      bind:value={pictureUrlInput}
-                      placeholder="https://example.com/photo.jpg"
-                      class="flex-1 input text-sm p-2"
-                      disabled={authState.isLoading}
-                    />
-                    <button
-                      on:click={applyPictureUrl}
-                      disabled={!pictureUrlInput.trim() || authState.isLoading}
-                      class="px-3 py-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
-                    >
-                      Apply
-                    </button>
-                  </div>
-                  {#if pictureUploadError}
-                    <p class="text-xs text-red-500 mt-1">{pictureUploadError}</p>
-                  {/if}
-                {/if}
+                <!-- Display Name -->
+                <div>
+                  <input
+                    id="username-input"
+                    bind:value={newAccountUsername}
+                    placeholder="Display name"
+                    class="w-full input block text-sm p-2.5"
+                    disabled={authState.isLoading}
+                  />
+                  <p class="text-xs text-caption mt-1">
+                    Shown on your profile across Nostr clients
+                  </p>
+                </div>
+
+                <!-- Bio -->
+                <div>
+                  <textarea
+                    bind:value={newAccountBio}
+                    placeholder="A short bio about you..."
+                    rows="2"
+                    class="w-full input block text-sm p-2.5 resize-none"
+                    disabled={authState.isLoading}
+                  ></textarea>
+                  <p class="text-xs text-caption mt-1">A short description about you</p>
+                </div>
               </div>
 
-              <!-- Display Name -->
-              <div>
-                <input
-                  id="username-input"
-                  bind:value={newAccountUsername}
-                  placeholder="Display name"
-                  class="w-full input block text-sm p-2.5"
-                  disabled={authState.isLoading}
-                />
-                <p class="text-xs text-caption mt-1">Shown on your profile across Nostr clients</p>
+              <!-- Actions -->
+              <div class="space-y-2">
+                <Button
+                  on:click={() => useGeneratedKeys(false)}
+                  primary={true}
+                  disabled={authState.isLoading || uploadingPicture}
+                  class="w-full"
+                >
+                  {authState.isLoading ? '⚡ Setting up...' : '⚡ Continue to Zap Cooking'}
+                </Button>
               </div>
-
-              <!-- Bio -->
-              <div>
-                <textarea
-                  bind:value={newAccountBio}
-                  placeholder="A short bio about you..."
-                  rows="2"
-                  class="w-full input block text-sm p-2.5 resize-none"
-                  disabled={authState.isLoading}
-                ></textarea>
-                <p class="text-xs text-caption mt-1">A short description about you</p>
-              </div>
-            </div>
-
-            <!-- Actions -->
-            <div class="space-y-2">
-              <Button
-                on:click={() => useGeneratedKeys(false)}
-                primary={true}
-                disabled={authState.isLoading || uploadingPicture}
-                class="w-full"
-              >
-                {authState.isLoading ? '⚡ Setting up...' : '⚡ Continue to Zap Cooking'}
-              </Button>
-            </div>
-          {/if}
-        </div>
-      {/if}
+            {/if}
+          </div>
+        {/if}
+      </div>
     </div>
   </Modal>
 
@@ -1748,34 +1798,76 @@
     }
   }
 
-  /* Title-bar logo (mobile-only). On phone viewports the login modal
-     is a full-screen sheet (see block below) and gets a small Zap
-     Cooking wordmark in the top-left of the title bar — matches the
-     positioning of the wallet sheet's brand mark. Hidden on tablet+
-     where the centered modal doesn't need the extra brand context.
-     :global() so the same rules apply to slot content rendered by
-     <LoginFormIOS> as well as by this route. */
-  :global(.login-modal-title-wrap) {
-    display: inline-flex;
+  /* Login modal layout — mirrors the WalletModal pattern. The Modal
+     component runs with noHeader so we own the chrome: a floating
+     logo (mobile-only) at top-left, a floating X at top-right, and
+     a full-width <h2> title inside the body. This gives the title
+     all the horizontal space it needs and matches the brand
+     positioning of the wallet sheet. :global() so the rules apply
+     to slot content rendered by both this route and LoginFormIOS. */
+  :global(.login-modal-body) {
+    position: relative;
+    padding-top: 3.5rem;
+  }
+  :global(.login-modal-logo-btn),
+  :global(.login-modal-close-btn) {
+    position: absolute;
+    top: 0.5rem;
+    min-width: 44px;
+    min-height: 44px;
+    display: flex;
     align-items: center;
-    gap: 0.5rem;
-    min-width: 0;
+    justify-content: center;
+    z-index: 10;
+    color: var(--color-text-primary);
+    background-color: transparent;
+    border: none;
+    border-radius: 9999px;
+    cursor: pointer;
+    transition: background-color 0.15s ease-out;
   }
-  :global(.login-modal-title-text) {
-    min-width: 0;
-  }
-  :global(.login-modal-logo-wrap) {
+  :global(.login-modal-logo-btn) {
+    left: 0.5rem;
+    padding: 0 0.75rem;
+    /* Mobile-only — hidden on tablet+ since the centered modal
+       doesn't need the extra brand context. */
     display: none;
-    align-items: center;
-    flex-shrink: 0;
   }
-  :global(.login-modal-logo-wrap img) {
+  :global(.login-modal-close-btn) {
+    right: 0.5rem;
+    width: 44px;
+    height: 44px;
+  }
+  :global(.login-modal-logo-btn img) {
     height: 20px;
     width: auto;
   }
+  :global(.login-modal-logo-btn:hover),
+  :global(.login-modal-close-btn:hover) {
+    background-color: rgba(255, 255, 255, 0.06);
+  }
+  :global(.login-modal-logo-btn:focus-visible),
+  :global(.login-modal-close-btn:focus-visible) {
+    outline: 2px solid var(--color-text-primary);
+    outline-offset: 2px;
+  }
+  :global(.login-modal-title) {
+    font-size: 1.25rem;
+    font-weight: 600;
+    line-height: 1.3;
+    color: var(--color-text-primary);
+    margin: 0 0 1rem;
+  }
   @media (max-width: 767.98px) {
-    :global(.login-modal-logo-wrap) {
-      display: inline-flex;
+    :global(.login-modal-logo-btn) {
+      display: flex;
+      top: max(0.5rem, env(safe-area-inset-top));
+    }
+    :global(.login-modal-close-btn) {
+      top: max(0.5rem, env(safe-area-inset-top));
+    }
+    :global(.login-modal-body) {
+      padding-top: calc(3.5rem + env(safe-area-inset-top));
     }
   }
 
