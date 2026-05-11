@@ -397,7 +397,7 @@
 <!-- Private Key Modal -->
 <Modal bind:open={nsecModal} on:close={modalCleanup}>
   <svelte:fragment slot="title">🔑 Log in with Private Key</svelte:fragment>
-  <div class="flex flex-col gap-4">
+  <div class="flex flex-col gap-4 login-modal-body">
     <div class="bg-input border rounded-lg p-3" style="border-color: var(--color-input-border)">
       <p class="text-sm text-caption">
         Your key stays on this device only — it isn't sent to any server. Keep a backup of your
@@ -425,7 +425,7 @@
 <!-- Bunker (NIP-46) Modal -->
 <Modal bind:open={bunkerModal} on:close={modalCleanup}>
   <svelte:fragment slot="title">🔐 Paste bunker URI</svelte:fragment>
-  <div class="flex flex-col gap-4">
+  <div class="flex flex-col gap-4 login-modal-body">
     <div class="bg-input border rounded-lg p-3" style="border-color: var(--color-input-border)">
       <p class="text-sm text-caption">
         Connect a remote signer so your private key stays in your signer app.
@@ -499,7 +499,7 @@
         : '🔐 Save your backup key'
       : '🎉 Your Zap Cooking profile is almost ready!'}</svelte:fragment
   >
-  <div class="flex flex-col gap-4">
+  <div class="flex flex-col gap-4 login-modal-body">
     {#if !generatedKeys}
       <div class="space-y-4">
         <div class="bg-input border rounded-lg p-4" style="border-color: var(--color-input-border)">

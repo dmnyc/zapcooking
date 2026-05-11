@@ -493,7 +493,7 @@
   <!-- Private Key Modal -->
   <Modal bind:open={nsecModal} on:close={modalCleanup}>
     <svelte:fragment slot="title">🔑 Log in with Private Key</svelte:fragment>
-    <div class="flex flex-col gap-4">
+    <div class="flex flex-col gap-4 login-modal-body">
       <div class="bg-input border rounded-lg p-3" style="border-color: var(--color-input-border)">
         <p class="text-sm text-caption">
           Your key stays in this browser only — it isn't sent to any server. Keep a backup of your
@@ -521,7 +521,7 @@
   <!-- Bunker (NIP-46) Modal -->
   <Modal bind:open={bunkerModal} on:close={modalCleanup}>
     <svelte:fragment slot="title">🔐 Paste bunker URI</svelte:fragment>
-    <div class="flex flex-col gap-4">
+    <div class="flex flex-col gap-4 login-modal-body">
       <div class="bg-input border rounded-lg p-3" style="border-color: var(--color-input-border)">
         <p class="text-sm text-caption">
           Use a remote signer so your private key never touches this device. This is the most secure
@@ -596,7 +596,7 @@
     <svelte:fragment slot="title"
       ><span class="mr-2">📷</span>Scan QR / Universal pairing</svelte:fragment
     >
-    <div class="flex flex-col gap-4">
+    <div class="flex flex-col gap-4 login-modal-body">
       <div class="bg-input border rounded-lg p-3" style="border-color: var(--color-input-border)">
         <p class="text-sm text-caption">
           Use a remote signer so your private key never touches this device. This is the most secure
@@ -671,7 +671,7 @@
           : '🔐 Save your backup key'
         : '🎉 Your Zap Cooking profile is almost ready!'}</svelte:fragment
     >
-    <div class="flex flex-col gap-4">
+    <div class="flex flex-col gap-4 login-modal-body">
       {#if !generatedKeys}
         <div class="space-y-4">
           <div
@@ -1713,6 +1713,40 @@
     .signin-tile {
       animation: none !important;
       transition: none !important;
+    }
+  }
+
+  /* =========================================================
+     Mobile: login modals become full-screen sheets
+     =========================================================
+     All four modals on this page (nsec, bunker, NIP-46 QR, generate)
+     contain a wrapper with .login-modal-body. On narrow viewports
+     the centered/scrolling dialog clips long flows (e.g. the Next
+     button below the nsec view). Promote to a full-screen sheet so
+     content can use the full viewport height without overflow being
+     hidden by the modal frame.
+
+     Mirrors the WalletModal full-screen approach — override the
+     dialog's centering transform, fill 100dvw × 100dvh, drop rounded
+     corners. Tailwind composes its transform via --tw-translate-x/y
+     CSS vars, so we zero those out alongside setting an explicit
+     transform to fully neutralise Modal.svelte's centering. */
+  @media (max-width: 767.98px) {
+    :global(dialog:has(.login-modal-body)) {
+      width: 100dvw !important;
+      max-width: 100dvw !important;
+      height: 100dvh !important;
+      max-height: 100dvh !important;
+      min-height: 100dvh !important;
+      top: 0 !important;
+      left: 0 !important;
+      right: auto !important;
+      bottom: auto !important;
+      --tw-translate-x: 0px !important;
+      --tw-translate-y: 0px !important;
+      transform: translate(0px, 0px) !important;
+      border-radius: 0 !important;
+      margin: 0 !important;
     }
   }
 </style>
