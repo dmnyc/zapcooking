@@ -7,6 +7,7 @@
   import Modal from '../../components/Modal.svelte';
   import CloseIcon from 'phosphor-svelte/lib/XCircle';
   import LightningIcon from 'phosphor-svelte/lib/Lightning';
+  import ProfileReadyIcon from '../../components/icons/ProfileReadyIcon.svelte';
   import type { PageData } from './$types';
   import QRCode from 'svelte-qrcode';
 
@@ -744,7 +745,7 @@
       {#if !generatedKeys}
         <div class="login-modal-hero">
           <div class="login-modal-hero-icon">
-            <LightningIcon size={32} weight="fill" class="text-amber-500" />
+            <ProfileReadyIcon size={36} class="text-amber-500" />
           </div>
           <h2 class="login-modal-hero-title">Your Zap Cooking profile is almost ready!</h2>
         </div>
@@ -1824,7 +1825,12 @@
      to slot content rendered by both this route and LoginFormIOS. */
   :global(.login-modal-body) {
     position: relative;
-    padding-top: 3.5rem;
+    padding: 3.5rem 1rem 1rem;
+  }
+  @media (min-width: 768px) {
+    :global(.login-modal-body) {
+      padding: 3.5rem 1.5rem 1.5rem;
+    }
   }
   :global(.login-modal-logo-btn),
   :global(.login-modal-close-btn) {
@@ -1950,5 +1956,17 @@
       border-radius: 0 !important;
       margin: 0 !important;
     }
+  }
+
+  /* Strip the dialog's intrinsic padding (Modal.svelte default is
+     px-4 md:px-8 + pt-6 pb-8) and the inner wrapper's padding so the
+     floating logo + X land at the same dialog-edge inset as the
+     wallet sheet (matches the WalletModal CSS exactly). */
+  :global(dialog:has(.login-modal-body)) {
+    padding: 0 !important;
+  }
+  :global(dialog:has(.login-modal-body) > div) {
+    padding: 0 !important;
+    gap: 0 !important;
   }
 </style>

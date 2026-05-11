@@ -14,6 +14,7 @@
   import Modal from './Modal.svelte';
   import CloseIcon from 'phosphor-svelte/lib/XCircle';
   import LightningIcon from 'phosphor-svelte/lib/Lightning';
+  import ProfileReadyIcon from './icons/ProfileReadyIcon.svelte';
   import { ndk, userPublickey } from '$lib/nostr';
   import { browser } from '$app/environment';
   import { goto } from '$app/navigation';
@@ -523,7 +524,7 @@
     {#if !generatedKeys}
       <div class="login-modal-hero">
         <div class="login-modal-hero-icon">
-          <LightningIcon size={32} weight="fill" class="text-amber-500" />
+          <ProfileReadyIcon size={36} class="text-amber-500" />
         </div>
         <h2 class="login-modal-hero-title">Your Zap Cooking profile is almost ready!</h2>
       </div>
