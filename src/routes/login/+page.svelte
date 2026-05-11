@@ -974,8 +974,10 @@
     }}
   />
 
-  <!-- Blur overlay (bottom layer) -->
-  <div class="login-blur-layer backdrop-brightness-50 backdrop-blur" aria-hidden="true"></div>
+  <!-- Blur overlay (bottom layer). Brightness adjustment is dark-only:
+       in light mode the underlying page bg is already light, so no
+       darkening tint is wanted. -->
+  <div class="login-blur-layer backdrop-blur dark:backdrop-brightness-50" aria-hidden="true"></div>
 
   <!-- Animated elements (above blur) -->
   <div class="login-viewport-anim pointer-events-none" aria-hidden="true">
@@ -1028,7 +1030,17 @@
     <section class="signin-card" aria-labelledby="signin-title">
       <p class="signin-eyebrow">Welcome to</p>
       <h1 id="signin-title" class="signin-wordmark">
-        <img src="/zap_cooking_logo_white.svg" alt="Zap Cooking" />
+        <img
+          src="/zap_cooking_logo_black.svg"
+          alt="Zap Cooking"
+          class="signin-wordmark-img signin-wordmark-img--light dark:hidden"
+        />
+        <img
+          src="/zap_cooking_logo_white.svg"
+          alt=""
+          aria-hidden="true"
+          class="signin-wordmark-img signin-wordmark-img--dark hidden dark:block"
+        />
       </h1>
       <p class="signin-tagline">Share recipes and get paid by your community.</p>
 
@@ -1314,16 +1326,30 @@
   }
 
   /* Brief palette tokens — scoped to the sign-in surface so they don't
-     leak into the rest of the app. If we promote any of these to global
-     tokens later, do it in src/app.css alongside the existing
-     --color-* set rather than splitting the system. */
+     leak into the rest of the app. Light values are the default;
+     dark values come in via the :where(.dark) override below. If we
+     promote any of these to global tokens later, do it in src/app.css
+     alongside the existing --color-* set rather than splitting the
+     system. */
   .login-viewport-center {
+    /* Light mode (default) */
+    --signin-ink: #f5f6f8; /* page-tint behind scrim */
+    --signin-surface: #ffffff; /* card */
+    --signin-elevated: #f3f4f6; /* tile bg */
+    --signin-line: #e5e7eb; /* subtle border */
+    --signin-flame: #f7931a; /* brand orange — theme-agnostic */
+    --signin-ember: #ff5f1f; /* brand orange — theme-agnostic */
+    --signin-cream: #0f172a; /* primary text on light surface */
+    --signin-wheat: #475569; /* secondary text */
+    --signin-mute: #94a3b8; /* muted text */
+  }
+
+  :global(.dark) .login-viewport-center {
+    /* Dark mode override — original palette */
     --signin-ink: #0b0e14;
     --signin-surface: #13171f;
     --signin-elevated: #1b202b;
     --signin-line: #262c3a;
-    --signin-flame: #f7931a;
-    --signin-ember: #ff5f1f;
     --signin-cream: #f5ebdd;
     --signin-wheat: #c5b8a3;
     --signin-mute: #7e8597;
@@ -1396,8 +1422,11 @@
     width: 240px;
     max-width: 100%;
     height: auto;
-    display: block;
-    margin: 0 auto;
+    /* Centered via the inherited text-align: center on .signin-card.
+       Display intentionally left as inline (default) so Tailwind's
+       dark:hidden / hidden dark:block can drive the show/hide swap
+       between the light and dark wordmarks without this rule
+       forcing block on a hidden variant. */
   }
 
   .signin-tagline {
@@ -1536,8 +1565,11 @@
     background: rgba(239, 68, 68, 0.1);
     border: 1px solid rgba(239, 68, 68, 0.6);
     font-size: 0.8125rem;
-    color: #fca5a5;
+    color: #b91c1c; /* dark red — readable on light card */
     line-height: 1.5;
+  }
+  :global(.dark) .signin-error {
+    color: #fca5a5; /* lighter red — readable on dark card */
   }
 
   /* ───── Divider ───── */
