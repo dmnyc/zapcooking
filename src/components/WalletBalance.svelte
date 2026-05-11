@@ -43,7 +43,6 @@
   import EyeClosedIcon from 'phosphor-svelte/lib/EyeClosed';
   import SparkLogo from './icons/SparkLogo.svelte';
   import NwcLogo from './icons/NwcLogo.svelte';
-  import WeblnLogo from './icons/WeblnLogo.svelte';
   import BitcoinConnectLogo from './icons/BitcoinConnectLogo.svelte';
 
   let dropdownActive = false;
@@ -137,7 +136,7 @@
       <div
         class="w-4 h-4 rounded-full bg-gradient-to-br from-orange-500 to-amber-500 flex items-center justify-center flex-shrink-0"
       >
-        <WeblnLogo size={10} className="text-white" />
+        <LightningIcon size={10} weight="fill" class="text-white" />
       </div>
       {#if weblnBalanceLoading}
         <span class="animate-pulse min-w-[3.5rem] text-right">...</span>
@@ -167,7 +166,7 @@
         >
           <!-- Current wallet — pill button that opens the wallet modal -->
           <button
-            class="wallet-name-pill flex items-center justify-between gap-2 w-full px-4 py-2 rounded-full text-left transition-colors cursor-pointer"
+            class="wallet-name-pill flex items-center justify-between gap-2 w-full px-4 py-2 min-h-[44px] rounded-full text-left transition-colors cursor-pointer"
             style="background-color: var(--color-bg-secondary); border: 1px solid var(--color-input-border);"
             on:click={() => {
               dropdownActive = false;
@@ -262,7 +261,7 @@
         >
           <!-- Current wallet — pill button that opens the wallet modal -->
           <button
-            class="wallet-name-pill flex items-center justify-between gap-2 w-full px-4 py-2 rounded-full text-left transition-colors cursor-pointer"
+            class="wallet-name-pill flex items-center justify-between gap-2 w-full px-4 py-2 min-h-[44px] rounded-full text-left transition-colors cursor-pointer"
             style="background-color: var(--color-bg-secondary); border: 1px solid var(--color-input-border);"
             on:click={() => {
               dropdownActive = false;
@@ -350,7 +349,7 @@
           <!-- Current wallet info (clickable to open wallet page) -->
           <!-- Current wallet — pill button that opens the wallet modal -->
           <button
-            class="wallet-name-pill flex items-center justify-between gap-2 w-full px-4 py-2 rounded-full text-left transition-colors cursor-pointer"
+            class="wallet-name-pill flex items-center justify-between gap-2 w-full px-4 py-2 min-h-[44px] rounded-full text-left transition-colors cursor-pointer"
             style="background-color: var(--color-bg-secondary); border: 1px solid var(--color-input-border);"
             on:click={goToWallet}
           >
