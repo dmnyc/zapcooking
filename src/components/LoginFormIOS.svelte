@@ -396,7 +396,15 @@
 
 <!-- Private Key Modal -->
 <Modal bind:open={nsecModal} on:close={modalCleanup}>
-  <svelte:fragment slot="title">🔑 Log in with Private Key</svelte:fragment>
+  <svelte:fragment slot="title">
+    <span class="login-modal-title-wrap">
+      <span class="login-modal-logo-wrap" aria-hidden="true">
+        <img src="/zap_cooking_logo_black.svg" alt="" class="dark:hidden" />
+        <img src="/zap_cooking_logo_white.svg" alt="" class="hidden dark:block" />
+      </span>
+      <span class="login-modal-title-text">🔑 Log in with Private Key</span>
+    </span>
+  </svelte:fragment>
   <div class="flex flex-col gap-4 login-modal-body">
     <div class="bg-input border rounded-lg p-3" style="border-color: var(--color-input-border)">
       <p class="text-sm text-caption">
@@ -424,7 +432,15 @@
 
 <!-- Bunker (NIP-46) Modal -->
 <Modal bind:open={bunkerModal} on:close={modalCleanup}>
-  <svelte:fragment slot="title">🔐 Paste bunker URI</svelte:fragment>
+  <svelte:fragment slot="title">
+    <span class="login-modal-title-wrap">
+      <span class="login-modal-logo-wrap" aria-hidden="true">
+        <img src="/zap_cooking_logo_black.svg" alt="" class="dark:hidden" />
+        <img src="/zap_cooking_logo_white.svg" alt="" class="hidden dark:block" />
+      </span>
+      <span class="login-modal-title-text">🔐 Paste bunker URI</span>
+    </span>
+  </svelte:fragment>
   <div class="flex flex-col gap-4 login-modal-body">
     <div class="bg-input border rounded-lg p-3" style="border-color: var(--color-input-border)">
       <p class="text-sm text-caption">
@@ -492,13 +508,21 @@
 
 <!-- Generate Keys Modal -->
 <Modal bind:open={generateModal} on:close={modalCleanup}>
-  <svelte:fragment slot="title"
-    >{generatedKeys
-      ? backupStep === 2
-        ? 'Add a display name and bio (optional)'
-        : '🔐 Save your backup key'
-      : '🎉 Your Zap Cooking profile is almost ready!'}</svelte:fragment
-  >
+  <svelte:fragment slot="title">
+    <span class="login-modal-title-wrap">
+      <span class="login-modal-logo-wrap" aria-hidden="true">
+        <img src="/zap_cooking_logo_black.svg" alt="" class="dark:hidden" />
+        <img src="/zap_cooking_logo_white.svg" alt="" class="hidden dark:block" />
+      </span>
+      <span class="login-modal-title-text"
+        >{generatedKeys
+          ? backupStep === 2
+            ? 'Add a display name and bio (optional)'
+            : '🔐 Save your backup key'
+          : '🎉 Your Zap Cooking profile is almost ready!'}</span
+      >
+    </span>
+  </svelte:fragment>
   <div class="flex flex-col gap-4 login-modal-body">
     {#if !generatedKeys}
       <div class="space-y-4">
