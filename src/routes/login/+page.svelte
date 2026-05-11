@@ -496,7 +496,8 @@
     <div class="flex flex-col gap-4">
       <div class="bg-input border rounded-lg p-3" style="border-color: var(--color-input-border)">
         <p class="text-sm text-caption">
-          Your key stays in this browser only — it isn't sent to any server. Keep a backup of your nsec; if you lose it, you lose access to your account.
+          Your key stays in this browser only — it isn't sent to any server. Keep a backup of your
+          nsec; if you lose it, you lose access to your account.
         </p>
       </div>
       <div class="text-sm text-caption">Enter your private key (nsec1...) or hex format</div>
@@ -592,7 +593,9 @@
 
   <!-- Universal NIP-46 Pairing Modal -->
   <Modal bind:open={nip46UniversalModal} on:close={modalCleanup}>
-    <svelte:fragment slot="title"><span class="mr-2">📷</span>Scan QR / Universal pairing</svelte:fragment>
+    <svelte:fragment slot="title"
+      ><span class="mr-2">📷</span>Scan QR / Universal pairing</svelte:fragment
+    >
     <div class="flex flex-col gap-4">
       <div class="bg-input border rounded-lg p-3" style="border-color: var(--color-input-border)">
         <p class="text-sm text-caption">
@@ -656,7 +659,6 @@
           <p class="text-sm" style="color: var(--color-text-primary)">{nip46PairingStatus}</p>
         </div>
       {/if}
-
     </div>
   </Modal>
 
@@ -735,12 +737,12 @@
                     readonly
                     value={nip19.nsecEncode(generatedKeys.privateKey)}
                     rows="2"
-                    class="flex-1 input text-sm font-mono p-3"
+                    class="flex-1 min-w-0 input text-sm font-mono p-3"
                   ></textarea>
                   <button
                     on:click={() =>
                       generatedKeys && copyToClipboard(nip19.nsecEncode(generatedKeys.privateKey))}
-                    class="px-3 py-2 bg-accent-gray hover:opacity-80 rounded-lg text-sm font-medium transition-colors"
+                    class="flex-shrink-0 px-3 py-2 bg-accent-gray hover:opacity-80 rounded-lg text-sm font-medium transition-colors"
                     style="color: var(--color-text-primary)"
                   >
                     Copy
@@ -760,14 +762,14 @@
               {:else}
                 <div class="flex gap-2">
                   <div
-                    class="flex-1 bg-input border rounded-lg p-3 text-sm text-caption font-mono"
+                    class="flex-1 min-w-0 bg-input border rounded-lg p-3 text-sm text-caption font-mono overflow-hidden whitespace-nowrap"
                     style="border-color: var(--color-input-border)"
                   >
                     ••••••••••••••••••••••••••••••••
                   </div>
                   <button
                     on:click={() => (showPrivateKey = true)}
-                    class="px-3 py-2 bg-accent-gray hover:opacity-80 rounded-lg text-sm font-medium transition-colors"
+                    class="flex-shrink-0 px-3 py-2 bg-accent-gray hover:opacity-80 rounded-lg text-sm font-medium transition-colors"
                     style="color: var(--color-text-primary)"
                   >
                     Reveal
@@ -789,12 +791,12 @@
                   id="public-key-input"
                   readonly
                   value={nip19.npubEncode(generatedKeys.publicKey)}
-                  class="flex-1 input text-sm font-mono p-3"
+                  class="flex-1 min-w-0 input text-sm font-mono p-3"
                 />
                 <button
                   on:click={() =>
                     generatedKeys && copyToClipboard(nip19.npubEncode(generatedKeys.publicKey))}
-                  class="px-3 py-2 bg-accent-gray hover:opacity-80 rounded-lg text-sm transition-colors"
+                  class="flex-shrink-0 px-3 py-2 bg-accent-gray hover:opacity-80 rounded-lg text-sm transition-colors"
                   style="color: var(--color-text-primary)"
                 >
                   Copy
@@ -979,16 +981,41 @@
   <div class="login-viewport-anim pointer-events-none" aria-hidden="true">
     <div class="absolute inset-0 opacity-5">
       <div class="absolute top-10 left-10 text-6xl lightning-pulse">⚡</div>
-      <div class="absolute top-32 right-20 text-4xl lightning-pulse" style="animation-delay: 0.5s;">⚡</div>
-      <div class="absolute bottom-20 left-32 text-5xl lightning-pulse" style="animation-delay: 1s;">⚡</div>
-      <div class="absolute bottom-40 right-10 text-3xl lightning-pulse" style="animation-delay: 1.5s;">⚡</div>
-      <div class="absolute top-1/2 left-10 text-4xl lightning-pulse" style="animation-delay: 2s;">⚡</div>
+      <div class="absolute top-32 right-20 text-4xl lightning-pulse" style="animation-delay: 0.5s;">
+        ⚡
+      </div>
+      <div class="absolute bottom-20 left-32 text-5xl lightning-pulse" style="animation-delay: 1s;">
+        ⚡
+      </div>
+      <div
+        class="absolute bottom-40 right-10 text-3xl lightning-pulse"
+        style="animation-delay: 1.5s;"
+      >
+        ⚡
+      </div>
+      <div class="absolute top-1/2 left-10 text-4xl lightning-pulse" style="animation-delay: 2s;">
+        ⚡
+      </div>
     </div>
     <div class="absolute inset-0 opacity-10">
-      <div class="absolute top-20 left-1/4 text-3xl animate-bounce" style="animation-delay: 0.2s;">🍳</div>
-      <div class="absolute top-40 right-1/3 text-2xl animate-bounce" style="animation-delay: 0.8s;">🥘</div>
-      <div class="absolute bottom-32 left-1/3 text-2xl animate-bounce" style="animation-delay: 1.2s;">👨‍🍳</div>
-      <div class="absolute bottom-20 right-1/4 text-3xl animate-bounce" style="animation-delay: 0.6s;">🍽️</div>
+      <div class="absolute top-20 left-1/4 text-3xl animate-bounce" style="animation-delay: 0.2s;">
+        🍳
+      </div>
+      <div class="absolute top-40 right-1/3 text-2xl animate-bounce" style="animation-delay: 0.8s;">
+        🥘
+      </div>
+      <div
+        class="absolute bottom-32 left-1/3 text-2xl animate-bounce"
+        style="animation-delay: 1.2s;"
+      >
+        👨‍🍳
+      </div>
+      <div
+        class="absolute bottom-20 right-1/4 text-3xl animate-bounce"
+        style="animation-delay: 0.6s;"
+      >
+        🍽️
+      </div>
     </div>
   </div>
 
@@ -1013,7 +1040,14 @@
         aria-label="Sign in to Zap Cooking using your Nostr browser extension"
         class="signin-cta-primary"
       >
-        <svg class="signin-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <svg
+          class="signin-icon"
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          aria-hidden="true"
+        >
           <path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z" fill="currentColor" />
         </svg>
         <span>{authState.isLoading ? 'Connecting…' : 'Sign in with Browser Signer'}</span>
@@ -1041,7 +1075,14 @@
       >
         <!-- user-plus, not a key — keeps semantic distance from the
              Import key tile below where a key icon already lives. -->
-        <svg class="signin-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <svg
+          class="signin-icon"
+          width="18"
+          height="18"
+          viewBox="0 0 24 24"
+          fill="none"
+          aria-hidden="true"
+        >
           <circle cx="9" cy="8" r="3.5" stroke="currentColor" stroke-width="1.75" />
           <path
             d="M3 20c0-3.5 2.7-6 6-6s6 2.5 6 6"
@@ -1080,11 +1121,47 @@
           aria-label="Sign in by scanning a QR code with your phone signer"
           class="signin-tile"
         >
-          <svg class="signin-tile-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <rect x="3" y="3" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.6" />
-            <rect x="14" y="3" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.6" />
-            <rect x="3" y="14" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.6" />
-            <path d="M14 14h3v3M20 14v3M14 17v4h3M17 20h4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+          <svg
+            class="signin-tile-icon"
+            width="22"
+            height="22"
+            viewBox="0 0 24 24"
+            fill="none"
+            aria-hidden="true"
+          >
+            <rect
+              x="3"
+              y="3"
+              width="7"
+              height="7"
+              rx="1"
+              stroke="currentColor"
+              stroke-width="1.6"
+            />
+            <rect
+              x="14"
+              y="3"
+              width="7"
+              height="7"
+              rx="1"
+              stroke="currentColor"
+              stroke-width="1.6"
+            />
+            <rect
+              x="3"
+              y="14"
+              width="7"
+              height="7"
+              rx="1"
+              stroke="currentColor"
+              stroke-width="1.6"
+            />
+            <path
+              d="M14 14h3v3M20 14v3M14 17v4h3M17 20h4"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linecap="round"
+            />
           </svg>
           <span class="signin-tile-title">Scan QR</span>
           <span class="signin-tile-sub">Pair phone</span>
@@ -1097,9 +1174,29 @@
           aria-label="Sign in with a bunker URI from a remote signer"
           class="signin-tile"
         >
-          <svg class="signin-tile-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <rect x="4" y="10" width="16" height="11" rx="2" stroke="currentColor" stroke-width="1.6" />
-            <path d="M8 10V7a4 4 0 018 0v3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+          <svg
+            class="signin-tile-icon"
+            width="22"
+            height="22"
+            viewBox="0 0 24 24"
+            fill="none"
+            aria-hidden="true"
+          >
+            <rect
+              x="4"
+              y="10"
+              width="16"
+              height="11"
+              rx="2"
+              stroke="currentColor"
+              stroke-width="1.6"
+            />
+            <path
+              d="M8 10V7a4 4 0 018 0v3"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linecap="round"
+            />
             <circle cx="12" cy="15" r="1.5" fill="currentColor" />
           </svg>
           <span class="signin-tile-title">Bunker URI</span>
@@ -1113,9 +1210,22 @@
           aria-label="Sign in by importing a private key"
           class="signin-tile"
         >
-          <svg class="signin-tile-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <svg
+            class="signin-tile-icon"
+            width="22"
+            height="22"
+            viewBox="0 0 24 24"
+            fill="none"
+            aria-hidden="true"
+          >
             <circle cx="8.5" cy="14.5" r="3.5" stroke="currentColor" stroke-width="1.6" />
-            <path d="M11 12l9-9m-3 0h3v3m-5 2l2 2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+            <path
+              d="M11 12l9-9m-3 0h3v3m-5 2l2 2"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
           </svg>
           <span class="signin-tile-title">Import key</span>
           <span class="signin-tile-sub">Paste nsec</span>
@@ -1141,8 +1251,15 @@
   }
 
   @keyframes lightningPulse {
-    0%, 100% { opacity: 1; transform: scale(1); }
-    50% { opacity: 0.8; transform: scale(1.05); }
+    0%,
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+    50% {
+      opacity: 0.8;
+      transform: scale(1.05);
+    }
   }
 
   .login-blur-layer {
@@ -1239,7 +1356,12 @@
       0 4px 12px rgba(247, 147, 26, 0.06);
     text-align: center;
     color: var(--signin-cream);
-    font-family: 'Albert Sans', 'Inter', system-ui, -apple-system, sans-serif;
+    font-family:
+      'Albert Sans',
+      'Inter',
+      system-ui,
+      -apple-system,
+      sans-serif;
     animation: signinRise 320ms cubic-bezier(0.2, 0.8, 0.25, 1) both;
   }
 
@@ -1308,7 +1430,10 @@
       0 1px 0 rgba(255, 255, 255, 0.18) inset,
       0 8px 24px color-mix(in srgb, var(--signin-flame) 36%, transparent),
       0 2px 6px color-mix(in srgb, var(--signin-ember) 22%, transparent);
-    transition: transform 120ms ease, box-shadow 200ms ease, opacity 200ms ease;
+    transition:
+      transform 120ms ease,
+      box-shadow 200ms ease,
+      opacity 200ms ease;
   }
 
   .signin-cta-primary:hover:not(:disabled) {
@@ -1352,7 +1477,10 @@
     justify-content: center;
     gap: 0.625rem;
     padding: 0 1.25rem;
-    transition: transform 120ms ease, border-color 200ms ease, background 200ms ease;
+    transition:
+      transform 120ms ease,
+      border-color 200ms ease,
+      background 200ms ease;
   }
 
   .signin-cta-secondary:hover:not(:disabled) {
@@ -1455,7 +1583,10 @@
     align-items: center;
     gap: 0.375rem;
     text-align: center;
-    transition: transform 120ms ease, border-color 200ms ease, background 200ms ease;
+    transition:
+      transform 120ms ease,
+      border-color 200ms ease,
+      background 200ms ease;
   }
 
   .signin-tile:hover:not(:disabled) {

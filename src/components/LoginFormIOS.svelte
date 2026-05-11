@@ -400,7 +400,8 @@
   <div class="flex flex-col gap-4">
     <div class="bg-input border rounded-lg p-3" style="border-color: var(--color-input-border)">
       <p class="text-sm text-caption">
-        Your key stays on this device only — it isn't sent to any server. Keep a backup of your nsec; if you lose it, you lose access to your account.
+        Your key stays on this device only — it isn't sent to any server. Keep a backup of your
+        nsec; if you lose it, you lose access to your account.
       </p>
     </div>
     <div class="text-sm text-caption">Enter your private key (nsec1...) or hex format</div>
@@ -462,7 +463,10 @@
     {/if}
 
     {#if bunkerConnecting}
-      <div class="bg-input border rounded-lg p-3" style="border-color: var(--color-primary, #f97316)">
+      <div
+        class="bg-input border rounded-lg p-3"
+        style="border-color: var(--color-primary, #f97316)"
+      >
         <div class="flex items-center gap-2">
           <div
             class="animate-spin h-4 w-4 border-2 border-orange-500 border-t-transparent rounded-full"
@@ -557,12 +561,12 @@
                   readonly
                   value={nip19.nsecEncode(generatedKeys.privateKey)}
                   rows="2"
-                  class="flex-1 input text-sm font-mono p-3"
+                  class="flex-1 min-w-0 input text-sm font-mono p-3"
                 ></textarea>
                 <button
                   on:click={() =>
                     generatedKeys && copyToClipboard(nip19.nsecEncode(generatedKeys.privateKey))}
-                  class="px-3 py-2 bg-accent-gray hover:opacity-80 rounded-lg text-sm font-medium transition-colors"
+                  class="flex-shrink-0 px-3 py-2 bg-accent-gray hover:opacity-80 rounded-lg text-sm font-medium transition-colors"
                   style="color: var(--color-text-primary)"
                 >
                   Copy
@@ -582,14 +586,14 @@
             {:else}
               <div class="flex gap-2">
                 <div
-                  class="flex-1 bg-input border rounded-lg p-3 text-sm text-caption font-mono"
+                  class="flex-1 min-w-0 bg-input border rounded-lg p-3 text-sm text-caption font-mono overflow-hidden whitespace-nowrap"
                   style="border-color: var(--color-input-border)"
                 >
                   ••••••••••••••••••••••••••••••••
                 </div>
                 <button
                   on:click={() => (showPrivateKey = true)}
-                  class="px-3 py-2 bg-accent-gray hover:opacity-80 rounded-lg text-sm font-medium transition-colors"
+                  class="flex-shrink-0 px-3 py-2 bg-accent-gray hover:opacity-80 rounded-lg text-sm font-medium transition-colors"
                   style="color: var(--color-text-primary)"
                 >
                   Reveal
@@ -611,12 +615,12 @@
                 id="public-key-input"
                 readonly
                 value={nip19.npubEncode(generatedKeys.publicKey)}
-                class="flex-1 input text-sm font-mono p-3"
+                class="flex-1 min-w-0 input text-sm font-mono p-3"
               />
               <button
                 on:click={() =>
                   generatedKeys && copyToClipboard(nip19.npubEncode(generatedKeys.publicKey))}
-                class="px-3 py-2 bg-accent-gray hover:opacity-80 rounded-lg text-sm transition-colors"
+                class="flex-shrink-0 px-3 py-2 bg-accent-gray hover:opacity-80 rounded-lg text-sm transition-colors"
                 style="color: var(--color-text-primary)"
               >
                 Copy
@@ -846,7 +850,14 @@
         aria-label="Create a new Zap Cooking profile"
         class="signin-cta-primary"
       >
-        <svg class="signin-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <svg
+          class="signin-icon"
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          aria-hidden="true"
+        >
           <path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z" fill="currentColor" />
         </svg>
         <span>{authState.isLoading ? 'Connecting…' : 'Create Profile'}</span>
@@ -874,9 +885,29 @@
           aria-label="Sign in with a bunker URI from a remote signer"
           class="signin-tile"
         >
-          <svg class="signin-tile-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <rect x="4" y="10" width="16" height="11" rx="2" stroke="currentColor" stroke-width="1.6" />
-            <path d="M8 10V7a4 4 0 018 0v3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+          <svg
+            class="signin-tile-icon"
+            width="22"
+            height="22"
+            viewBox="0 0 24 24"
+            fill="none"
+            aria-hidden="true"
+          >
+            <rect
+              x="4"
+              y="10"
+              width="16"
+              height="11"
+              rx="2"
+              stroke="currentColor"
+              stroke-width="1.6"
+            />
+            <path
+              d="M8 10V7a4 4 0 018 0v3"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linecap="round"
+            />
             <circle cx="12" cy="15" r="1.5" fill="currentColor" />
           </svg>
           <span class="signin-tile-title">Bunker URI</span>
@@ -890,9 +921,22 @@
           aria-label="Sign in by importing a private key"
           class="signin-tile"
         >
-          <svg class="signin-tile-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <svg
+            class="signin-tile-icon"
+            width="22"
+            height="22"
+            viewBox="0 0 24 24"
+            fill="none"
+            aria-hidden="true"
+          >
             <circle cx="8.5" cy="14.5" r="3.5" stroke="currentColor" stroke-width="1.6" />
-            <path d="M11 12l9-9m-3 0h3v3m-5 2l2 2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+            <path
+              d="M11 12l9-9m-3 0h3v3m-5 2l2 2"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
           </svg>
           <span class="signin-tile-title">Import key</span>
           <span class="signin-tile-sub">Paste nsec</span>
@@ -989,13 +1033,24 @@
       0 4px 12px rgba(247, 147, 26, 0.06);
     text-align: center;
     color: var(--signin-cream);
-    font-family: 'Albert Sans', 'Inter', system-ui, -apple-system, sans-serif;
+    font-family:
+      'Albert Sans',
+      'Inter',
+      system-ui,
+      -apple-system,
+      sans-serif;
     animation: signinRise 320ms cubic-bezier(0.2, 0.8, 0.25, 1) both;
   }
 
   @keyframes signinRise {
-    from { opacity: 0; transform: translateY(8px) scale(0.985); }
-    to { opacity: 1; transform: translateY(0) scale(1); }
+    from {
+      opacity: 0;
+      transform: translateY(8px) scale(0.985);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
   }
 
   .signin-eyebrow {
@@ -1007,7 +1062,10 @@
     margin: 0 0 0.5rem;
   }
 
-  .signin-wordmark { margin: 0 auto 0.875rem; line-height: 0; }
+  .signin-wordmark {
+    margin: 0 auto 0.875rem;
+    line-height: 0;
+  }
   .signin-wordmark img {
     width: 240px;
     max-width: 100%;
@@ -1044,13 +1102,27 @@
       0 1px 0 rgba(255, 255, 255, 0.18) inset,
       0 8px 24px color-mix(in srgb, var(--signin-flame) 36%, transparent),
       0 2px 6px color-mix(in srgb, var(--signin-ember) 22%, transparent);
-    transition: transform 120ms ease, box-shadow 200ms ease, opacity 200ms ease;
+    transition:
+      transform 120ms ease,
+      box-shadow 200ms ease,
+      opacity 200ms ease;
   }
-  .signin-cta-primary:hover:not(:disabled) { transform: translateY(-1px); }
-  .signin-cta-primary:disabled { opacity: 0.55; cursor: not-allowed; }
-  .signin-cta-primary:focus-visible { outline: 2px solid var(--signin-cream); outline-offset: 3px; }
+  .signin-cta-primary:hover:not(:disabled) {
+    transform: translateY(-1px);
+  }
+  .signin-cta-primary:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+  .signin-cta-primary:focus-visible {
+    outline: 2px solid var(--signin-cream);
+    outline-offset: 3px;
+  }
 
-  .signin-icon { color: currentColor; flex-shrink: 0; }
+  .signin-icon {
+    color: currentColor;
+    flex-shrink: 0;
+  }
 
   .signin-error {
     margin-top: 1rem;
@@ -1074,8 +1146,12 @@
     text-transform: uppercase;
     letter-spacing: 0.16em;
   }
-  .signin-divider::before, .signin-divider::after {
-    content: ''; flex: 1; height: 1px; background: var(--signin-line);
+  .signin-divider::before,
+  .signin-divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--signin-line);
   }
 
   .signin-tiles {
@@ -1100,16 +1176,28 @@
     align-items: center;
     gap: 0.375rem;
     text-align: center;
-    transition: transform 120ms ease, border-color 200ms ease, background 200ms ease;
+    transition:
+      transform 120ms ease,
+      border-color 200ms ease,
+      background 200ms ease;
   }
   .signin-tile:hover:not(:disabled) {
     transform: translateY(-1px);
     border-color: color-mix(in srgb, var(--signin-flame) 50%, transparent);
     background: #20262f;
   }
-  .signin-tile:focus-visible { outline: 2px solid var(--signin-flame); outline-offset: 2px; }
-  .signin-tile:disabled { opacity: 0.55; cursor: not-allowed; }
-  .signin-tile-icon { color: var(--signin-flame); margin-bottom: 0.125rem; }
+  .signin-tile:focus-visible {
+    outline: 2px solid var(--signin-flame);
+    outline-offset: 2px;
+  }
+  .signin-tile:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+  .signin-tile-icon {
+    color: var(--signin-flame);
+    margin-bottom: 0.125rem;
+  }
   .signin-tile-title {
     font-size: 0.8125rem;
     font-weight: 600;
@@ -1134,18 +1222,44 @@
     font-size: 0.75rem;
     color: var(--signin-mute);
   }
-  .signin-footer-tag { font-weight: 500; letter-spacing: 0.02em; }
-  .signin-footer-links { display: inline-flex; align-items: center; gap: 0.4rem; }
-  .signin-footer a { color: var(--signin-flame); text-decoration: none; }
-  .signin-footer a:hover { text-decoration: underline; }
+  .signin-footer-tag {
+    font-weight: 500;
+    letter-spacing: 0.02em;
+  }
+  .signin-footer-links {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .signin-footer a {
+    color: var(--signin-flame);
+    text-decoration: none;
+  }
+  .signin-footer a:hover {
+    text-decoration: underline;
+  }
 
   @media (max-width: 480px) {
-    .signin-card { padding: 1.75rem 1.25rem 1.25rem; border-radius: 20px; }
-    .signin-wordmark img { width: 200px; }
-    .signin-tagline { font-size: 0.875rem; margin-bottom: 1.5rem; }
-    .signin-tile { padding: 0.75rem 0.375rem 0.625rem; }
-    .signin-tile-title { font-size: 0.75rem; }
-    .signin-tile-sub { font-size: 0.625rem; }
+    .signin-card {
+      padding: 1.75rem 1.25rem 1.25rem;
+      border-radius: 20px;
+    }
+    .signin-wordmark img {
+      width: 200px;
+    }
+    .signin-tagline {
+      font-size: 0.875rem;
+      margin-bottom: 1.5rem;
+    }
+    .signin-tile {
+      padding: 0.75rem 0.375rem 0.625rem;
+    }
+    .signin-tile-title {
+      font-size: 0.75rem;
+    }
+    .signin-tile-sub {
+      font-size: 0.625rem;
+    }
   }
 
   @media (prefers-reduced-motion: reduce) {
