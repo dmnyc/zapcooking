@@ -1115,13 +1115,13 @@
         <img
           src="/zap_cooking_logo_black.svg"
           alt="Zap Cooking"
-          class="signin-wordmark-img signin-wordmark-img--light dark:hidden"
+          class="signin-wordmark-img signin-wordmark-img--light"
         />
         <img
           src="/zap_cooking_logo_white.svg"
           alt=""
           aria-hidden="true"
-          class="signin-wordmark-img signin-wordmark-img--dark hidden dark:block"
+          class="signin-wordmark-img signin-wordmark-img--dark"
         />
       </h1>
       <p class="signin-tagline">Share recipes and get paid by your community.</p>
@@ -1504,11 +1504,22 @@
     width: 240px;
     max-width: 100%;
     height: auto;
-    /* Centered via the inherited text-align: center on .signin-card.
-       Display intentionally left as inline (default) so Tailwind's
-       dark:hidden / hidden dark:block can drive the show/hide swap
-       between the light and dark wordmarks without this rule
-       forcing block on a hidden variant. */
+    margin: 0 auto; /* center the bounding box */
+  }
+  /* Theme swap via explicit variant classes — avoids the specificity
+     tangle of mixing Tailwind dark:hidden / dark:block with our own
+     display: block centering rule. */
+  .signin-wordmark .signin-wordmark-img--light {
+    display: block;
+  }
+  .signin-wordmark .signin-wordmark-img--dark {
+    display: none;
+  }
+  :global(.dark) .signin-wordmark .signin-wordmark-img--light {
+    display: none;
+  }
+  :global(.dark) .signin-wordmark .signin-wordmark-img--dark {
+    display: block;
   }
 
   .signin-tagline {
