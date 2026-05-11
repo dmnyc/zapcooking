@@ -427,7 +427,7 @@
       {/if}
       <div class="flex gap-2">
         <Button on:click={loginWithPrivateKey} primary={true} disabled={authState.isLoading}>
-          {authState.isLoading ? '⚡ Connecting...' : '⚡ Login'}
+          {authState.isLoading ? 'Connecting...' : 'Login'}
         </Button>
       </div>
     </div>
@@ -527,7 +527,7 @@
           <ProfileReadyIcon size={36} class="text-amber-500" />
         </div>
         <h2 class="login-modal-hero-title">
-          Create your Zap Cooking profile in less than a minute!
+          Create your Zap Cooking profile<br />in under a minute.
         </h2>
       </div>
     {:else}
@@ -688,7 +688,7 @@
               class="w-full {!backupDownloaded ? 'opacity-50 cursor-not-allowed' : ''}"
               disabled={!backupDownloaded}
             >
-              ⚡ Next
+              Next
             </Button>
             {#if !backupDownloaded}
               <p class="text-xs text-caption text-center">Download the backup file to continue.</p>

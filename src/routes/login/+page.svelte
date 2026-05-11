@@ -533,7 +533,7 @@
         {/if}
         <div class="flex gap-2">
           <Button on:click={loginWithPrivateKey} primary={true} disabled={authState.isLoading}>
-            {authState.isLoading ? '⚡ Connecting...' : '⚡ Login'}
+            {authState.isLoading ? 'Connecting...' : 'Login'}
           </Button>
         </div>
       </div>
@@ -748,7 +748,7 @@
             <ProfileReadyIcon size={36} class="text-amber-500" />
           </div>
           <h2 class="login-modal-hero-title">
-            Create your Zap Cooking profile in less than a minute!
+            Create your Zap Cooking profile<br />in under a minute.
           </h2>
         </div>
       {:else}
@@ -911,7 +911,7 @@
                 class="w-full {!backupDownloaded ? 'opacity-50 cursor-not-allowed' : ''}"
                 disabled={!backupDownloaded}
               >
-                ⚡ Next
+                Next
               </Button>
               {#if !backupDownloaded}
                 <p class="text-xs text-caption text-center">
@@ -1143,16 +1143,6 @@
         aria-label="Sign in to Zap Cooking using your Nostr browser extension"
         class="signin-cta-primary"
       >
-        <svg
-          class="signin-icon"
-          width="20"
-          height="20"
-          viewBox="0 0 24 24"
-          fill="none"
-          aria-hidden="true"
-        >
-          <path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z" fill="currentColor" />
-        </svg>
         <span>{authState.isLoading ? 'Connecting…' : 'Sign in with Browser Signer'}</span>
       </button>
 
@@ -1897,11 +1887,7 @@
     height: 4rem;
     margin: 0 auto 0.75rem;
     border-radius: 9999px;
-    background: linear-gradient(
-      135deg,
-      rgba(245, 158, 11, 0.2) 0%,
-      rgba(249, 115, 22, 0.2) 100%
-    );
+    background: linear-gradient(135deg, rgba(245, 158, 11, 0.2) 0%, rgba(249, 115, 22, 0.2) 100%);
     display: flex;
     align-items: center;
     justify-content: center;
