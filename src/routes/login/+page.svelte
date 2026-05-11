@@ -1891,6 +1891,42 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    /* Shine sweep — mirrors the wallet's welcome-bolt animation so the
+       onboarding hero reads as part of the same visual family. */
+    position: relative;
+    overflow: hidden;
+    isolation: isolate;
+  }
+  :global(.login-modal-hero-icon)::after {
+    content: '';
+    position: absolute;
+    inset: -25%;
+    background: linear-gradient(
+      120deg,
+      transparent 0%,
+      transparent 40%,
+      rgba(255, 255, 255, 0.22) 50%,
+      transparent 60%,
+      transparent 100%
+    );
+    transform: translateX(-110%);
+    animation: login-hero-shine 2.8s ease-in-out infinite;
+    pointer-events: none;
+    will-change: transform;
+  }
+  @keyframes login-hero-shine {
+    0% {
+      transform: translateX(-110%);
+    }
+    55%,
+    100% {
+      transform: translateX(110%);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    :global(.login-modal-hero-icon)::after {
+      animation: none;
+    }
   }
   :global(.login-modal-hero-title) {
     font-size: 1.5rem;
