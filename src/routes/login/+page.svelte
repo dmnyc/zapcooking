@@ -6,6 +6,7 @@
   import { page } from '$app/stores';
   import Modal from '../../components/Modal.svelte';
   import CloseIcon from 'phosphor-svelte/lib/XCircle';
+  import LightningIcon from 'phosphor-svelte/lib/Lightning';
   import type { PageData } from './$types';
   import QRCode from 'svelte-qrcode';
 
@@ -740,13 +741,18 @@
       >
         <CloseIcon size={24} />
       </button>
-      <h2 class="login-modal-title">
-        {generatedKeys
-          ? backupStep === 2
-            ? 'Add a display name and bio (optional)'
-            : '🔐 Save your backup key'
-          : '🎉 Your Zap Cooking profile is almost ready!'}
-      </h2>
+      {#if !generatedKeys}
+        <div class="login-modal-hero">
+          <div class="login-modal-hero-icon">
+            <LightningIcon size={32} weight="fill" class="text-amber-500" />
+          </div>
+          <h2 class="login-modal-hero-title">Your Zap Cooking profile is almost ready!</h2>
+        </div>
+      {:else}
+        <h2 class="login-modal-title">
+          {backupStep === 2 ? 'Add a display name and bio (optional)' : '🔐 Save your backup key'}
+        </h2>
+      {/if}
       <div class="flex flex-col gap-4">
         {#if !generatedKeys}
           <div class="space-y-4">
@@ -1850,7 +1856,7 @@
     height: 44px;
   }
   :global(.login-modal-logo-btn img) {
-    height: 20px;
+    height: 24px;
     width: auto;
   }
   :global(.login-modal-logo-btn:hover),
@@ -1868,6 +1874,36 @@
     line-height: 1.3;
     color: var(--color-text-primary);
     margin: 0 0 1rem;
+  }
+  /* Hero block used on welcome screens — mirrors the wallet's
+     welcome-bolt pattern: a centered icon circle above a centered
+     heading. Used on the "Your Zap Cooking profile is almost ready!"
+     step and any other landing/welcome view that needs a strong
+     intro moment. */
+  :global(.login-modal-hero) {
+    text-align: center;
+    margin-bottom: 1.5rem;
+  }
+  :global(.login-modal-hero-icon) {
+    width: 4rem;
+    height: 4rem;
+    margin: 0 auto 0.75rem;
+    border-radius: 9999px;
+    background: linear-gradient(
+      135deg,
+      rgba(245, 158, 11, 0.2) 0%,
+      rgba(249, 115, 22, 0.2) 100%
+    );
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  :global(.login-modal-hero-title) {
+    font-size: 1.5rem;
+    font-weight: 700;
+    line-height: 1.25;
+    color: var(--color-text-primary);
+    margin: 0;
   }
   @media (max-width: 767.98px) {
     :global(.login-modal-logo-btn) {

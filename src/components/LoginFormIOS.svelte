@@ -13,6 +13,7 @@
   import Button from './Button.svelte';
   import Modal from './Modal.svelte';
   import CloseIcon from 'phosphor-svelte/lib/XCircle';
+  import LightningIcon from 'phosphor-svelte/lib/Lightning';
   import { ndk, userPublickey } from '$lib/nostr';
   import { browser } from '$app/environment';
   import { goto } from '$app/navigation';
@@ -519,13 +520,18 @@
     <button type="button" class="login-modal-close-btn" aria-label="Close" on:click={modalCleanup}>
       <CloseIcon size={24} />
     </button>
-    <h2 class="login-modal-title">
-      {generatedKeys
-        ? backupStep === 2
-          ? 'Add a display name and bio (optional)'
-          : '🔐 Save your backup key'
-        : '🎉 Your Zap Cooking profile is almost ready!'}
-    </h2>
+    {#if !generatedKeys}
+      <div class="login-modal-hero">
+        <div class="login-modal-hero-icon">
+          <LightningIcon size={32} weight="fill" class="text-amber-500" />
+        </div>
+        <h2 class="login-modal-hero-title">Your Zap Cooking profile is almost ready!</h2>
+      </div>
+    {:else}
+      <h2 class="login-modal-title">
+        {backupStep === 2 ? 'Add a display name and bio (optional)' : '🔐 Save your backup key'}
+      </h2>
+    {/if}
     <div class="flex flex-col gap-4">
       {#if !generatedKeys}
         <div class="space-y-4">
