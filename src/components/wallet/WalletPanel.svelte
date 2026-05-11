@@ -3454,39 +3454,43 @@
                               </div>
                             </div>
                             <div class="flex items-center gap-2 mb-3">
-                              <div class="flex-1 relative">
+                              <div
+                                class="flex-1 flex items-center rounded-lg overflow-hidden focus-within:ring-2 focus-within:ring-amber-500"
+                                style="background-color: var(--color-input-bg); border: 1px solid var(--color-input-border);"
+                              >
                                 <input
                                   type="text"
-                                  class="w-full p-2 pr-20 rounded-lg text-sm"
-                                  style="background-color: var(--color-input-bg); border: 1px solid var(--color-input-border); color: var(--color-text-primary);"
+                                  class="flex-1 min-w-0 p-2 bg-transparent text-sm focus:outline-none"
+                                  style="color: var(--color-text-primary);"
                                   placeholder="username"
                                   value={newLightningUsername}
                                   on:input={handleUsernameInput}
                                   disabled={isRegisteringAddress}
                                 />
-                                <span
-                                  class="absolute right-2 top-1/2 -translate-y-1/2 text-sm text-caption"
+                                <span class="pr-2 text-sm text-caption whitespace-nowrap"
                                   >@sats.zap.cooking</span
                                 >
                               </div>
                               {#if isCheckingAvailability}
-                                <div class="w-6 h-6 flex items-center justify-center">
+                                <div class="w-6 h-6 flex items-center justify-center flex-shrink-0">
                                   <div
                                     class="w-4 h-4 border-2 border-amber-500 border-t-transparent rounded-full animate-spin"
                                   ></div>
                                 </div>
                               {:else if isUsernameAvailable === true}
                                 <div
-                                  class="w-6 h-6 flex items-center justify-center text-green-500"
+                                  class="w-6 h-6 flex items-center justify-center text-green-500 flex-shrink-0"
                                 >
                                   <CheckIcon size={20} weight="bold" />
                                 </div>
                               {:else if isUsernameAvailable === false}
-                                <div class="w-6 h-6 flex items-center justify-center text-red-500">
+                                <div
+                                  class="w-6 h-6 flex items-center justify-center text-red-500 flex-shrink-0"
+                                >
                                   <XIcon size={20} weight="bold" />
                                 </div>
                               {:else}
-                                <div class="w-6 h-6"></div>
+                                <div class="w-6 h-6 flex-shrink-0"></div>
                               {/if}
                             </div>
                             {#if isUsernameAvailable === false}
@@ -3495,8 +3499,7 @@
                               </p>
                             {/if}
                             <button
-                              class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer disabled:opacity-50"
-                              style="border: 1px solid var(--color-input-border);"
+                              class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer bg-amber-500 hover:bg-amber-600 text-white disabled:opacity-50 disabled:cursor-not-allowed"
                               on:click={handleRegisterLightningAddress}
                               disabled={!isUsernameAvailable ||
                                 isRegisteringAddress ||
