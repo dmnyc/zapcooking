@@ -415,11 +415,6 @@
   // remote signers do this, the conservative default is to allow new
   // backups only from nsec / NIP-07 users.
   $: canShowNostrBackup = encryptionSupported && !isNip46User;
-  $: nostrBackupDisabledReason = !encryptionSupported
-    ? 'Your signer does not support encryption'
-    : isNip46User
-      ? 'Cloud backup is unavailable for remote signers (NIP-46). Save your recovery phrase manually.'
-      : '';
 
   // Re-check encryption support when NDK signer changes (reactive)
   $: {
@@ -2916,18 +2911,19 @@
                       <PencilSimpleIcon size={18} class="text-amber-500 flex-shrink-0" />
                       <span class="text-primary-color">Write down recovery phrase</span>
                     </button>
-                    <button
-                      class="flex items-center gap-3 w-full py-2.5 px-4 rounded-xl text-sm font-medium text-left transition-colors hover:bg-white/5 disabled:opacity-40"
-                      style="border: 1px solid var(--color-input-border);"
-                      on:click={handleBackupToNostr}
-                      disabled={isBackingUp || !canShowNostrBackup}
-                      title={nostrBackupDisabledReason}
-                    >
-                      <CloudArrowUpIcon size={18} class="text-amber-500 flex-shrink-0" />
-                      <span class="text-primary-color">
-                        {isBackingUp ? 'Backing up...' : 'Backup to Nostr'}
-                      </span>
-                    </button>
+                    {#if canShowNostrBackup}
+                      <button
+                        class="flex items-center gap-3 w-full py-2.5 px-4 rounded-xl text-sm font-medium text-left transition-colors hover:bg-white/5 disabled:opacity-40"
+                        style="border: 1px solid var(--color-input-border);"
+                        on:click={handleBackupToNostr}
+                        disabled={isBackingUp}
+                      >
+                        <CloudArrowUpIcon size={18} class="text-amber-500 flex-shrink-0" />
+                        <span class="text-primary-color">
+                          {isBackingUp ? 'Backing up...' : 'Backup to Nostr'}
+                        </span>
+                      </button>
+                    {/if}
                   </div>
                 {/if}
 
@@ -3258,19 +3254,17 @@
                           <KeyIcon size={16} />
                           Recovery Phrase
                         </button>
-                        <button
-                          class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors hover:bg-white/5 dark:hover:bg-white/5"
-                          class:cursor-pointer={canShowNostrBackup}
-                          class:cursor-not-allowed={!canShowNostrBackup}
-                          class:opacity-50={!canShowNostrBackup}
-                          style="color: var(--color-text-secondary); border: 1px solid var(--color-input-border);"
-                          on:click={handleBackupToNostr}
-                          disabled={isBackingUp || !canShowNostrBackup}
-                          title={nostrBackupDisabledReason}
-                        >
-                          <CloudArrowUpIcon size={16} />
-                          {isBackingUp ? 'Backing up...' : 'Backup to Nostr'}
-                        </button>
+                        {#if canShowNostrBackup}
+                          <button
+                            class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer hover:bg-white/5 dark:hover:bg-white/5"
+                            style="color: var(--color-text-secondary); border: 1px solid var(--color-input-border);"
+                            on:click={handleBackupToNostr}
+                            disabled={isBackingUp}
+                          >
+                            <CloudArrowUpIcon size={16} />
+                            {isBackingUp ? 'Backing up...' : 'Backup to Nostr'}
+                          </button>
+                        {/if}
                         <button
                           class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer hover:bg-white/5 dark:hover:bg-white/5"
                           style="color: var(--color-text-secondary); border: 1px solid var(--color-input-border);"
@@ -3558,21 +3552,19 @@
                         Backup & Recovery
                       </div>
                       <div class="grid grid-cols-2 gap-2">
-                        <button
-                          class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors hover:bg-white/5"
-                          class:cursor-pointer={canShowNostrBackup}
-                          class:cursor-not-allowed={!canShowNostrBackup}
-                          class:opacity-50={!canShowNostrBackup}
-                          style="background-color: transparent; color: var(--color-text-secondary); border: 1px solid var(--color-input-border);"
-                          on:click={() => handleNwcBackupToNostr(wallet)}
-                          disabled={isBackingUp || !canShowNostrBackup}
-                          title={nostrBackupDisabledReason}
-                        >
-                          <CloudArrowUpIcon size={16} />
-                          <span class="truncate"
-                            >{isBackingUp ? 'Backing up...' : 'Backup to Nostr'}</span
+                        {#if canShowNostrBackup}
+                          <button
+                            class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer hover:bg-white/5"
+                            style="background-color: transparent; color: var(--color-text-secondary); border: 1px solid var(--color-input-border);"
+                            on:click={() => handleNwcBackupToNostr(wallet)}
+                            disabled={isBackingUp}
                           >
-                        </button>
+                            <CloudArrowUpIcon size={16} />
+                            <span class="truncate"
+                              >{isBackingUp ? 'Backing up...' : 'Backup to Nostr'}</span
+                            >
+                          </button>
+                        {/if}
                         <button
                           class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer hover:bg-white/5 dark:hover:bg-white/5"
                           style="color: var(--color-text-secondary); border: 1px solid var(--color-input-border);"
