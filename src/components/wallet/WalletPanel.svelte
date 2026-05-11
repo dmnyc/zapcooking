@@ -408,6 +408,19 @@
     isNip46User = authManager?.getState()?.authMethod === 'nip46';
   }
 
+  // Nostr-relay backup is unavailable for NIP-46 remote signers. Some
+  // NIP-46 remote signers may encrypt under their session/auth key
+  // rather than the user's real identity key, producing ciphertext no
+  // future session can decrypt. Since we can't reliably tell which
+  // remote signers do this, the conservative default is to allow new
+  // backups only from nsec / NIP-07 users.
+  $: canShowNostrBackup = encryptionSupported && !isNip46User;
+  $: nostrBackupDisabledReason = !encryptionSupported
+    ? 'Your signer does not support encryption'
+    : isNip46User
+      ? 'Cloud backup is unavailable for remote signers (NIP-46). Save your recovery phrase manually.'
+      : '';
+
   // Re-check encryption support when NDK signer changes (reactive)
   $: {
     const signer = $ndk?.signer;
@@ -2907,8 +2920,8 @@
                       class="flex items-center gap-3 w-full py-2.5 px-4 rounded-xl text-sm font-medium text-left transition-colors hover:bg-white/5 disabled:opacity-40"
                       style="border: 1px solid var(--color-input-border);"
                       on:click={handleBackupToNostr}
-                      disabled={isBackingUp || !encryptionSupported}
-                      title={!encryptionSupported ? 'Your signer does not support encryption' : ''}
+                      disabled={isBackingUp || !canShowNostrBackup}
+                      title={nostrBackupDisabledReason}
                     >
                       <CloudArrowUpIcon size={18} class="text-amber-500 flex-shrink-0" />
                       <span class="text-primary-color">
@@ -3247,15 +3260,13 @@
                         </button>
                         <button
                           class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors hover:bg-white/5 dark:hover:bg-white/5"
-                          class:cursor-pointer={encryptionSupported}
-                          class:cursor-not-allowed={!encryptionSupported}
-                          class:opacity-50={!encryptionSupported}
+                          class:cursor-pointer={canShowNostrBackup}
+                          class:cursor-not-allowed={!canShowNostrBackup}
+                          class:opacity-50={!canShowNostrBackup}
                           style="color: var(--color-text-secondary); border: 1px solid var(--color-input-border);"
                           on:click={handleBackupToNostr}
-                          disabled={isBackingUp || !encryptionSupported}
-                          title={!encryptionSupported
-                            ? 'Your signer does not support encryption'
-                            : ''}
+                          disabled={isBackingUp || !canShowNostrBackup}
+                          title={nostrBackupDisabledReason}
                         >
                           <CloudArrowUpIcon size={16} />
                           {isBackingUp ? 'Backing up...' : 'Backup to Nostr'}
@@ -3549,15 +3560,13 @@
                       <div class="grid grid-cols-2 gap-2">
                         <button
                           class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors hover:bg-white/5"
-                          class:cursor-pointer={encryptionSupported}
-                          class:cursor-not-allowed={!encryptionSupported}
-                          class:opacity-50={!encryptionSupported}
+                          class:cursor-pointer={canShowNostrBackup}
+                          class:cursor-not-allowed={!canShowNostrBackup}
+                          class:opacity-50={!canShowNostrBackup}
                           style="background-color: transparent; color: var(--color-text-secondary); border: 1px solid var(--color-input-border);"
                           on:click={() => handleNwcBackupToNostr(wallet)}
-                          disabled={isBackingUp || !encryptionSupported}
-                          title={!encryptionSupported
-                            ? 'Your signer does not support encryption'
-                            : ''}
+                          disabled={isBackingUp || !canShowNostrBackup}
+                          title={nostrBackupDisabledReason}
                         >
                           <CloudArrowUpIcon size={16} />
                           <span class="truncate"
@@ -4682,8 +4691,8 @@
 
         <div
           class="grid gap-2 mb-4"
-          class:grid-cols-2={encryptionSupported}
-          class:grid-cols-1={!encryptionSupported}
+          class:grid-cols-2={canShowNostrBackup}
+          class:grid-cols-1={!canShowNostrBackup}
         >
           {#if walletToDelete.kind === 4}
             <button
@@ -4705,7 +4714,7 @@
               Download
             </button>
           {/if}
-          {#if encryptionSupported}
+          {#if canShowNostrBackup}
             <button
               class="flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors cursor-pointer hover:bg-white/5"
               style="border: 1px solid var(--color-input-border); color: var(--color-text-primary);"
