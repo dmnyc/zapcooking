@@ -555,7 +555,7 @@
               Backup key (private)
             </p>
             {#if showPrivateKey}
-              <div class="flex gap-2">
+              <div class="flex flex-col sm:flex-row gap-2">
                 <textarea
                   id="private-key-textarea"
                   readonly
@@ -584,7 +584,7 @@
                 </button>
               </div>
             {:else}
-              <div class="flex gap-2">
+              <div class="flex flex-col sm:flex-row gap-2">
                 <div
                   class="flex-1 min-w-0 bg-input border rounded-lg p-3 text-sm text-caption font-mono overflow-hidden whitespace-nowrap"
                   style="border-color: var(--color-input-border)"
@@ -610,7 +610,7 @@
               class="block text-sm font-medium mb-1"
               style="color: var(--color-text-primary)">Public identity (npub)</label
             >
-            <div class="flex gap-2">
+            <div class="flex flex-col sm:flex-row gap-2">
               <input
                 id="public-key-input"
                 readonly
