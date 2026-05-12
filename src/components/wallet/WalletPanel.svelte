@@ -5826,7 +5826,7 @@
         </div>
       {:else}
         <!-- Invoice Generated - Show QR and copy options -->
-        <div class="space-y-5 text-center">
+        <div class="space-y-4 text-center">
           {#if invoicePaid}
             <!-- Payment received! -->
             <div class="py-8">
@@ -5852,7 +5852,7 @@
                   }}
                 />
               </div>
-              <div class="text-lg font-medium text-primary-color text-center">
+              <div class="text-lg font-medium text-primary-color text-center mt-2">
                 Invoice for {formatBalance(receiveAmount)} sats
               </div>
               <!-- Branta Verification Badge -->
