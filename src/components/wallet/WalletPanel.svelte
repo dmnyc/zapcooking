@@ -5826,7 +5826,7 @@
         </div>
       {:else}
         <!-- Invoice Generated - Show QR and copy options -->
-        <div class="space-y-4 text-center">
+        <div class="space-y-5 text-center">
           {#if invoicePaid}
             <!-- Payment received! -->
             <div class="py-8">
