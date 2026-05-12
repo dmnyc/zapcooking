@@ -5847,7 +5847,7 @@
 
             <!-- QR Code -->
             {#if generatedInvoice && generatedInvoice.length > 0}
-              <div class="qr-wrapper self-center p-4 rounded-xl bg-white" style="width: 100%; max-width: 300px; margin: 0 auto;">
+              <div class="qr-wrapper self-center p-4 rounded-xl bg-white" style="width: 100%; max-width: 240px; margin: 0 auto;">
                 <svg
                   class="w-full"
                   use:qr={{
