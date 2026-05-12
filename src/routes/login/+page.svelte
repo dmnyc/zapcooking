@@ -8,6 +8,8 @@
   import CloseIcon from 'phosphor-svelte/lib/XCircle';
   import LightningIcon from 'phosphor-svelte/lib/Lightning';
   import ProfileReadyIcon from '../../components/icons/ProfileReadyIcon.svelte';
+  import KeyIcon from 'phosphor-svelte/lib/Key';
+  import ShieldWarningIcon from 'phosphor-svelte/lib/ShieldWarning';
   import type { PageData } from './$types';
   import QRCode from 'svelte-qrcode';
 
@@ -748,7 +750,7 @@
             <ProfileReadyIcon size={36} class="text-amber-500" />
           </div>
           <h2 class="login-modal-hero-title">
-            Create your Zap Cooking profile<br />in under a minute.
+            Create your Zap Cooking profile in under a minute.
           </h2>
         </div>
       {:else}
@@ -760,35 +762,51 @@
         {#if !generatedKeys}
           <div class="space-y-4">
             <div
-              class="bg-input border rounded-lg p-4"
-              style="border-color: var(--color-input-border)"
+              class="rounded-2xl"
+              style="background: var(--color-bg-secondary, var(--color-input-bg)); border: 1px solid var(--color-input-border); overflow: hidden;"
             >
-              <div class="text-sm font-medium mb-2" style="color: var(--color-text-primary)">
-                🔐 Your profile, your keys
+              <!-- Header: key icon + title/subtitle -->
+              <div class="flex items-start gap-3 p-4">
+                <span
+                  class="flex-shrink-0 inline-flex items-center justify-center rounded-full"
+                  style="width:36px;height:36px;background:rgba(245,158,11,0.12);color:rgb(245,158,11);"
+                >
+                  <KeyIcon size={20} weight="fill" />
+                </span>
+                <div>
+                  <h3 class="text-sm font-semibold leading-snug" style="color:var(--color-text-primary);margin:0 0 2px;">Your profile, your keys</h3>
+                  <p class="text-xs leading-relaxed" style="color:var(--color-text-secondary);margin:0;">
+                    Zap Cooking runs on Nostr — you own your profile and data.
+                  </p>
+                </div>
               </div>
-              <p class="text-sm text-caption mb-3">
-                Zap Cooking uses Nostr, which means you own your profile and data.
-              </p>
-              <ul class="text-sm text-caption space-y-1.5">
-                <li class="flex items-start gap-2">
-                  <span class="text-caption">•</span>
-                  <span>Your profile will be created on this device</span>
-                </li>
-                <li class="flex items-start gap-2">
-                  <span class="text-caption">•</span>
-                  <span>You'll see a backup key after creation</span>
-                </li>
-                <li class="flex items-start gap-2">
-                  <span class="text-caption">•</span>
-                  <span>Saving it lets you recover your profile later</span>
-                </li>
+
+              <hr style="margin:0;border:none;border-top:1px solid var(--color-input-border);" />
+
+              <!-- Key-identity warning -->
+              <div class="flex items-start gap-3 p-4">
+                <span class="flex-shrink-0 mt-0.5" style="color:rgb(245,158,11);">
+                  <ShieldWarningIcon size={18} weight="fill" />
+                </span>
+                <p class="text-xs leading-relaxed" style="color:var(--color-text-primary);margin:0;">
+                  Unlike a username and password, your Nostr key
+                  <strong style="color:rgb(245,158,11);font-weight:600;">is your identity itself</strong>.
+                  Save it somewhere safe and never share it.
+                </p>
+              </div>
+
+              <hr style="margin:0;border:none;border-top:1px solid var(--color-input-border);" />
+
+              <!-- Bullet list -->
+              <ul class="space-y-2 p-4" style="list-style:none;margin:0;">
+                {#each ['Your profile is created right here on this device.', "You'll see your backup key immediately after.", 'Save it now so you can sign in from anywhere later.'] as point}
+                  <li class="flex items-start gap-2 text-xs leading-relaxed" style="color:var(--color-text-secondary);">
+                    <span class="flex-shrink-0 rounded-full mt-1.5" style="width:5px;height:5px;background:rgba(245,158,11,0.7);display:inline-block;"></span>
+                    {point}
+                  </li>
+                {/each}
               </ul>
             </div>
-
-            <p class="text-sm text-caption">
-              When you continue, we'll create your profile and show you a backup key to save for
-              safekeeping.
-            </p>
 
             <div>
               <Button on:click={generateNewKeys} primary={true} class="w-full spark-glow">
@@ -1755,11 +1773,12 @@
     padding-top: 1rem;
     border-top: 1px solid var(--signin-line);
     display: flex;
+    flex-direction: column;
     align-items: center;
-    justify-content: space-between;
-    gap: 0.75rem;
+    gap: 0.5rem;
     font-size: 0.75rem;
     color: var(--signin-mute);
+    text-align: center;
   }
 
   .signin-footer-tag {
@@ -1863,8 +1882,12 @@
   }
   :global(.login-modal-logo-btn:focus-visible),
   :global(.login-modal-close-btn:focus-visible) {
-    outline: 2px solid var(--color-text-primary);
+    outline: 2px solid rgba(236, 71, 0, 0.5);
     outline-offset: 2px;
+  }
+  :global(html.dark .login-modal-logo-btn:focus-visible),
+  :global(html.dark .login-modal-close-btn:focus-visible) {
+    outline: 2px solid rgba(236, 71, 0, 0.3);
   }
   :global(.login-modal-title) {
     font-size: 1.25rem;
@@ -1929,9 +1952,10 @@
     }
   }
   :global(.login-modal-hero-title) {
-    font-size: 1.5rem;
+    font-size: clamp(1.25rem, 5vw, 1.5rem);
     font-weight: 700;
     line-height: 1.25;
+    text-wrap: balance;
     color: var(--color-text-primary);
     margin: 0;
   }
@@ -1993,4 +2017,5 @@
     padding: 0 !important;
     gap: 0 !important;
   }
+
 </style>

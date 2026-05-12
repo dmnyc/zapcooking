@@ -111,8 +111,12 @@
   }
   .wallet-logo-btn:focus-visible,
   .wallet-close-btn:focus-visible {
-    outline: 2px solid var(--color-text-primary);
+    outline: 2px solid rgba(236, 71, 0, 0.5);
     outline-offset: 2px;
+  }
+  :global(html.dark) .wallet-logo-btn:focus-visible,
+  :global(html.dark) .wallet-close-btn:focus-visible {
+    outline: 2px solid rgba(236, 71, 0, 0.3);
   }
   /* Neutralise the panel's original full-width container styling. */
   .wallet-modal-body :global(.max-w-2xl) {

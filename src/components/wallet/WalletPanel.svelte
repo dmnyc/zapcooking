@@ -179,6 +179,25 @@
   let backupReminderDismissed = false;
   let showPaperBackupInline = false;
 
+  // Soft-exit "Explore Zap Cooking" banner above transaction history.
+  // Sticky-dismissed: once the user clicks it, don't show again on this device.
+  const EXPLORE_PROMPT_DISMISSED_KEY = 'zapcooking_explore_prompt_dismissed';
+  let explorePromptDismissed = false;
+  if (browser) {
+    explorePromptDismissed = localStorage.getItem(EXPLORE_PROMPT_DISMISSED_KEY) === '1';
+  }
+  function dismissExplorePrompt() {
+    explorePromptDismissed = true;
+    if (browser) {
+      try {
+        localStorage.setItem(EXPLORE_PROMPT_DISMISSED_KEY, '1');
+      } catch {
+        // ignore quota/permission errors — non-essential persistence
+      }
+    }
+    closeWalletModal();
+  }
+
   // Spark restore options
   let sparkRestoreMode: 'options' | 'mnemonic' | 'file' | 'nostr-select' = 'options';
   let restoreMnemonicInput = '';
@@ -414,15 +433,23 @@
   // future session can decrypt. Since we can't reliably tell which
   // remote signers do this, the conservative default is to allow new
   // backups only from nsec / NIP-07 users.
-  $: canShowNostrBackup = encryptionSupported && !isNip46User;
-
-  // Re-check encryption support when NDK signer changes (reactive)
-  $: {
-    const signer = $ndk?.signer;
-    if (browser) {
-      checkEncryptionSupport();
-    }
-  }
+  //
+  // Recompute on every $userPublickey / $ndk change instead of caching
+  // `encryptionSupported` — NDK mutates `.signer` in place after login,
+  // which doesn't fire the ndk store, so a cached flag would stay stale
+  // and hide the backup option from nsec users post-login.
+  $: canShowNostrBackup = (() => {
+    if (!browser) return false;
+    // Touch reactive deps so this recomputes on login / relay-mode switch.
+    void $userPublickey;
+    void $ndk?.signer;
+    const authManager = getAuthManager();
+    const nip46 = authManager?.getState()?.authMethod === 'nip46';
+    isNip46User = nip46;
+    const supported = hasEncryptionSupport();
+    encryptionSupported = supported;
+    return supported && !nip46;
+  })();
 
   // Filter pending transactions to only show those for the active wallet
   $: filteredPendingTransactions = $pendingTransactions.filter(
@@ -2854,90 +2881,6 @@
           </div>
         {/if}
 
-        <!-- Backup Reminder Banner (Spark wallet only, after creation) -->
-        {#if showBackupReminder && !backupReminderDismissed && $activeWallet?.kind === 4}
-          <div
-            class="mb-4 p-4 rounded-2xl"
-            style="background-color: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.3);"
-          >
-            <div class="flex items-start gap-3">
-              <ShieldCheckIcon size={22} class="text-amber-500 flex-shrink-0 mt-0.5" />
-              <div class="flex-1">
-                <p class="font-medium text-primary-color mb-1">Protect your wallet</p>
-                <p class="text-sm text-caption mb-3">
-                  Choose a backup method to secure your funds.
-                </p>
-
-                {#if showPaperBackupInline && revealedMnemonic}
-                  <div class="mb-3">
-                    <div
-                      class="relative p-4 rounded-lg mb-3 font-mono text-sm"
-                      style="background-color: var(--color-input-bg); color: var(--color-text-primary);"
-                    >
-                      {#if mnemonicVisible}
-                        <span class="select-all">{revealedMnemonic}</span>
-                      {:else}
-                        <span class="blur-sm select-none" aria-hidden="true"
-                          >{revealedMnemonic}</span
-                        >
-                      {/if}
-                      <button
-                        class="absolute top-3 right-3 p-1 rounded-lg opacity-70 hover:opacity-100 transition-opacity"
-                        style="color: var(--color-text-primary);"
-                        on:click={() => (mnemonicVisible = !mnemonicVisible)}
-                        title={mnemonicVisible ? 'Hide' : 'Reveal'}
-                      >
-                        {#if mnemonicVisible}
-                          <EyeSlashIcon size={18} />
-                        {:else}
-                          <EyeIcon size={18} />
-                        {/if}
-                      </button>
-                    </div>
-                    <button
-                      class="w-full py-2 px-4 rounded-xl text-sm font-medium bg-amber-500 hover:bg-amber-600 text-white transition-colors"
-                      on:click={handlePaperBackupDone}
-                    >
-                      I've written it down
-                    </button>
-                  </div>
-                {:else}
-                  <div class="flex flex-col gap-2">
-                    <button
-                      class="flex items-center gap-3 w-full py-2.5 px-4 rounded-xl text-sm font-medium text-left transition-colors hover:bg-white/5"
-                      style="border: 1px solid var(--color-input-border);"
-                      on:click={handleShowPaperBackup}
-                    >
-                      <PencilSimpleIcon size={18} class="text-amber-500 flex-shrink-0" />
-                      <span class="text-primary-color">Write down recovery phrase</span>
-                    </button>
-                    {#if canShowNostrBackup}
-                      <button
-                        class="flex items-center gap-3 w-full py-2.5 px-4 rounded-xl text-sm font-medium text-left transition-colors hover:bg-white/5 disabled:opacity-40"
-                        style="border: 1px solid var(--color-input-border);"
-                        on:click={handleBackupToNostr}
-                        disabled={isBackingUp}
-                      >
-                        <CloudArrowUpIcon size={18} class="text-amber-500 flex-shrink-0" />
-                        <span class="text-primary-color">
-                          {isBackingUp ? 'Backing up...' : 'Backup to Nostr'}
-                        </span>
-                      </button>
-                    {/if}
-                  </div>
-                {/if}
-
-                <button
-                  class="mt-3 text-xs text-caption hover:text-primary-color transition-colors cursor-pointer"
-                  on:click={dismissBackupReminder}
-                >
-                  Dismiss
-                </button>
-              </div>
-            </div>
-          </div>
-        {/if}
-
         <!-- Pending On-Chain Deposits (Spark wallet only) -->
         <div id="pending-deposits"></div>
         {#if $activeWallet?.kind === 4 && unclaimedDeposits.length > 0}
@@ -3227,9 +3170,9 @@
                       <div class="text-xs text-caption mb-2 uppercase tracking-wide">
                         Wallet Details
                       </div>
-                      <div class="grid grid-cols-2 gap-2 mb-4">
+                      <div class="mb-4">
                         <button
-                          class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer hover:bg-white/5 dark:hover:bg-white/5"
+                          class="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer hover:bg-white/5 dark:hover:bg-white/5"
                           style="color: var(--color-text-secondary); border: 1px solid var(--color-input-border);"
                           on:click={handleViewSparkInfo}
                           disabled={isLoadingSparkInfo}
@@ -3245,7 +3188,7 @@
                       <div class="text-xs text-caption mb-2 uppercase tracking-wide">
                         Backup & Recovery
                       </div>
-                      <div class="grid grid-cols-2 gap-2">
+                      <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
                         <button
                           class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer hover:bg-white/5 dark:hover:bg-white/5"
                           style="color: var(--color-text-secondary); border: 1px solid var(--color-input-border);"
@@ -3284,8 +3227,12 @@
                           <LifebuoyIcon size={16} />
                           Recovery Help
                         </button>
+                      </div>
+
+                      <!-- Destructive action separated to avoid mis-taps -->
+                      <div class="mt-3 pt-3 border-t" style="border-color: var(--color-input-border);">
                         <button
-                          class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer text-red-500 hover:bg-red-500/10"
+                          class="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer text-red-500 hover:bg-red-500/10"
                           style="border: 1px solid var(--color-input-border);"
                           on:click={() =>
                             (walletToDelete = {
@@ -3528,7 +3475,7 @@
                       <div class="text-xs text-caption mb-2 uppercase tracking-wide">
                         Wallet Details
                       </div>
-                      <div class="grid grid-cols-2 gap-2 mb-4">
+                      <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-4">
                         <button
                           class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer hover:bg-white/5 dark:hover:bg-white/5"
                           style="color: var(--color-text-secondary); border: 1px solid var(--color-input-border);"
@@ -3554,7 +3501,7 @@
                       <div class="text-xs text-caption mb-2 uppercase tracking-wide">
                         Backup & Recovery
                       </div>
-                      <div class="grid grid-cols-2 gap-2">
+                      <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
                         {#if canShowNostrBackup}
                           <button
                             class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer hover:bg-white/5"
@@ -3587,8 +3534,12 @@
                           <CloudCheckIcon size={16} />
                           <span class="truncate">Check Backups</span>
                         </button>
+                      </div>
+
+                      <!-- Destructive action separated to avoid mis-taps -->
+                      <div class="mt-3 pt-3 border-t" style="border-color: var(--color-input-border);">
                         <button
-                          class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer text-red-500 hover:bg-red-500/10"
+                          class="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer text-red-500 hover:bg-red-500/10"
                           style="background-color: transparent; border: 1px solid var(--color-input-border);"
                           on:click={() =>
                             (walletToDelete = {
@@ -3743,6 +3694,116 @@
             </div>
           {/if}
         </div>
+
+        <!-- Backup Reminder Banner (Spark wallet only, after creation) -->
+        {#if showBackupReminder && !backupReminderDismissed && $activeWallet?.kind === 4}
+          <div
+            class="mb-4 p-3 rounded-xl"
+            style="background-color: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.3);"
+          >
+            <div class="flex items-start gap-2.5">
+              <ShieldCheckIcon size={18} class="text-amber-500 flex-shrink-0 mt-0.5" />
+              <div class="flex-1">
+                <p class="text-sm font-medium text-primary-color mb-0.5">Protect your wallet</p>
+                <p class="text-xs text-caption mb-2.5">
+                  Choose a backup method to secure your funds.
+                </p>
+
+                {#if showPaperBackupInline && revealedMnemonic}
+                  <div class="mb-3">
+                    <div
+                      class="relative p-4 rounded-lg mb-3 font-mono text-sm"
+                      style="background-color: var(--color-input-bg); color: var(--color-text-primary);"
+                    >
+                      {#if mnemonicVisible}
+                        <span class="select-all">{revealedMnemonic}</span>
+                      {:else}
+                        <span class="blur-sm select-none" aria-hidden="true"
+                          >{revealedMnemonic}</span
+                        >
+                      {/if}
+                      <button
+                        class="absolute top-3 right-3 p-1 rounded-lg opacity-70 hover:opacity-100 transition-opacity"
+                        style="color: var(--color-text-primary);"
+                        on:click={() => (mnemonicVisible = !mnemonicVisible)}
+                        title={mnemonicVisible ? 'Hide' : 'Reveal'}
+                      >
+                        {#if mnemonicVisible}
+                          <EyeSlashIcon size={18} />
+                        {:else}
+                          <EyeIcon size={18} />
+                        {/if}
+                      </button>
+                    </div>
+                    <button
+                      class="w-full py-2 px-4 rounded-xl text-sm font-medium bg-amber-500 hover:bg-amber-600 text-white transition-colors"
+                      on:click={handlePaperBackupDone}
+                    >
+                      I've written it down
+                    </button>
+                  </div>
+                {:else}
+                  <div class="flex flex-col gap-1.5">
+                    <button
+                      class="flex items-center gap-2 w-full py-2 px-3 rounded-lg text-sm font-medium text-left transition-colors hover:bg-white/5"
+                      style="border: 1px solid var(--color-input-border);"
+                      on:click={handleShowPaperBackup}
+                    >
+                      <PencilSimpleIcon size={15} class="text-amber-500 flex-shrink-0" />
+                      <span class="text-primary-color">Write down recovery phrase</span>
+                    </button>
+                    {#if canShowNostrBackup}
+                      <button
+                        class="flex items-center gap-2 w-full py-2 px-3 rounded-lg text-sm font-medium text-left transition-colors hover:bg-white/5 disabled:opacity-40"
+                        style="border: 1px solid var(--color-input-border);"
+                        on:click={handleBackupToNostr}
+                        disabled={isBackingUp}
+                      >
+                        <CloudArrowUpIcon size={15} class="text-amber-500 flex-shrink-0" />
+                        <span class="text-primary-color">
+                          {isBackingUp ? 'Backing up...' : 'Backup to Nostr'}
+                        </span>
+                      </button>
+                    {/if}
+                  </div>
+                {/if}
+
+                <button
+                  class="mt-3 text-xs text-caption hover:text-primary-color transition-colors cursor-pointer"
+                  on:click={dismissBackupReminder}
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          </div>
+        {/if}
+
+        <!-- Soft exit back into the rest of the app, sitting above the
+             transaction history so the wallet doesn't feel like a dead end.
+             Sticky-dismissed once tapped (per device) so it doesn't keep
+             pestering returning users. -->
+        {#if $walletConnected && $activeWallet && !explorePromptDismissed}
+          <div
+            class="mb-6 rounded-2xl text-center"
+            style="padding:1rem 1.25rem;background:rgba(245,158,11,0.05);border:1px solid rgba(245,158,11,0.2);"
+          >
+            <p
+              class="text-sm leading-relaxed"
+              style="color:var(--color-text-secondary);margin:0 0 0.75rem;"
+            >
+              Looking for great recipes?<br />Want to publish your own?
+            </p>
+            <button
+              type="button"
+              class="inline-flex items-center gap-1 text-sm font-semibold rounded-full transition-all spark-glow"
+              style="padding:0.5rem 1.5rem;background:rgb(245,158,11);border:1px solid rgba(245,158,11,0.6);color:#fff;cursor:pointer;"
+              on:click={dismissExplorePrompt}
+            >
+              Explore Zap Cooking →
+            </button>
+          </div>
+        {/if}
 
         <!-- Transaction History -->
         {#if $walletConnected && $activeWallet}
@@ -4049,7 +4110,6 @@
               <span class="font-semibold text-orange-500">#Nostrichefs</span>
               keep publishing great recipes, tips, and stories.
             </p>
-            <p>If you don't have a wallet yet, you can create your first one right now.</p>
           </div>
         </div>
       {:else}
@@ -4223,6 +4283,18 @@
             {/if}
           {/if}
         </div>
+      {#if !selectedWalletType}
+        <div class="mt-6 text-center">
+          <button
+            type="button"
+            class="text-sm text-caption hover:text-primary-color transition-colors cursor-pointer underline-offset-2 hover:underline"
+            on:click={dismissPicker}
+          >
+            I'll do this later.
+          </button>
+        </div>
+      {/if}
+
       {:else if selectedWalletType === 3}
         <!-- NWC connection -->
         <div>
@@ -4432,21 +4504,6 @@
         </div>
       {/if}
 
-      <!-- Welcome card / soft exit for first-time users who land here
-           with no wallet yet. Frames the wallet as optional and gives a
-           clear "explore the rest of the app" CTA. Hidden when a
-           wallet type has been selected (sub-screens have their own
-           back-bar) or when the user is just adding another wallet. -->
-      {#if !hasAnyWallet && !selectedWalletType}
-        <div class="explore-prompt-card">
-          <p class="explore-prompt-card__text">
-            Not ready for a wallet? You can explore Zap Cooking and come back anytime.
-          </p>
-          <button type="button" class="explore-prompt-card__cta" on:click={dismissPicker}>
-            Explore Zap Cooking →
-          </button>
-        </div>
-      {/if}
     </div>
   {/if}
 
@@ -6158,44 +6215,6 @@
     }
   }
 
-  /* "Explore Zap Cooking" exit card at the bottom of the welcome
-     picker. Replaces the earlier text-link "I'll do this later" — a
-     visible card with a clear CTA makes the exit obvious for users
-     who aren't ready to set up a wallet on first run. */
-  .explore-prompt-card {
-    margin-top: 2rem;
-    padding: 1rem 1.25rem;
-    border-radius: 1rem;
-    background: rgba(245, 158, 11, 0.05);
-    border: 1px solid rgba(245, 158, 11, 0.2);
-    text-align: center;
-  }
-  .explore-prompt-card__text {
-    font-size: 0.875rem;
-    color: var(--color-text-secondary);
-    margin: 0 0 0.75rem;
-    line-height: 1.5;
-  }
-  .explore-prompt-card__cta {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.25rem;
-    padding: 0.5rem 1.25rem;
-    border-radius: 9999px;
-    background: var(--color-input-bg);
-    border: 1px solid var(--color-input-border);
-    font-size: 0.875rem;
-    font-weight: 600;
-    color: var(--color-text-primary);
-    cursor: pointer;
-    transition:
-      background-color 0.15s,
-      border-color 0.15s;
-  }
-  .explore-prompt-card__cta:hover {
-    background: rgba(255, 255, 255, 0.05);
-    border-color: rgba(245, 158, 11, 0.5);
-  }
 
   /* :global() so the rule reaches buttons rendered by child components
      (e.g. <Button>) too — Svelte's scoped CSS hash isn't applied to

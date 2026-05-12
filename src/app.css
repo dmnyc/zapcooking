@@ -116,6 +116,18 @@ html {
   outline: none;
 }
 
+/* Global focus ring — replace the browser's harsh blue outline with a
+   branded, semi-transparent ring that reads in both modes. */
+:focus-visible {
+  outline: 2px solid rgba(236, 71, 0, 0.55);
+  outline-offset: 2px;
+}
+
+html.dark :focus-visible {
+  outline: 2px solid rgba(236, 71, 0, 0.3);
+  outline-offset: 2px;
+}
+
 /* Typography */
 h1 {
   @apply text-2xl md:text-3xl font-semibold tracking-tight;
