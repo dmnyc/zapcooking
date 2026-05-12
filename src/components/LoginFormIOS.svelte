@@ -588,18 +588,18 @@
           </div>
 
           <div>
-            <Button on:click={generateNewKeys} primary={true} class="w-full spark-glow">
+            <button type="button" on:click={generateNewKeys} class="signin-cta-primary w-full spark-glow">
               Create Profile
-            </Button>
-            <p class="text-xs text-caption text-center mt-2">Takes less than 10 seconds</p>
+            </button>
+            <p class="text-xs text-center mt-2" style="color:var(--signin-mute);">Takes less than 10 seconds</p>
           </div>
         </div>
       {:else}
         <div class="space-y-4">
           <!-- Calm intro message -->
           {#if backupStep === 1}
-            <div class="bg-green-50 border border-green-200 rounded-lg p-3">
-              <p class="text-sm text-green-700">
+            <div class="rounded-lg p-3" style="background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.3);">
+              <p class="text-sm" style="color:rgb(134,239,172);">
                 ✓ Your profile has been created. Save your backup key below to recover it later.
               </p>
             </div>
@@ -1274,11 +1274,12 @@
     padding-top: 1rem;
     border-top: 1px solid var(--signin-line);
     display: flex;
+    flex-direction: column;
     align-items: center;
-    justify-content: space-between;
-    gap: 0.75rem;
+    gap: 0.5rem;
     font-size: 0.75rem;
     color: var(--signin-mute);
+    text-align: center;
   }
   .signin-footer-tag {
     font-weight: 500;

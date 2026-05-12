@@ -809,18 +809,18 @@
             </div>
 
             <div>
-              <Button on:click={generateNewKeys} primary={true} class="w-full spark-glow">
+              <button type="button" on:click={generateNewKeys} class="signin-cta-primary w-full spark-glow">
                 Create Profile
-              </Button>
-              <p class="text-xs text-caption text-center mt-2">Takes less than 10 seconds</p>
+              </button>
+              <p class="text-xs text-center mt-2" style="color:var(--signin-mute);">Takes less than 10 seconds</p>
             </div>
           </div>
         {:else}
           <div class="space-y-4">
             <!-- Calm intro message -->
             {#if backupStep === 1}
-              <div class="bg-green-50 border border-green-200 rounded-lg p-3">
-                <p class="text-sm text-green-700">
+              <div class="rounded-lg p-3" style="background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.3);">
+                <p class="text-sm" style="color:rgb(134,239,172);">
                   ✓ Your profile has been created. Save your backup key below to recover it later.
                 </p>
               </div>
@@ -1837,6 +1837,30 @@
   :global(.login-modal-body) {
     position: relative;
     padding: 3.5rem 1rem 1rem;
+    /* Always-dark signin surface — matches the sign-in card's visual
+       language regardless of the app's light/dark theme setting.
+       Re-map app tokens so any child element referencing var(--color-*)
+       automatically renders correctly on the dark surface. */
+    --signin-ink: #0b0e14;
+    --signin-surface: #13171f;
+    --signin-elevated: #1b202b;
+    --signin-line: #262c3a;
+    --signin-flame: #f7931a;
+    --signin-ember: #ff5f1f;
+    --signin-cream: #f5ebdd;
+    --signin-wheat: #c5b8a3;
+    --signin-mute: #7e8597;
+    --color-bg-primary: #0b0e14;
+    --color-bg-secondary: #1b202b;
+    --color-input-bg: #1b202b;
+    --color-input-border: #262c3a;
+    --color-text-primary: #f5ebdd;
+    --color-text-secondary: #c5b8a3;
+    --color-caption: #7e8597;
+    --color-accent-gray: #252b38;
+    background: var(--signin-surface);
+    color: var(--signin-cream);
+    font-family: 'Albert Sans', 'Inter', system-ui, -apple-system, sans-serif;
   }
   @media (min-width: 768px) {
     :global(.login-modal-body) {
@@ -2012,6 +2036,7 @@
      wallet sheet (matches the WalletModal CSS exactly). */
   :global(dialog:has(.login-modal-body)) {
     padding: 0 !important;
+    background: #13171f !important;
   }
   :global(dialog:has(.login-modal-body) > div) {
     padding: 0 !important;
