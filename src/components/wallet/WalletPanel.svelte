@@ -5841,10 +5841,6 @@
               </div>
             </div>
           {:else}
-            <div class="text-lg font-medium text-primary-color">
-              Invoice for {formatBalance(receiveAmount)} sats
-            </div>
-
             <!-- QR Code -->
             {#if generatedInvoice && generatedInvoice.length > 0}
               <div class="qr-wrapper self-center p-4 rounded-xl bg-white" style="width: 100%; max-width: 240px; margin: 0 auto;">
@@ -5856,8 +5852,11 @@
                   }}
                 />
               </div>
+              <div class="text-lg font-medium text-primary-color text-center">
+                Invoice for {formatBalance(receiveAmount)} sats
+              </div>
               <!-- Branta Verification Badge -->
-              <div class="flex justify-center mt-2">
+              <div class="flex justify-center">
                 <BrantaBadge paymentString={generatedInvoice} />
               </div>
             {/if}
