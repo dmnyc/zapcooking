@@ -548,6 +548,7 @@
   let generatedPaymentHash = '';
   let invoicePollInterval: ReturnType<typeof setInterval> | null = null;
   let invoicePaid = false;
+  let invoiceExpanded = false; // Collapsed by default — raw lnbc string hidden until tapped
   let balanceBeforeInvoice: number | null = null; // For Spark balance-based detection
   let showLightningAddressQr: string | null = null; // Lightning address to show QR for
   let isSending = false;
@@ -1351,6 +1352,7 @@
     generatedInvoice = '';
     generatedPaymentHash = '';
     invoicePaid = false;
+    invoiceExpanded = false;
     receiveError = '';
     isGeneratingInvoice = false;
     balanceBeforeInvoice = null;
@@ -5845,7 +5847,7 @@
 
             <!-- QR Code -->
             {#if generatedInvoice && generatedInvoice.length > 0}
-              <div class="qr-wrapper self-center p-4 rounded-xl bg-white" style="width: 100%; max-width: 260px; margin: 0 auto;">
+              <div class="qr-wrapper self-center p-4 rounded-xl bg-white" style="width: 100%; max-width: 300px; margin: 0 auto;">
                 <svg
                   class="w-full"
                   use:qr={{
@@ -5860,12 +5862,26 @@
               </div>
             {/if}
 
-            <div class="p-3 rounded-lg bg-input">
-              <div class="text-xs text-caption mb-2">Invoice</div>
-              <div class="font-mono text-xs text-primary-color break-all max-h-24 overflow-y-auto">
-                {generatedInvoice}
+            <button
+              type="button"
+              class="w-full p-3 rounded-lg bg-input flex items-center justify-between gap-2 transition-colors hover:opacity-80"
+              on:click={() => (invoiceExpanded = !invoiceExpanded)}
+              aria-expanded={invoiceExpanded}
+            >
+              <span class="text-xs text-caption">Invoice</span>
+              <CaretDownIcon
+                size={14}
+                class="text-caption flex-shrink-0 transition-transform duration-200"
+                style="transform: rotate({invoiceExpanded ? '180deg' : '0deg'})"
+              />
+            </button>
+            {#if invoiceExpanded}
+              <div class="p-3 rounded-lg bg-input -mt-1 rounded-t-none border-t border-input">
+                <div class="font-mono text-xs text-primary-color break-all max-h-24 overflow-y-auto">
+                  {generatedInvoice}
+                </div>
               </div>
-            </div>
+            {/if}
 
             <div class="flex gap-2">
               <button
