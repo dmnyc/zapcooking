@@ -58,7 +58,7 @@
     overflow: hidden;
     background-color: var(--color-bg-secondary);
     padding-top: 2rem;
-    padding-bottom: 2rem;
+    padding-bottom: 0;
   }
   /* Floating logo (left) + close button (right) — both sit on top of
      content in the top corners of the modal. No opaque banner — the

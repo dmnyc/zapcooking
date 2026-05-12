@@ -5488,7 +5488,7 @@
             <div class="text-sm text-caption mb-2">Send only Bitcoin to this address:</div>
 
             <!-- QR Code -->
-            <div class="qr-wrapper self-center p-4 rounded-xl bg-white" style="width: 100%;">
+            <div class="qr-wrapper self-center p-4 rounded-xl bg-white" style="width: 100%; max-width: 260px; margin: 0 auto;">
               <svg
                 class="w-full"
                 use:qr={{
@@ -5845,7 +5845,7 @@
 
             <!-- QR Code -->
             {#if generatedInvoice && generatedInvoice.length > 0}
-              <div class="qr-wrapper self-center p-4 rounded-xl bg-white" style="width: 100%;">
+              <div class="qr-wrapper self-center p-4 rounded-xl bg-white" style="width: 100%; max-width: 260px; margin: 0 auto;">
                 <svg
                   class="w-full"
                   use:qr={{
