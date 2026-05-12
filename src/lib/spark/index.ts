@@ -347,7 +347,6 @@ export async function initializeSdk(
     const config = defaultConfig('mainnet');
     config.apiKey = apiKey;
     config.privateEnabledDefault = true;
-    config.supportLnurlVerify = true; // Enable NIP-57 zap receipt metadata on received payments
 
     // Use sats.zap.cooking (subdomain) in production, breez.tips for local development
     // Strategy A: Subdomain approach - uses CNAME sats -> breez.tips in Cloudflare
@@ -562,7 +561,7 @@ export async function sendPayment(
     if (parsedInput.type === 'lightningAddress') {
       if (!amountSats) throw new Error('Amount is required for Lightning address payments');
       const payRequest = (parsedInput as any).payRequest;
-      const prepareRequest: any = { payRequest, amountSats };
+      const prepareRequest: any = { payRequest, amount: BigInt(amountSats) };
       if (comment) prepareRequest.comment = comment;
       const prepareResponse = await _sdkInstance.prepareLnurlPay(prepareRequest);
       const payment = await _sdkInstance.lnurlPay({ prepareResponse });
@@ -573,7 +572,7 @@ export async function sendPayment(
     if (parsedInput.type === 'lnurlPay') {
       if (!amountSats) throw new Error('Amount is required for LNURL payments');
       const payRequest = (parsedInput as any).payRequest;
-      const prepareRequest: any = { payRequest, amountSats };
+      const prepareRequest: any = { payRequest, amount: BigInt(amountSats) };
       if (comment) prepareRequest.comment = comment;
       const prepareResponse = await _sdkInstance.prepareLnurlPay(prepareRequest);
       const payment = await _sdkInstance.lnurlPay({ prepareResponse });

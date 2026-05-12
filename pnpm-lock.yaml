@@ -27,8 +27,8 @@ importers:
         specifier: ^1.0.0
         version: 1.0.0
       '@breeztech/breez-sdk-spark':
-        specifier: 0.11.0
-        version: 0.11.0
+        specifier: 0.14.0
+        version: 0.14.0
       '@capacitor/android':
         specifier: ^8.0.0
         version: 8.0.0(@capacitor/core@8.0.0)
@@ -327,8 +327,8 @@ packages:
   '@branta-ops/branta@1.0.0':
     resolution: {integrity: sha512-X11TSAk4lSGdk8nCjBgtfKWRuo5wKkX8Q5g4V/pJPPc3HEEZ+DB79JsNmQcRLutf+N6KOxgVW0x4rKg6zwZCUw==}
 
-  '@breeztech/breez-sdk-spark@0.11.0':
-    resolution: {integrity: sha512-wX8ZdFfnXN9t2AuLYlZxslmdHlxqnvkU8kAmIL1GuI3LNV8F7bxMGxLV/WTaQTgd7BGW/pcejpBcNPe7jjCdfA==}
+  '@breeztech/breez-sdk-spark@0.14.0':
+    resolution: {integrity: sha512-+j8Bz5e2FUH1DPpLCl19MrED2kD2nOgpH/7JKD/PP4f2mlUfE0fCH1i0greVDiIq0EAN2muq0CW5+aCm5OY6QA==}
     engines: {node: '>=22'}
 
   '@capacitor/android@8.0.0':
@@ -5521,7 +5521,7 @@ snapshots:
 
   '@branta-ops/branta@1.0.0': {}
 
-  '@breeztech/breez-sdk-spark@0.11.0':
+  '@breeztech/breez-sdk-spark@0.14.0':
     optionalDependencies:
       better-sqlite3: 12.6.2
       pg: 8.20.0
