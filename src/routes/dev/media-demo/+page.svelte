@@ -29,6 +29,27 @@
     };
   }
 
+  /** Google's public sample-videos bucket — short MP4 clips that
+   * stream cleanly, with first-frame posters that work for the
+   * MediaTile's poster behaviour and the Lightbox prev/next preview. */
+  const SAMPLE_VIDEOS = [
+    'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
+    'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyrides.mp4',
+    'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerMeltdowns.mp4',
+    'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4'
+  ];
+
+  function vid(index: number, alt: string): MediaItem {
+    return {
+      url: SAMPLE_VIDEOS[index % SAMPLE_VIDEOS.length],
+      mime: 'video/mp4',
+      // Sample videos are 1280x720 — declare it so the tile reserves
+      // aspect-ratio and doesn't shift when the first frame loads.
+      dim: { w: 1280, h: 720 },
+      alt
+    };
+  }
+
   /** Vary by count and source aspect so we can confirm the 1:1 hero
    * crops both portraits and landscapes consistently — and that the
    * Lightbox still shows the full uncropped frame. */
@@ -66,6 +87,47 @@
       items: [
         { url: 'https://picsum.photos/seed/no-meta-a/1600/900', mime: 'image/*' },
         { url: 'https://picsum.photos/seed/no-meta-b/1600/900', mime: 'image/*' }
+      ]
+    },
+    /* ─── Video fixtures ──────────────────────────────────────────
+       Tiles render an inline <video preload="metadata"> so the first
+       frame stands in as a poster, with a play-icon overlay.
+       Tapping opens the Lightbox where the current slot autoplays
+       muted with controls; flick / arrow / button nav to a new video
+       re-mounts the slot so autoplay refires every time. */
+    {
+      label: '1 video',
+      items: [vid(0, 'For Bigger Blazes (sample)')]
+    },
+    {
+      label: 'Mixed: 1 photo + 1 video',
+      items: [pic(1200, 1200, 200), vid(1, 'For Bigger Joyrides (sample)')]
+    },
+    {
+      label: 'Mixed: 2 photos + 1 video in a 3-up grid',
+      items: [
+        pic(1200, 1200, 201),
+        vid(2, 'For Bigger Meltdowns (sample)'),
+        pic(1200, 1200, 202)
+      ]
+    },
+    {
+      label: 'Mixed: 4-tile grid with one video',
+      items: [
+        pic(1200, 1200, 210),
+        pic(1200, 1200, 211),
+        vid(3, 'Sintel (sample)'),
+        pic(1200, 1200, 212)
+      ]
+    },
+    {
+      label: 'Mixed: 5 items (video + 4 photos), 2x2 with "+1" overlay',
+      items: [
+        vid(0, 'Cover video'),
+        pic(1200, 1200, 220),
+        pic(1200, 1200, 221),
+        pic(1200, 1200, 222),
+        pic(1200, 1200, 223)
       ]
     }
   ];
