@@ -264,33 +264,58 @@
         <div class="slot" style="width: {stripWidth}px;">
           {#if prevItem}
             {#if prevItem.mime.startsWith('video/')}
+              <!-- preload="metadata" fetches the first frame so the
+                   neighbour slot shows what's coming as the user
+                   swipes, instead of a black tile. muted so the
+                   browser will actually buffer the preview. -->
               <!-- svelte-ignore a11y-media-has-caption -->
-              <video class="lightbox-media" src={prevItem.url} preload="none" muted playsinline
+              <video
+                class="lightbox-media"
+                src={prevItem.url}
+                preload="metadata"
+                muted
+                playsinline
               ></video>
             {:else}
               <img class="lightbox-media" src={prevItem.url} alt={prevItem.alt ?? ''} />
             {/if}
           {/if}
         </div>
-        <div class="slot" style="width: {stripWidth}px;">
-          {#if isVideo}
-            <!-- svelte-ignore a11y-media-has-caption -->
-            <video
-              class="lightbox-media"
-              src={currentItem.url}
-              controls
-              autoplay
-              playsinline
-            ></video>
-          {:else}
-            <img class="lightbox-media" src={currentItem.url} alt={currentItem.alt ?? ''} />
-          {/if}
-        </div>
+        <!-- {#key} forces the current slot to remount whenever the
+             item URL changes. Otherwise navigating video → video
+             would just update the existing <video>'s src attribute,
+             which doesn't refire `autoplay`, and the new video would
+             sit paused on its first frame until the user tapped play. -->
+        {#key currentItem.url}
+          <div class="slot" style="width: {stripWidth}px;">
+            {#if isVideo}
+              <!-- muted is required for autoplay to work in Chrome,
+                   Safari, and Firefox post-2018. controls let the
+                   user unmute if they want sound. -->
+              <!-- svelte-ignore a11y-media-has-caption -->
+              <video
+                class="lightbox-media"
+                src={currentItem.url}
+                controls
+                autoplay
+                muted
+                playsinline
+              ></video>
+            {:else}
+              <img class="lightbox-media" src={currentItem.url} alt={currentItem.alt ?? ''} />
+            {/if}
+          </div>
+        {/key}
         <div class="slot" style="width: {stripWidth}px;">
           {#if nextItem}
             {#if nextItem.mime.startsWith('video/')}
               <!-- svelte-ignore a11y-media-has-caption -->
-              <video class="lightbox-media" src={nextItem.url} preload="none" muted playsinline
+              <video
+                class="lightbox-media"
+                src={nextItem.url}
+                preload="metadata"
+                muted
+                playsinline
               ></video>
             {:else}
               <img class="lightbox-media" src={nextItem.url} alt={nextItem.alt ?? ''} />
