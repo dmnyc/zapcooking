@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
   import { fade } from 'svelte/transition';
   import { portal } from '../../Modal.svelte';
   import {
@@ -14,32 +14,72 @@
 
   let portalTarget: HTMLElement | null = null;
   let scrollLockY = 0;
+
+  // Touch / swipe state.
   let touchStartX = 0;
   let touchStartY = 0;
-  let touchActive = false;
-  let touchDeltaX = 0;
-  /** Horizontal threshold (px) to trigger prev/next on touchend. */
-  const SWIPE_THRESHOLD = 60;
-  /** Vertical threshold (px) to trigger close-on-swipe-down. */
+  let touchStartTime = 0;
+  let isDragging = false;
+  /** Horizontal pixel offset applied to the filmstrip during a drag
+   * (and during animate-out). Zero when idle. */
+  let dragX = 0;
+  /** True while a programmatic slide is in flight (after touch release
+   * or keyboard / button nav). Suppresses additional touch input. */
+  let isAnimating = false;
+  /** Skip the next CSS transition for one frame — used right after
+   * the index swap so resetting dragX to 0 doesn't visually slide. */
+  let noTransition = false;
+  /** Strip slot width, set from the viewport on mount + resize. */
+  let stripWidth = 0;
+
+  /** Distance (px) past which a regular swipe triggers nav. */
+  const SWIPE_DISTANCE_THRESHOLD = 60;
+  /** Velocity (px / ms) past which a *flick* triggers nav regardless
+   * of distance. Tuned for natural feel — a casual short flick (~25px
+   * over 50ms = 0.5 px/ms) crosses; a slow drag does not. */
+  const FLICK_VELOCITY_THRESHOLD = 0.45;
+  /** Vertical pixel threshold for swipe-down-to-dismiss. */
   const DISMISS_THRESHOLD = 100;
+  /** Slide animation duration. */
+  const ANIM_MS = 240;
+  /** Rubber-band resistance at the first/last image — fingers drag
+   * the strip 30% of the natural distance to signal "no further". */
+  const EDGE_RESISTANCE = 0.3;
 
   $: state = $lightbox;
   $: currentItem = state.items[state.index];
+  $: prevItem = state.index > 0 ? state.items[state.index - 1] : null;
+  $: nextItem = state.index < state.items.length - 1 ? state.items[state.index + 1] : null;
   $: isVideo = currentItem?.mime?.startsWith('video/') ?? false;
-  $: hasPrev = state.index > 0;
-  $: hasNext = state.index < state.items.length - 1;
+  $: hasPrev = prevItem !== null;
+  $: hasNext = nextItem !== null;
+
+  /** Strip transform: base offset centers the middle slot
+   * (translateX = -stripWidth); dragX shifts it during interaction. */
+  $: stripTransform = `translate3d(${-stripWidth + dragX}px, 0, 0)`;
+  /** No transition while the user's finger is dragging (we want 1:1
+   * response) or during the post-swap dragX reset (to avoid a visible
+   * snap back). Idle / animate-out / animate-back uses the transition. */
+  $: stripTransition = isDragging || noTransition ? 'none' : `transform ${ANIM_MS}ms ease-out`;
 
   onMount(() => {
     portalTarget = document.body;
+    measureStrip();
+    window.addEventListener('resize', measureStrip);
   });
 
   onDestroy(() => {
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('resize', measureStrip);
+    }
     unlockScroll();
   });
 
-  // Body scroll lock when open, unlock when closed. Tracks the prior
-  // scrollY so unlocking restores the exact position; matters on iOS
-  // where document.body position:fixed otherwise scrolls to top.
+  function measureStrip() {
+    if (typeof window !== 'undefined') stripWidth = window.innerWidth;
+  }
+
+  // Body scroll lock when open, unlock when closed.
   $: if (typeof document !== 'undefined') {
     if (state.open) lockScroll();
     else unlockScroll();
@@ -66,55 +106,109 @@
   }
 
   function handleKeydown(e: KeyboardEvent) {
-    if (!state.open) return;
+    if (!state.open || isAnimating) return;
     if (e.key === 'Escape') {
       e.preventDefault();
       closeLightbox();
-    } else if (e.key === 'ArrowLeft') {
+    } else if (e.key === 'ArrowLeft' && hasPrev) {
       e.preventDefault();
-      lightboxPrev();
-    } else if (e.key === 'ArrowRight') {
+      animateTo('prev');
+    } else if (e.key === 'ArrowRight' && hasNext) {
       e.preventDefault();
-      lightboxNext();
+      animateTo('next');
     }
   }
 
   function handleBackdropClick(e: MouseEvent) {
-    // Only close if the click was on the backdrop itself, not on the
-    // image / controls. event.target === currentTarget means the
-    // click landed on the backdrop element, not propagated.
+    // Click on the backdrop element itself (not bubbled up from
+    // image / controls) closes the lightbox.
     if (e.target === e.currentTarget) closeLightbox();
   }
 
   function handleTouchStart(e: TouchEvent) {
-    if (e.touches.length !== 1) return;
+    if (e.touches.length !== 1 || isAnimating) return;
     touchStartX = e.touches[0].clientX;
     touchStartY = e.touches[0].clientY;
-    touchActive = true;
-    touchDeltaX = 0;
+    touchStartTime = performance.now();
+    isDragging = true;
+    dragX = 0;
   }
 
   function handleTouchMove(e: TouchEvent) {
-    if (!touchActive || e.touches.length !== 1) return;
-    touchDeltaX = e.touches[0].clientX - touchStartX;
+    if (!isDragging || e.touches.length !== 1) return;
+    let raw = e.touches[0].clientX - touchStartX;
+    // Rubber-band at edges — finger still moves but the strip lags so
+    // the user feels resistance instead of an abrupt wall.
+    if (!hasPrev && raw > 0) raw *= EDGE_RESISTANCE;
+    if (!hasNext && raw < 0) raw *= EDGE_RESISTANCE;
+    dragX = raw;
   }
 
   function handleTouchEnd(e: TouchEvent) {
-    if (!touchActive) return;
-    touchActive = false;
+    if (!isDragging) return;
+    isDragging = false;
     const t = e.changedTouches[0];
     const dx = t.clientX - touchStartX;
     const dy = t.clientY - touchStartY;
-    // Prioritise vertical swipe-down to dismiss only if vertical motion
-    // dominates and is large enough.
+    const elapsed = Math.max(performance.now() - touchStartTime, 1);
+    const velocity = Math.abs(dx) / elapsed; // px/ms
+
+    // Vertical swipe-down dismisses if it dominates and crosses the
+    // distance threshold.
     if (Math.abs(dy) > Math.abs(dx) && dy > DISMISS_THRESHOLD) {
+      dragX = 0;
       closeLightbox();
-    } else if (dx > SWIPE_THRESHOLD && hasPrev) {
-      lightboxPrev();
-    } else if (dx < -SWIPE_THRESHOLD && hasNext) {
-      lightboxNext();
+      return;
     }
-    touchDeltaX = 0;
+
+    const isFlick = velocity > FLICK_VELOCITY_THRESHOLD;
+    const passesDistance = Math.abs(dx) > SWIPE_DISTANCE_THRESHOLD;
+    const shouldNav = isFlick || passesDistance;
+
+    if (shouldNav && dx > 0 && hasPrev) {
+      animateTo('prev');
+    } else if (shouldNav && dx < 0 && hasNext) {
+      animateTo('next');
+    } else {
+      animateBack();
+    }
+  }
+
+  /** Animate the strip back to its centered position — used when a
+   * swipe didn't cross either threshold. */
+  function animateBack() {
+    isAnimating = true;
+    dragX = 0;
+    window.setTimeout(() => {
+      isAnimating = false;
+    }, ANIM_MS);
+  }
+
+  /** Animate the strip toward an adjacent slot, then swap the store
+   * index and instantly recentre. The `noTransition` flag suppresses
+   * the CSS transition for the recentre so the strip doesn't slide
+   * back to centre — it teleports there with the new neighbour in
+   * place, making the swap invisible. */
+  async function animateTo(dir: 'prev' | 'next') {
+    if (dir === 'prev' && !hasPrev) return;
+    if (dir === 'next' && !hasNext) return;
+    isAnimating = true;
+    dragX = dir === 'prev' ? stripWidth : -stripWidth;
+    window.setTimeout(async () => {
+      noTransition = true;
+      if (dir === 'prev') lightboxPrev();
+      else lightboxNext();
+      dragX = 0;
+      // Wait two ticks: one for Svelte to apply the index/dragX
+      // updates, a second so the no-transition style applies before
+      // we re-enable transitions. Without this, the browser sometimes
+      // animates the dragX reset and the user sees a visible snap.
+      await tick();
+      requestAnimationFrame(() => {
+        noTransition = false;
+        isAnimating = false;
+      });
+    }, ANIM_MS);
   }
 </script>
 
@@ -158,24 +252,51 @@
         </button>
       </div>
 
-      <!-- Stage: image / video, object-fit: contain, follows finger on
-           horizontal swipe via translate. -->
+      <!-- Filmstrip: three slots (prev / current / next), each one
+           viewport wide. The strip is translated by -stripWidth so
+           the middle slot sits centred; swipe / animate-to shifts
+           dragX to slide. -->
       <div
-        class="lightbox-stage"
-        style:transform={touchActive ? `translateX(${touchDeltaX}px)` : 'translateX(0)'}
+        class="lightbox-strip"
+        style="transform: {stripTransform}; transition: {stripTransition}; width: {stripWidth *
+          3}px;"
       >
-        {#if isVideo}
-          <!-- svelte-ignore a11y-media-has-caption -->
-          <video
-            class="lightbox-media"
-            src={currentItem.url}
-            controls
-            autoplay
-            playsinline
-          ></video>
-        {:else}
-          <img class="lightbox-media" src={currentItem.url} alt={currentItem.alt ?? ''} />
-        {/if}
+        <div class="slot" style="width: {stripWidth}px;">
+          {#if prevItem}
+            {#if prevItem.mime.startsWith('video/')}
+              <!-- svelte-ignore a11y-media-has-caption -->
+              <video class="lightbox-media" src={prevItem.url} preload="none" muted playsinline
+              ></video>
+            {:else}
+              <img class="lightbox-media" src={prevItem.url} alt={prevItem.alt ?? ''} />
+            {/if}
+          {/if}
+        </div>
+        <div class="slot" style="width: {stripWidth}px;">
+          {#if isVideo}
+            <!-- svelte-ignore a11y-media-has-caption -->
+            <video
+              class="lightbox-media"
+              src={currentItem.url}
+              controls
+              autoplay
+              playsinline
+            ></video>
+          {:else}
+            <img class="lightbox-media" src={currentItem.url} alt={currentItem.alt ?? ''} />
+          {/if}
+        </div>
+        <div class="slot" style="width: {stripWidth}px;">
+          {#if nextItem}
+            {#if nextItem.mime.startsWith('video/')}
+              <!-- svelte-ignore a11y-media-has-caption -->
+              <video class="lightbox-media" src={nextItem.url} preload="none" muted playsinline
+              ></video>
+            {:else}
+              <img class="lightbox-media" src={nextItem.url} alt={nextItem.alt ?? ''} />
+            {/if}
+          {/if}
+        </div>
       </div>
 
       <!-- Prev / next: hidden on touch-only contexts via @media hover. -->
@@ -184,7 +305,7 @@
           type="button"
           class="nav-btn nav-prev"
           aria-label="Previous"
-          on:click={lightboxPrev}
+          on:click={() => animateTo('prev')}
         >
           <CaretLeftIcon size={32} weight="bold" />
         </button>
@@ -194,7 +315,7 @@
           type="button"
           class="nav-btn nav-next"
           aria-label="Next"
-          on:click={lightboxNext}
+          on:click={() => animateTo('next')}
         >
           <CaretRightIcon size={32} weight="bold" />
         </button>
@@ -213,14 +334,13 @@
     inset: 0;
     z-index: 1000;
     background-color: rgba(0, 0, 0, 0.94);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    /* No overflow so swipe-translate doesn't shift adjacent layout. */
+    /* The strip overflows by design; clip it at the backdrop. */
     overflow: hidden;
     /* iOS rubber-band would scroll the page beneath even with our
-       body-fixed lock when fingers pull at the edges; contain it. */
+       body-fixed lock when fingers pull at edges. */
     overscroll-behavior: contain;
+    /* touch-action: none stops the browser from interpreting our
+       horizontal swipes as page scroll / back-nav gestures. */
     touch-action: none;
   }
   .lightbox-topbar {
@@ -266,17 +386,18 @@
     outline: 2px solid var(--color-primary);
     outline-offset: 2px;
   }
-  .lightbox-stage {
-    width: 100%;
+  .lightbox-strip {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    will-change: transform;
+  }
+  .slot {
+    flex: 0 0 auto;
     height: 100%;
     display: flex;
     align-items: center;
     justify-content: center;
-    /* Transitions for snap-back when a swipe doesn't cross the
-       threshold. Disabled during touchActive (Svelte applies the
-       inline transform without transition there). */
-    transition: transform 0.18s ease-out;
-    will-change: transform;
   }
   .lightbox-media {
     max-width: 100vw;
@@ -284,8 +405,6 @@
     object-fit: contain;
     user-select: none;
     -webkit-user-drag: none;
-    /* The body-fix lock above takes care of preventing scroll; allow
-       native pinch zoom within the image only. */
     touch-action: pinch-zoom;
   }
   .nav-btn {
@@ -303,6 +422,7 @@
     align-items: center;
     justify-content: center;
     transition: background-color 0.15s;
+    z-index: 2;
   }
   .nav-btn:hover,
   .nav-btn:focus-visible {
@@ -329,13 +449,20 @@
     text-align: center;
     background: linear-gradient(to top, rgba(0, 0, 0, 0.6), rgba(0, 0, 0, 0));
     pointer-events: none;
+    z-index: 2;
   }
-  /* Hide the prev/next chevrons on coarse-pointer devices (phones,
+  /* Hide prev/next chevrons on coarse-pointer devices (phones,
      tablets) where swipe is the primary navigation. They stay on
      hover-capable devices (desktop, trackpad-paired tablets). */
   @media (hover: none) {
     .nav-btn {
       display: none;
+    }
+  }
+  /* Reduce-motion users get instant transitions instead of slides. */
+  @media (prefers-reduced-motion: reduce) {
+    .lightbox-strip {
+      transition: none !important;
     }
   }
 </style>
