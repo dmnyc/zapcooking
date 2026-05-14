@@ -17,9 +17,27 @@
   $: visibleItems = count <= 4 ? items : items.slice(0, 4);
   /** "+N" overlay count for the 4th tile in the 5+ case. */
   $: overflowCount = count > 4 ? count - 4 : 0;
-  /** Hero image (single-image layout) aspect ratio. From imeta dim
-   * when present; null falls back to the MediaTile default. */
-  $: heroAspect = count === 1 && items[0]?.dim ? items[0].dim.w / items[0].dim.h : undefined;
+  /** Hero (single-image) aspect ratio. We clamp the image's natural
+   * aspect into a "fits gracefully" range so the gallery always fills
+   * the feed column width:
+   *   - Wide cap: 1.78  (16:9 landscape — anything wider gets cropped
+   *     on the sides via object-fit: cover).
+   *   - Tall cap: 0.8   (4:5 portrait — anything taller gets cropped
+   *     on top/bottom).
+   * Without this clamp, tall portraits collapsed the container width
+   * under the max-height: 70vh cap, leaving empty space on either
+   * side of the gallery inside the feed column.
+   * When there's no imeta.dim we default to 1:1 (square) so the
+   * hero still fills the column. */
+  const HERO_MIN_RATIO = 0.8;
+  const HERO_MAX_RATIO = 1.78;
+  $: heroAspect = (() => {
+    if (count !== 1) return undefined;
+    const dim = items[0]?.dim;
+    if (!dim) return 1;
+    const natural = dim.w / dim.h;
+    return Math.max(HERO_MIN_RATIO, Math.min(HERO_MAX_RATIO, natural));
+  })();
 
   function open(index: number) {
     // Open the full media set (not visibleItems) so the user can swipe
@@ -89,7 +107,11 @@
   }
 
   /* ──────────────────────────────────────────────────────────────────
-     ONE — full-width hero, aspect from imeta, capped at maxHeight.
+     ONE — full-width hero. Aspect is clamped to [0.8, 1.78] (see
+     heroAspect in the script) so the container always fills the feed
+     column. object-fit: cover crops the extremes (very tall portraits
+     trim top/bottom; very wide panoramas trim left/right) — the user
+     can tap into the Lightbox to see the full uncropped frame.
      ────────────────────────────────────────────────────────────────── */
   .gallery.layout-one {
     grid-template-columns: 1fr;
@@ -97,10 +119,6 @@
   }
   .gallery.layout-one :global(.media-tile) {
     max-height: var(--gallery-max-h);
-  }
-  .gallery.layout-one :global(.media-tile .media-element) {
-    /* Contain (not cover) so tall portraits don't crop in the hero. */
-    object-fit: contain;
   }
 
   /* ──────────────────────────────────────────────────────────────────
