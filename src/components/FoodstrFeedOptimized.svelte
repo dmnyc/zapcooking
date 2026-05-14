@@ -5093,7 +5093,11 @@
               Unmute User
             </button>
           {:else}
-            <!-- No posts found message -->
+            <!-- No posts found message. The headline + suggestion are
+                 keyed off the food-filter toggle so the "use cooking
+                 tags" hint only appears when the filter is on. When a
+                 profile view is in All-posts mode and still returns
+                 zero events, the hint would be misleading. -->
             <div style="color: var(--color-caption)">
               <svg
                 class="h-12 w-12 mx-auto mb-4 opacity-50"
@@ -5108,10 +5112,18 @@
                   d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
                 ></path>
               </svg>
-              <p class="text-lg font-medium">No cooking posts found</p>
-              <p class="text-sm">
-                Try posting with cooking tags like #foodstr, #cook, #cooking, etc.
-              </p>
+              {#if authorPubkey && !foodFilterEnabled}
+                <p class="text-lg font-medium">No posts found</p>
+                <p class="text-sm">
+                  This account hasn't posted anything yet, or their posts haven't reached
+                  the relays we're checking.
+                </p>
+              {:else}
+                <p class="text-lg font-medium">No cooking posts found</p>
+                <p class="text-sm">
+                  Try posting with cooking tags like #foodstr, #cook, #cooking, etc.
+                </p>
+              {/if}
             </div>
             <button
               on:click={() => retryWithDelay()}
