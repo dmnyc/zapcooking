@@ -83,11 +83,13 @@
     gap: 2px;
     width: 100%;
     /* Outer rounding lives on the container so per-tile corner logic
-       isn't needed — gap of 2px shows through as a thin border-color
-       line between adjacent tiles. */
+       isn't needed. The 2px gap between tiles is transparent so it
+       picks up whatever background the gallery sits on (feed card,
+       note bg, page bg) and the seams visually disappear instead of
+       drawing a fixed-color hairline. */
     border-radius: 0.75rem;
     overflow: hidden;
-    background-color: var(--color-input-border);
+    background-color: transparent;
     isolation: isolate;
   }
 
