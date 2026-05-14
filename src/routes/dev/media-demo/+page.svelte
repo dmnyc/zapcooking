@@ -29,11 +29,22 @@
     };
   }
 
-  /** Vary by count. The hero (1-image case) uses a portrait ratio so
-   * the maxHeight cap is exercised. */
+  /** Vary by count and source aspect so we can confirm the 1:1 hero
+   * crops both portraits and landscapes consistently — and that the
+   * Lightbox still shows the full uncropped frame. */
   const fixtures: { label: string; items: MediaItem[] }[] = [
-    { label: '1 image (portrait, hero)', items: [pic(900, 1400, 1)] },
-    { label: '1 image (landscape, hero)', items: [pic(1600, 900, 2)] },
+    {
+      label: '1 image, portrait source → cropped to 1:1 square',
+      items: [pic(900, 1400, 1)]
+    },
+    {
+      label: '1 image, landscape source → cropped to 1:1 square',
+      items: [pic(1600, 900, 2)]
+    },
+    {
+      label: '1 image, square source → fits 1:1 with no crop',
+      items: [pic(1200, 1200, 12)]
+    },
     {
       label: '2 images',
       items: [pic(1200, 1200, 3), pic(1200, 1200, 4)]

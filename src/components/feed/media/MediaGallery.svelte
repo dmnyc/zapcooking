@@ -5,9 +5,6 @@
 
   /** Media items to render, in source order. */
   export let items: MediaItem[];
-  /** Cap on the gallery's height in the single-image layout. Defaults
-   * to 70vh so a tall portrait note doesn't take over the viewport. */
-  export let maxHeight = '70vh';
 
   $: count = items.length;
   /** Layout key — drives the CSS grid template. The 5+ case shows the
@@ -17,27 +14,16 @@
   $: visibleItems = count <= 4 ? items : items.slice(0, 4);
   /** "+N" overlay count for the 4th tile in the 5+ case. */
   $: overflowCount = count > 4 ? count - 4 : 0;
-  /** Hero (single-image) aspect ratio. We clamp the image's natural
-   * aspect into a "fits gracefully" range so the gallery always fills
-   * the feed column width:
-   *   - Wide cap: 1.78  (16:9 landscape — anything wider gets cropped
-   *     on the sides via object-fit: cover).
-   *   - Tall cap: 0.8   (4:5 portrait — anything taller gets cropped
-   *     on top/bottom).
-   * Without this clamp, tall portraits collapsed the container width
-   * under the max-height: 70vh cap, leaving empty space on either
-   * side of the gallery inside the feed column.
-   * When there's no imeta.dim we default to 1:1 (square) so the
-   * hero still fills the column. */
-  const HERO_MIN_RATIO = 0.8;
-  const HERO_MAX_RATIO = 1.78;
-  $: heroAspect = (() => {
-    if (count !== 1) return undefined;
-    const dim = items[0]?.dim;
-    if (!dim) return 1;
-    const natural = dim.w / dim.h;
-    return Math.max(HERO_MIN_RATIO, Math.min(HERO_MAX_RATIO, natural));
-  })();
+  /** Hero (single-image) aspect ratio. Locked to 1:1 so every gallery
+   * — single image, 2 / 3 / 4+ image grids — presents tiles in the
+   * same uniform square format. Images are cropped to fit via
+   * object-fit: cover (set on .media-tile in MediaTile.svelte); the
+   * full uncropped frame is one tap away in the Lightbox. This
+   * matches the Instagram / Jumble feed convention and avoids the
+   * "shrinks under max-height cap, letterboxes inside the column"
+   * trap that variable aspects fall into for very tall portraits
+   * or very wide panoramas. */
+  $: heroAspect = count === 1 ? 1 : undefined;
 
   function open(index: number) {
     // Open the full media set (not visibleItems) so the user can swipe
@@ -47,11 +33,10 @@
 </script>
 
 {#if count > 0}
-  <div class="gallery layout-{layout}" style="--gallery-max-h: {maxHeight}">
+  <div class="gallery layout-{layout}">
     {#if layout === 'one'}
-      <!-- Single image: full width, aspect from imeta, capped at maxHeight.
-           object-fit: contain (set in the one-layout block below) so tall
-           portraits don't crop. -->
+      <!-- Single image: 1:1 square cropped to fit. The full uncropped
+           frame is shown in the Lightbox on tap. -->
       <MediaTile
         item={visibleItems[0]}
         aspectRatio={heroAspect}
@@ -107,18 +92,12 @@
   }
 
   /* ──────────────────────────────────────────────────────────────────
-     ONE — full-width hero. Aspect is clamped to [0.8, 1.78] (see
-     heroAspect in the script) so the container always fills the feed
-     column. object-fit: cover crops the extremes (very tall portraits
-     trim top/bottom; very wide panoramas trim left/right) — the user
-     can tap into the Lightbox to see the full uncropped frame.
+     ONE — single square tile, locked 1:1 via heroAspect in the script.
+     The tile itself crops to fit via object-fit: cover (MediaTile.svelte
+     default); the Lightbox shows the full uncropped frame on tap.
      ────────────────────────────────────────────────────────────────── */
   .gallery.layout-one {
     grid-template-columns: 1fr;
-    max-height: var(--gallery-max-h);
-  }
-  .gallery.layout-one :global(.media-tile) {
-    max-height: var(--gallery-max-h);
   }
 
   /* ──────────────────────────────────────────────────────────────────
