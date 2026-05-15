@@ -425,8 +425,14 @@
     justify-content: center;
   }
   .lightbox-media {
-    max-width: 100vw;
-    max-height: 100vh;
+    /* Fill the slot, then object-fit: contain scales the media to
+       its largest fitting size while preserving aspect (letterbox
+       where needed). Without explicit width/height the browser
+       renders <video> at intrinsic size (e.g. 1280x720) inside a
+       much larger slot — the "video at a fraction of the screen"
+       bug. width/height: 100% is what unlocks contain. */
+    width: 100%;
+    height: 100%;
     object-fit: contain;
     user-select: none;
     -webkit-user-drag: none;
