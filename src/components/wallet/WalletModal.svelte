@@ -57,8 +57,14 @@
     flex-direction: column;
     overflow: hidden;
     background-color: var(--color-bg-secondary);
-    padding-top: 2rem;
-    padding-bottom: 0.75rem;
+    /* No vertical padding on the flex container: flex column + body
+       padding + a flex:1 overflow-auto child cause the child to
+       extend through the padding region, painting the body's
+       bg-secondary over the top and bottom of the scrollable content.
+       The vertical visual buffer lives inside the inner .wallet-scroll
+       instead. */
+    padding-top: 0;
+    padding-bottom: 0;
   }
   /* Floating logo (left) + close button (right) — both sit on top of
      content in the top corners of the modal. No opaque banner — the
@@ -111,12 +117,8 @@
   }
   .wallet-logo-btn:focus-visible,
   .wallet-close-btn:focus-visible {
-    outline: 2px solid rgba(236, 71, 0, 0.5);
+    outline: 2px solid var(--color-text-primary);
     outline-offset: 2px;
-  }
-  :global(html.dark) .wallet-logo-btn:focus-visible,
-  :global(html.dark) .wallet-close-btn:focus-visible {
-    outline: 2px solid rgba(236, 71, 0, 0.3);
   }
   /* Neutralise the panel's original full-width container styling. */
   .wallet-modal-body :global(.max-w-2xl) {
@@ -187,14 +189,14 @@
      --connect-step which has its own (smaller) auto-sized rules. */
   @media (min-width: 768px) {
     :global(dialog:has(.wallet-scroll.picker-view:not(.picker-view--connect-step))) {
-      height: 880px !important;
-      max-height: 90vh !important;
+      height: 960px !important;
+      max-height: 92vh !important;
     }
   }
   @media (min-width: 1024px) {
     :global(dialog:has(.wallet-scroll.picker-view:not(.picker-view--connect-step))) {
-      height: 920px !important;
-      max-height: min(960px, 90vh) !important;
+      height: 1000px !important;
+      max-height: min(1040px, 92vh) !important;
     }
   }
   /* External-wallet mode (WebLN, Bitcoin Connect): elastic height —

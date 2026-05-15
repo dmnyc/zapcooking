@@ -71,6 +71,7 @@
     recentSparkPayments,
     getBestEncryptionMethod,
     deleteBackupFromNostr as deleteSparkBackupFromNostr,
+    getSparkWalletId,
     getSparkWalletInfo,
     receiveOnchain,
     prepareOnchainSend,
@@ -160,7 +161,7 @@
   import { lightningService } from '$lib/lightningService';
   import { displayCurrency } from '$lib/currencyStore';
   import CurrencySelector from '../CurrencySelector.svelte';
-  import FiatBalance from '../FiatBalance.svelte';
+  import DenominatedBalance from '../DenominatedBalance.svelte';
 
   // Pull-to-refresh refs
 
@@ -178,25 +179,6 @@
   let showBackupReminder = false;
   let backupReminderDismissed = false;
   let showPaperBackupInline = false;
-
-  // Soft-exit "Explore Zap Cooking" banner above transaction history.
-  // Sticky-dismissed: once the user clicks it, don't show again on this device.
-  const EXPLORE_PROMPT_DISMISSED_KEY = 'zapcooking_explore_prompt_dismissed';
-  let explorePromptDismissed = false;
-  if (browser) {
-    explorePromptDismissed = localStorage.getItem(EXPLORE_PROMPT_DISMISSED_KEY) === '1';
-  }
-  function dismissExplorePrompt() {
-    explorePromptDismissed = true;
-    if (browser) {
-      try {
-        localStorage.setItem(EXPLORE_PROMPT_DISMISSED_KEY, '1');
-      } catch {
-        // ignore quota/permission errors — non-essential persistence
-      }
-    }
-    closeWalletModal();
-  }
 
   // Spark restore options
   let sparkRestoreMode: 'options' | 'mnemonic' | 'file' | 'nostr-select' = 'options';
@@ -226,6 +208,8 @@
   let expandedWalletId: number | null = null;
   let revealedMnemonic: string | null = null;
   let isBackingUp = false;
+  // Picker-home altcoin-curious prompt toggle
+  let showAltcoinReply = false;
 
   // NWC wallet info
   let nwcWalletInfo: { alias?: string; methods: string[]; relay: string; pubkey: string } | null =
@@ -433,23 +417,15 @@
   // future session can decrypt. Since we can't reliably tell which
   // remote signers do this, the conservative default is to allow new
   // backups only from nsec / NIP-07 users.
-  //
-  // Recompute on every $userPublickey / $ndk change instead of caching
-  // `encryptionSupported` — NDK mutates `.signer` in place after login,
-  // which doesn't fire the ndk store, so a cached flag would stay stale
-  // and hide the backup option from nsec users post-login.
-  $: canShowNostrBackup = (() => {
-    if (!browser) return false;
-    // Touch reactive deps so this recomputes on login / relay-mode switch.
-    void $userPublickey;
-    void $ndk?.signer;
-    const authManager = getAuthManager();
-    const nip46 = authManager?.getState()?.authMethod === 'nip46';
-    isNip46User = nip46;
-    const supported = hasEncryptionSupport();
-    encryptionSupported = supported;
-    return supported && !nip46;
-  })();
+  $: canShowNostrBackup = encryptionSupported && !isNip46User;
+
+  // Re-check encryption support when NDK signer changes (reactive)
+  $: {
+    const signer = $ndk?.signer;
+    if (browser) {
+      checkEncryptionSupport();
+    }
+  }
 
   // Filter pending transactions to only show those for the active wallet
   $: filteredPendingTransactions = $pendingTransactions.filter(
@@ -539,6 +515,14 @@
   let sendInput = ''; // Invoice or Lightning address
   let brantaVerifyTriggered = false;
   let rawQrText = ''; // Raw QR text for QR-based branta verification
+  let onchainAddressBrantaSecret = '';
+  let onchainAddressBrantaEncryptedDestination = '';
+  let generatedInvoiceBrantaSecret = '';
+  let generatedInvoiceBrantaEncryptedDestination = '';
+  let nwcLud16BrantaSecret = '';
+  let nwcLud16BrantaEncryptedDestination = '';
+  let sparkLightningAddressBrantaSecret = '';
+  let sparkLightningAddressBrantaEncryptedDestination = '';
   let sendAmount = 0; // Amount for Lightning address sends
   let sendComment = ''; // Optional message for Lightning address sends
   let receiveAmount = 0;
@@ -548,7 +532,6 @@
   let generatedPaymentHash = '';
   let invoicePollInterval: ReturnType<typeof setInterval> | null = null;
   let invoicePaid = false;
-  let invoiceExpanded = false; // Collapsed by default — raw lnbc string hidden until tapped
   let balanceBeforeInvoice: number | null = null; // For Spark balance-based detection
   let showLightningAddressQr: string | null = null; // Lightning address to show QR for
   let isSending = false;
@@ -900,6 +883,23 @@
     if (target?.closest('button')) return;
     e.preventDefault();
     handleBalanceCardClick(e);
+  }
+
+  // Tap the balance amount / fiat sub-line to cycle SATS ↔ preferred
+  // fiat. Mirrors the earlier header-pill behavior, kept here because
+  // the wallet modal centers the balance as the primary UI element.
+  // For the embedded card, the wrapper only carries these handlers
+  // when !isPanelScrolled — in compact mode the outer card already
+  // owns taps (scroll-to-top).
+  function handleBalanceAmountTap(e: MouseEvent) {
+    e.stopPropagation();
+    displayCurrency.cycleSatsFiat();
+  }
+  function handleBalanceAmountKeydown(e: KeyboardEvent) {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    e.preventDefault();
+    e.stopPropagation();
+    displayCurrency.cycleSatsFiat();
   }
 
   // Attach/detach the scroll listener whenever .wallet-scroll mounts or
@@ -1325,23 +1325,41 @@
   }
 
   // Register a payment address/invoice with Branta Guardrail
-  // zk: true enables zero-knowledge encryption (on-chain addresses), false for plaintext (Lightning)
-  async function registerWithBranta(paymentString: string, description?: string, zk?: boolean) {
+  async function registerWithBranta(
+    paymentString: string,
+    description?: string,
+    destinationType?: string
+  ): Promise<{ secret?: string; encryptedDestination?: string; verifyLink?: string }> {
     try {
-      await fetch('/api/branta/register', {
+      const res = await fetch('/api/branta/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           paymentString,
           description,
           ttl: 86400, // 24 hours
-          zk
+          destinationType
         })
       });
+      if (!res.ok) {
+        console.warn('[Branta] Registration returned non-OK status:', res.status);
+        return {};
+      }
+      const data = await res.json().catch(() => ({}));
+      if (data?.success !== true) {
+        console.warn('[Branta] Registration unsuccessful:', data?.error);
+        return {};
+      }
+      return {
+        secret: data.secret,
+        encryptedDestination: data.encryptedDestination,
+        verifyLink: data.verifyLink
+      };
     } catch (e) {
       // Silent fail - Branta registration is optional
       console.warn('[Branta] Registration failed:', e);
     }
+    return {};
   }
 
   // Reset receive modal state
@@ -1352,7 +1370,10 @@
     generatedInvoice = '';
     generatedPaymentHash = '';
     invoicePaid = false;
-    invoiceExpanded = false;
+    generatedInvoiceBrantaSecret = '';
+    generatedInvoiceBrantaEncryptedDestination = '';
+    onchainAddressBrantaSecret = '';
+    onchainAddressBrantaEncryptedDestination = '';
     receiveError = '';
     isGeneratingInvoice = false;
     balanceBeforeInvoice = null;
@@ -1371,9 +1392,14 @@
 
     try {
       const result = await receiveOnchain();
-      // Register with Branta for verification (plaintext for now, ZK in follow-up PR)
-      // Await to ensure badge can verify after registration completes
-      await registerWithBranta(result.address, 'zap.cooking Bitcoin deposit address', false);
+      // Register with Branta (ZK for on-chain addresses)
+      const brantaResult = await registerWithBranta(
+        result.address,
+        'zap.cooking Bitcoin deposit address',
+        'bitcoin_address'
+      );
+      onchainAddressBrantaSecret = brantaResult.secret ?? '';
+      onchainAddressBrantaEncryptedDestination = brantaResult.encryptedDestination ?? '';
       onchainAddress = result.address;
       // Also load any pending deposits
       await loadUnclaimedDeposits();
@@ -1688,13 +1714,14 @@
         throw new Error('Failed to generate invoice - no invoice returned');
       }
       generatedPaymentHash = result.paymentHash || '';
-      // Register with Branta for verification (zk: false for Lightning)
-      // Await to ensure badge can verify after registration completes
-      await registerWithBranta(
+      // Register with Branta (bolt11 type for Lightning invoices)
+      const brantaInvoiceResult = await registerWithBranta(
         result.invoice,
         `zap.cooking invoice for ${amountToUse} sats`,
-        false
+        'bolt11'
       );
+      generatedInvoiceBrantaSecret = brantaInvoiceResult.secret ?? '';
+      generatedInvoiceBrantaEncryptedDestination = brantaInvoiceResult.encryptedDestination ?? '';
       generatedInvoice = result.invoice;
 
       setTimeout(() => {
@@ -1885,14 +1912,14 @@
     errorMessage = '';
 
     try {
-      await createSparkWallet($userPublickey, BREEZ_API_KEY);
+      const newMnemonic = await createSparkWallet($userPublickey, BREEZ_API_KEY);
       successMessage = 'Spark wallet created!';
       showBackupReminder = true;
       showAddWallet = false;
       selectedWalletType = null;
 
-      // Register in wallet store
-      await connectWallet(4, 'spark');
+      // Register in wallet store with walletId so deletion can target the right relay backup
+      await connectWallet(4, getSparkWalletId(newMnemonic));
 
       // Fetch initial balance (will be 0 for new wallet)
       await refreshBalance();
@@ -1925,8 +1952,8 @@
   async function restoreSelectedSparkBackup(backup: SparkBackupEntry) {
     const mnemonic = await restoreSparkBackup($userPublickey, BREEZ_API_KEY, backup);
     if (mnemonic) {
-      // Register in wallet store
-      await connectWallet(4, 'spark');
+      // Register in wallet store with walletId so deletion can target the right relay backup
+      await connectWallet(4, getSparkWalletId(mnemonic));
 
       // Actively fetch balance and transaction history
       await refreshBalance();
@@ -2052,8 +2079,8 @@
     try {
       const success = await restoreFromMnemonic($userPublickey, mnemonic, BREEZ_API_KEY);
       if (success) {
-        // Register in wallet store
-        await connectWallet(4, 'spark');
+        // Register in wallet store with walletId so deletion can target the right relay backup
+        await connectWallet(4, getSparkWalletId(mnemonic));
 
         // Actively fetch balance and transaction history
         await refreshBalance();
@@ -2132,8 +2159,9 @@
 
       const success = await restoreFromBackup($userPublickey, backup, BREEZ_API_KEY, decryptFn);
       if (success) {
-        // Register in wallet store
-        await connectWallet(4, 'spark');
+        // Register in wallet store with walletId so deletion can target the right relay backup
+        const restoredMnemonic = await loadMnemonic($userPublickey);
+        await connectWallet(4, restoredMnemonic ? getSparkWalletId(restoredMnemonic) : 'spark');
 
         // Actively fetch balance and transaction history
         await refreshBalance();
@@ -2624,31 +2652,49 @@
          inset as the non-WebLN balance frame and the inner wallet-scroll
          content below, so widths line up consistently. -->
     {#if $weblnConnected}
-      <div class="mb-8 mx-4 p-6 rounded-2xl bg-input border border-input">
+      <div class="mt-8 mb-8 mx-4 p-6 rounded-2xl bg-input border border-input">
         <div class="flex items-start justify-between gap-3 mb-2 balance-row">
           <div class="flex-1 min-w-0">
-            <div class="text-4xl font-bold text-primary-color flex items-center gap-3 min-w-0">
-              <LightningIcon size={32} weight="fill" class="text-amber-500 flex-shrink-0" />
-              {#if weblnBalance === null && weblnBalanceLoading}
-                <span
-                  class="inline-block w-32 h-9 rounded-lg animate-pulse"
-                  style="background: var(--color-input-bg);"
-                ></span>
-              {:else if weblnBalance === null}
-                <span class="text-2xl text-caption">Balance not available</span>
-              {:else if $balanceVisible}
-                <span class:balance-refreshing={weblnBalanceLoading}
-                  >{formatBalance(weblnBalance)}</span
-                >
-              {:else}
-                <span class:balance-refreshing={weblnBalanceLoading}>***</span>
-              {/if}
-            </div>
-            {#if weblnBalance !== null}
-              <div class="ml-11">
-                <FiatBalance satoshis={weblnBalance} visible={$balanceVisible} />
+            <div
+              class="inline-block max-w-full rounded-lg -mx-3 px-3 -my-1.5 py-1.5 cursor-pointer select-none hover:bg-white/5 transition-colors"
+              role="button"
+              tabindex="0"
+              aria-label="Toggle SATS / fiat display"
+              on:click={handleBalanceAmountTap}
+              on:keydown={handleBalanceAmountKeydown}
+            >
+              <div class="text-4xl font-bold text-primary-color flex items-center gap-3 min-w-0">
+                <LightningIcon size={32} weight="fill" class="text-amber-500 flex-shrink-0" />
+                {#if weblnBalance === null && weblnBalanceLoading}
+                  <span
+                    class="inline-block w-32 h-9 rounded-lg animate-pulse"
+                    style="background: var(--color-input-bg);"
+                  ></span>
+                {:else if weblnBalance === null}
+                  <span class="text-2xl text-caption">Balance not available</span>
+                {:else}
+                  <span class:balance-refreshing={weblnBalanceLoading}>
+                    <DenominatedBalance
+                      sats={weblnBalance}
+                      visible={$balanceVisible}
+                      compact={false}
+                    />
+                  </span>
+                {/if}
               </div>
-            {/if}
+              <!-- Sub-line: sats counterpart when fiat is primary, invisible
+                   placeholder when SATS is primary (preserves card height
+                   across toggles). -->
+              <div class="ml-11 text-sm text-caption">
+                {#if $displayCurrency === 'SATS' || weblnBalance === null}
+                  &nbsp;
+                {:else if !$balanceVisible}
+                  ***
+                {:else}
+                  {formatBalance(weblnBalance)} sats
+                {/if}
+              </div>
+            </div>
           </div>
           <div class="flex items-center gap-3 flex-shrink-0">
             <CurrencySelector compact />
@@ -2685,36 +2731,52 @@
          while the connection / disconnect card below it scrolls.
          Mirrors the WebLN sticky-balance pattern above. -->
     {#if $bitcoinConnectEnabled && $wallets.length === 0 && !$weblnConnected}
-      <div class="mb-8 mx-4 p-6 rounded-2xl bg-input border border-input">
+      <div class="mt-8 mb-8 mx-4 p-6 rounded-2xl bg-input border border-input">
         <div class="flex items-start justify-between gap-3 mb-2 balance-row">
           <div class="flex-1 min-w-0">
             <div
-              class="text-4xl font-bold flex items-center gap-3 min-w-0"
-              style="color: var(--color-text-primary)"
+              class="inline-block max-w-full rounded-lg -mx-3 px-3 -my-1.5 py-1.5 cursor-pointer select-none hover:bg-white/5 transition-colors"
+              role="button"
+              tabindex="0"
+              aria-label="Toggle SATS / fiat display"
+              on:click={handleBalanceAmountTap}
+              on:keydown={handleBalanceAmountKeydown}
             >
-              <LightningIcon size={32} weight="fill" class="text-amber-500 flex-shrink-0" />
-              {#if $bitcoinConnectBalance === null && $bitcoinConnectBalanceLoading}
-                <span
-                  class="inline-block w-32 h-9 rounded-lg animate-pulse"
-                  style="background: var(--color-input-bg);"
-                ></span>
-              {:else if $bitcoinConnectBalance !== null}
-                {#if $balanceVisible}
-                  <span class:balance-refreshing={$bitcoinConnectBalanceLoading}
-                    >{formatBalance($bitcoinConnectBalance)}</span
-                  >
+              <div
+                class="text-4xl font-bold flex items-center gap-3 min-w-0"
+                style="color: var(--color-text-primary)"
+              >
+                <LightningIcon size={32} weight="fill" class="text-amber-500 flex-shrink-0" />
+                {#if $bitcoinConnectBalance === null && $bitcoinConnectBalanceLoading}
+                  <span
+                    class="inline-block w-32 h-9 rounded-lg animate-pulse"
+                    style="background: var(--color-input-bg);"
+                  ></span>
+                {:else if $bitcoinConnectBalance !== null}
+                  <span class:balance-refreshing={$bitcoinConnectBalanceLoading}>
+                    <DenominatedBalance
+                      sats={$bitcoinConnectBalance}
+                      visible={$balanceVisible}
+                      compact={false}
+                    />
+                  </span>
                 {:else}
-                  <span class:balance-refreshing={$bitcoinConnectBalanceLoading}>***</span>
+                  <span class="text-2xl text-caption">Balance unavailable</span>
                 {/if}
-              {:else}
-                <span class="text-2xl text-caption">Balance unavailable</span>
-              {/if}
-            </div>
-            {#if $bitcoinConnectBalance !== null}
-              <div class="ml-11">
-                <FiatBalance satoshis={$bitcoinConnectBalance} visible={$balanceVisible} />
               </div>
-            {/if}
+              <!-- Sub-line: sats counterpart when fiat is primary, invisible
+                   placeholder when SATS is primary (preserves card height
+                   across toggles). -->
+              <div class="ml-11 text-sm text-caption">
+                {#if $displayCurrency === 'SATS' || $bitcoinConnectBalance === null}
+                  &nbsp;
+                {:else if !$balanceVisible}
+                  ***
+                {:else}
+                  {formatBalance($bitcoinConnectBalance)} sats
+                {/if}
+              </div>
+            </div>
           </div>
           <div class="flex items-center gap-3 flex-shrink-0">
             <CurrencySelector compact />
@@ -2767,41 +2829,65 @@
           >
             <div class="flex-1 min-w-0">
               <div
-                class="balance-amount font-bold text-primary-color flex items-center gap-3 min-w-0"
-                class:text-4xl={!isPanelScrolled}
-                class:text-2xl={isPanelScrolled}
+                class="inline-block max-w-full rounded-lg transition-colors {!isPanelScrolled
+                  ? '-mx-3 px-3 -my-1.5 py-1.5 cursor-pointer select-none hover:bg-white/5'
+                  : ''}"
+                role={!isPanelScrolled ? 'button' : undefined}
+                tabindex={!isPanelScrolled ? 0 : -1}
+                aria-label={!isPanelScrolled ? 'Toggle SATS / fiat display' : undefined}
+                on:click={!isPanelScrolled ? handleBalanceAmountTap : undefined}
+                on:keydown={!isPanelScrolled ? handleBalanceAmountKeydown : undefined}
               >
-                <LightningIcon
-                  size={isPanelScrolled ? 22 : 32}
-                  weight="fill"
-                  class="text-amber-500 flex-shrink-0"
-                />
-                {#if $walletBalance === null}
-                  <span
-                    class="inline-block w-32 h-9 rounded-lg animate-pulse"
-                    style="background: var(--color-input-bg);"
-                  ></span>
-                {:else if $balanceVisible}
-                  <span class:balance-refreshing={$walletLoading}
-                    >{formatBalance($walletBalance)}</span
-                  >
-                {:else}
-                  <span class:balance-refreshing={$walletLoading}>***</span>
-                {/if}
-              </div>
-              {#if !isPanelScrolled}
-                <div class="ml-11">
-                  <FiatBalance satoshis={$walletBalance} visible={$balanceVisible} />
+                <div
+                  class="balance-amount font-bold text-primary-color flex items-center gap-3 min-w-0"
+                  class:text-4xl={!isPanelScrolled}
+                  class:text-2xl={isPanelScrolled}
+                >
+                  <LightningIcon
+                    size={isPanelScrolled ? 22 : 32}
+                    weight="fill"
+                    class="text-amber-500 flex-shrink-0"
+                  />
+                  {#if $walletBalance === null}
+                    <span
+                      class="inline-block w-32 h-9 rounded-lg animate-pulse"
+                      style="background: var(--color-input-bg);"
+                    ></span>
+                  {:else}
+                    <span class:balance-refreshing={$walletLoading}>
+                      <DenominatedBalance
+                        sats={$walletBalance}
+                        visible={$balanceVisible}
+                        compact={false}
+                      />
+                    </span>
+                  {/if}
                 </div>
-                <!-- Syncing indicator — shows whenever Spark is syncing,
-                     regardless of balance, so it's the single source of
-                     truth for the syncing state in the wallet UI. -->
-                {#if $activeWallet?.kind === 4 && $sparkSyncing}
-                  <div class="text-xs text-caption flex items-center gap-1 mt-1 ml-11">
-                    <ArrowClockwiseIcon size={12} weight="bold" class="animate-spin" />
-                    Syncing wallet...
+                {#if !isPanelScrolled}
+                  <!-- Sub-line: sats counterpart when fiat is primary,
+                       invisible placeholder when SATS is primary (preserves
+                       card height across toggles). -->
+                  <div class="ml-11 text-sm text-caption">
+                    {#if $displayCurrency === 'SATS' || $walletBalance === null}
+                      &nbsp;
+                    {:else if !$balanceVisible}
+                      ***
+                    {:else}
+                      {formatBalance($walletBalance)} sats
+                    {/if}
                   </div>
                 {/if}
+              </div>
+              <!-- Syncing indicator — shows whenever Spark is syncing,
+                   regardless of balance, so it's the single source of
+                   truth for the syncing state in the wallet UI. Kept
+                   outside the tap-to-cycle button so tapping it doesn't
+                   change currency. -->
+              {#if !isPanelScrolled && $activeWallet?.kind === 4 && $sparkSyncing}
+                <div class="text-xs text-caption flex items-center gap-1 mt-1 ml-11">
+                  <ArrowClockwiseIcon size={12} weight="bold" class="animate-spin" />
+                  Syncing wallet...
+                </div>
               {/if}
             </div>
             <div class="flex items-center gap-3 flex-shrink-0">
@@ -2880,6 +2966,90 @@
               href="#pending-deposits"
               class="ml-auto text-xs font-medium text-amber-500 hover:text-amber-400">View</a
             >
+          </div>
+        {/if}
+
+        <!-- Backup Reminder Banner (Spark wallet only, after creation) -->
+        {#if showBackupReminder && !backupReminderDismissed && $activeWallet?.kind === 4}
+          <div
+            class="mb-4 p-4 rounded-2xl"
+            style="background-color: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.3);"
+          >
+            <div class="flex items-start gap-3">
+              <ShieldCheckIcon size={22} class="text-amber-500 flex-shrink-0 mt-0.5" />
+              <div class="flex-1">
+                <p class="font-medium text-primary-color mb-1">Protect your wallet</p>
+                <p class="text-sm text-caption mb-3">
+                  Choose a backup method to secure your funds.
+                </p>
+
+                {#if showPaperBackupInline && revealedMnemonic}
+                  <div class="mb-3">
+                    <div
+                      class="relative p-4 rounded-lg mb-3 font-mono text-sm"
+                      style="background-color: var(--color-input-bg); color: var(--color-text-primary);"
+                    >
+                      {#if mnemonicVisible}
+                        <span class="select-all">{revealedMnemonic}</span>
+                      {:else}
+                        <span class="blur-sm select-none" aria-hidden="true"
+                          >{revealedMnemonic}</span
+                        >
+                      {/if}
+                      <button
+                        class="absolute top-3 right-3 p-1 rounded-lg opacity-70 hover:opacity-100 transition-opacity"
+                        style="color: var(--color-text-primary);"
+                        on:click={() => (mnemonicVisible = !mnemonicVisible)}
+                        title={mnemonicVisible ? 'Hide' : 'Reveal'}
+                      >
+                        {#if mnemonicVisible}
+                          <EyeSlashIcon size={18} />
+                        {:else}
+                          <EyeIcon size={18} />
+                        {/if}
+                      </button>
+                    </div>
+                    <button
+                      class="w-full py-2 px-4 rounded-xl text-sm font-medium bg-amber-500 hover:bg-amber-600 text-white transition-colors"
+                      on:click={handlePaperBackupDone}
+                    >
+                      I've written it down
+                    </button>
+                  </div>
+                {:else}
+                  <div class="flex flex-col gap-2">
+                    <button
+                      class="flex items-center gap-3 w-full py-2.5 px-4 rounded-xl text-sm font-medium text-left transition-colors hover:bg-white/5"
+                      style="border: 1px solid var(--color-input-border);"
+                      on:click={handleShowPaperBackup}
+                    >
+                      <PencilSimpleIcon size={18} class="text-amber-500 flex-shrink-0" />
+                      <span class="text-primary-color">Write down recovery phrase</span>
+                    </button>
+                    {#if canShowNostrBackup}
+                      <button
+                        class="flex items-center gap-3 w-full py-2.5 px-4 rounded-xl text-sm font-medium text-left transition-colors hover:bg-white/5 disabled:opacity-40"
+                        style="border: 1px solid var(--color-input-border);"
+                        on:click={handleBackupToNostr}
+                        disabled={isBackingUp}
+                      >
+                        <CloudArrowUpIcon size={18} class="text-amber-500 flex-shrink-0" />
+                        <span class="text-primary-color">
+                          {isBackingUp ? 'Backing up...' : 'Backup to Nostr'}
+                        </span>
+                      </button>
+                    {/if}
+                  </div>
+                {/if}
+
+                <button
+                  class="mt-3 text-xs text-caption hover:text-primary-color transition-colors cursor-pointer"
+                  on:click={dismissBackupReminder}
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
           </div>
         {/if}
 
@@ -3172,9 +3342,9 @@
                       <div class="text-xs text-caption mb-2 uppercase tracking-wide">
                         Wallet Details
                       </div>
-                      <div class="mb-4">
+                      <div class="grid grid-cols-2 gap-2 mb-4">
                         <button
-                          class="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer hover:bg-white/5 dark:hover:bg-white/5"
+                          class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer hover:bg-white/5 dark:hover:bg-white/5"
                           style="color: var(--color-text-secondary); border: 1px solid var(--color-input-border);"
                           on:click={handleViewSparkInfo}
                           disabled={isLoadingSparkInfo}
@@ -3190,7 +3360,7 @@
                       <div class="text-xs text-caption mb-2 uppercase tracking-wide">
                         Backup & Recovery
                       </div>
-                      <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <div class="grid grid-cols-2 gap-2">
                         <button
                           class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer hover:bg-white/5 dark:hover:bg-white/5"
                           style="color: var(--color-text-secondary); border: 1px solid var(--color-input-border);"
@@ -3229,12 +3399,8 @@
                           <LifebuoyIcon size={16} />
                           Recovery Help
                         </button>
-                      </div>
-
-                      <!-- Destructive action separated to avoid mis-taps -->
-                      <div class="mt-3 pt-3 border-t" style="border-color: var(--color-input-border);">
                         <button
-                          class="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer text-red-500 hover:bg-red-500/10"
+                          class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer text-red-500 hover:bg-red-500/10"
                           style="border: 1px solid var(--color-input-border);"
                           on:click={() =>
                             (walletToDelete = {
@@ -3477,7 +3643,7 @@
                       <div class="text-xs text-caption mb-2 uppercase tracking-wide">
                         Wallet Details
                       </div>
-                      <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-4">
+                      <div class="grid grid-cols-2 gap-2 mb-4">
                         <button
                           class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer hover:bg-white/5 dark:hover:bg-white/5"
                           style="color: var(--color-text-secondary); border: 1px solid var(--color-input-border);"
@@ -3503,7 +3669,7 @@
                       <div class="text-xs text-caption mb-2 uppercase tracking-wide">
                         Backup & Recovery
                       </div>
-                      <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <div class="grid grid-cols-2 gap-2">
                         {#if canShowNostrBackup}
                           <button
                             class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer hover:bg-white/5"
@@ -3536,12 +3702,8 @@
                           <CloudCheckIcon size={16} />
                           <span class="truncate">Check Backups</span>
                         </button>
-                      </div>
-
-                      <!-- Destructive action separated to avoid mis-taps -->
-                      <div class="mt-3 pt-3 border-t" style="border-color: var(--color-input-border);">
                         <button
-                          class="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer text-red-500 hover:bg-red-500/10"
+                          class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer text-red-500 hover:bg-red-500/10"
                           style="background-color: transparent; border: 1px solid var(--color-input-border);"
                           on:click={() =>
                             (walletToDelete = {
@@ -3696,116 +3858,6 @@
             </div>
           {/if}
         </div>
-
-        <!-- Backup Reminder Banner (Spark wallet only, after creation) -->
-        {#if showBackupReminder && !backupReminderDismissed && $activeWallet?.kind === 4}
-          <div
-            class="mb-4 p-3 rounded-xl"
-            style="background-color: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.3);"
-          >
-            <div class="flex items-start gap-2.5">
-              <ShieldCheckIcon size={18} class="text-amber-500 flex-shrink-0 mt-0.5" />
-              <div class="flex-1">
-                <p class="text-sm font-medium text-primary-color mb-0.5">Protect your wallet</p>
-                <p class="text-xs text-caption mb-2.5">
-                  Choose a backup method to secure your funds.
-                </p>
-
-                {#if showPaperBackupInline && revealedMnemonic}
-                  <div class="mb-3">
-                    <div
-                      class="relative p-4 rounded-lg mb-3 font-mono text-sm"
-                      style="background-color: var(--color-input-bg); color: var(--color-text-primary);"
-                    >
-                      {#if mnemonicVisible}
-                        <span class="select-all">{revealedMnemonic}</span>
-                      {:else}
-                        <span class="blur-sm select-none" aria-hidden="true"
-                          >{revealedMnemonic}</span
-                        >
-                      {/if}
-                      <button
-                        class="absolute top-3 right-3 p-1 rounded-lg opacity-70 hover:opacity-100 transition-opacity"
-                        style="color: var(--color-text-primary);"
-                        on:click={() => (mnemonicVisible = !mnemonicVisible)}
-                        title={mnemonicVisible ? 'Hide' : 'Reveal'}
-                      >
-                        {#if mnemonicVisible}
-                          <EyeSlashIcon size={18} />
-                        {:else}
-                          <EyeIcon size={18} />
-                        {/if}
-                      </button>
-                    </div>
-                    <button
-                      class="w-full py-2 px-4 rounded-xl text-sm font-medium bg-amber-500 hover:bg-amber-600 text-white transition-colors"
-                      on:click={handlePaperBackupDone}
-                    >
-                      I've written it down
-                    </button>
-                  </div>
-                {:else}
-                  <div class="flex flex-col gap-1.5">
-                    <button
-                      class="flex items-center gap-2 w-full py-2 px-3 rounded-lg text-sm font-medium text-left transition-colors hover:bg-white/5"
-                      style="border: 1px solid var(--color-input-border);"
-                      on:click={handleShowPaperBackup}
-                    >
-                      <PencilSimpleIcon size={15} class="text-amber-500 flex-shrink-0" />
-                      <span class="text-primary-color">Write down recovery phrase</span>
-                    </button>
-                    {#if canShowNostrBackup}
-                      <button
-                        class="flex items-center gap-2 w-full py-2 px-3 rounded-lg text-sm font-medium text-left transition-colors hover:bg-white/5 disabled:opacity-40"
-                        style="border: 1px solid var(--color-input-border);"
-                        on:click={handleBackupToNostr}
-                        disabled={isBackingUp}
-                      >
-                        <CloudArrowUpIcon size={15} class="text-amber-500 flex-shrink-0" />
-                        <span class="text-primary-color">
-                          {isBackingUp ? 'Backing up...' : 'Backup to Nostr'}
-                        </span>
-                      </button>
-                    {/if}
-                  </div>
-                {/if}
-
-                <button
-                  class="mt-3 text-xs text-caption hover:text-primary-color transition-colors cursor-pointer"
-                  on:click={dismissBackupReminder}
-                >
-                  Dismiss
-                </button>
-              </div>
-            </div>
-          </div>
-        {/if}
-
-        <!-- Soft exit back into the rest of the app, sitting above the
-             transaction history so the wallet doesn't feel like a dead end.
-             Sticky-dismissed once tapped (per device) so it doesn't keep
-             pestering returning users. -->
-        {#if $walletConnected && $activeWallet && !explorePromptDismissed}
-          <div
-            class="mb-6 rounded-2xl text-center"
-            style="padding:1rem 1.25rem;background:rgba(245,158,11,0.05);border:1px solid rgba(245,158,11,0.2);"
-          >
-            <p
-              class="text-sm leading-relaxed"
-              style="color:var(--color-text-secondary);margin:0 0 0.75rem;"
-            >
-              Looking for great recipes?<br />Want to publish your own?
-            </p>
-            <button
-              type="button"
-              class="inline-flex items-center gap-1 text-sm font-semibold rounded-full transition-all spark-glow"
-              style="padding:0.5rem 1.5rem;background:rgb(245,158,11);border:1px solid rgba(245,158,11,0.6);color:#fff;cursor:pointer;"
-              on:click={dismissExplorePrompt}
-            >
-              Explore Zap Cooking →
-            </button>
-          </div>
-        {/if}
 
         <!-- Transaction History -->
         {#if $walletConnected && $activeWallet}
@@ -4112,6 +4164,7 @@
               <span class="font-semibold text-orange-500">#Nostrichefs</span>
               keep publishing great recipes, tips, and stories.
             </p>
+            <p>If you don't have a wallet yet, you can create your first one right now.</p>
           </div>
         </div>
       {:else}
@@ -4284,19 +4337,36 @@
               </button>
             {/if}
           {/if}
-        </div>
-      {#if !selectedWalletType}
-        <div class="mt-6 text-center">
-          <button
-            type="button"
-            class="text-sm text-caption hover:text-primary-color transition-colors cursor-pointer underline-offset-2 hover:underline"
-            on:click={dismissPicker}
-          >
-            I'll do this later.
-          </button>
-        </div>
-      {/if}
 
+          <!-- Picker-home prompt for users curious about non-bitcoin chains. -->
+          <div class="mt-4 text-center">
+            <button
+              type="button"
+              class="text-xs text-caption hover:text-orange-500 transition-colors cursor-pointer underline decoration-dotted underline-offset-4 bg-transparent border-0 p-0"
+              on:click={() => (showAltcoinReply = !showAltcoinReply)}
+            >
+              Looking for Ethereum, Solana, XRP, Cardano or other coins?
+            </button>
+            {#if showAltcoinReply}
+              <p
+                class="mt-3 text-sm font-medium"
+                style="color: var(--color-text-primary)"
+              >
+                Just kidding, Zap Cooking is bitcoin only!
+              </p>
+              <!-- svelte-ignore a11y-media-has-caption -->
+              <video
+                class="mt-3 mx-auto rounded-lg w-full max-w-sm"
+                src="https://video.nostr.build/ab7659486ab83bf66fe446251687ede7a3b5779cc16afbadbdb21be60bc596bb.mp4"
+                autoplay
+                loop
+                muted
+                playsinline
+                controls
+              ></video>
+            {/if}
+          </div>
+        </div>
       {:else if selectedWalletType === 3}
         <!-- NWC connection -->
         <div>
@@ -4506,6 +4576,34 @@
         </div>
       {/if}
 
+      <!-- Welcome card / soft exit for first-time users who land here
+           with no wallet yet. Frames the wallet as optional and gives a
+           clear "explore the rest of the app" CTA. Hidden when a
+           wallet type has been selected (sub-screens have their own
+           back-bar) or when the user is just adding another wallet. -->
+      {#if !hasAnyWallet && !selectedWalletType}
+        <div
+          class="mt-6 p-3 rounded-2xl text-center"
+          style="background-color: rgba(245, 158, 11, 0.05); border: 1px solid rgba(245, 158, 11, 0.2);"
+        >
+          <p class="text-sm text-caption mb-2 leading-snug">
+            Not ready for a wallet? You can explore Zap Cooking and come back anytime.
+          </p>
+          <button
+            type="button"
+            class="explore-prompt-cta inline-flex items-center gap-1 px-5 py-2 rounded-full text-sm font-semibold cursor-pointer transition-colors"
+            style="background-color: var(--color-input-bg); border: 1px solid var(--color-input-border); color: var(--color-text-primary);"
+            on:click={dismissPicker}
+          >
+            Explore Zap Cooking →
+          </button>
+        </div>
+      {/if}
+      <!-- Real DOM spacer so the picker can scroll flush to the bottom.
+           A scoped CSS ::after on .wallet-scroll.picker-view got pruned
+           by Svelte's CSS scoping; a real element is reliably included
+           in scrollHeight. -->
+      <div aria-hidden="true" style="height: 3rem; flex-shrink: 0;"></div>
     </div>
   {/if}
 
@@ -4817,7 +4915,18 @@
                 if (deleteRelayBackups && $userPublickey) {
                   try {
                     if (walletToDelete.kind === 4) {
-                      await deleteSparkBackupFromNostr($userPublickey);
+                      // Legacy backups (d-tag 'spark-wallet-backup' with no
+                      // walletId suffix) predate the per-wallet d-tag scheme
+                      // and can't be targeted by our delete flow. Surface a
+                      // toast instead of silently no-op'ing.
+                      const backups = await listSparkBackups($userPublickey);
+                      if (backups.some((b) => b.isLegacy)) {
+                        errorMessage = "Legacy wallet backups can't be deleted by Zap Cooking.";
+                      } else {
+                        const sparkWalletId =
+                          walletToDelete.data !== 'spark' ? walletToDelete.data : undefined;
+                        await deleteSparkBackupFromNostr($userPublickey, sparkWalletId);
+                      }
                     } else if (walletToDelete.kind === 3) {
                       await deleteNwcBackupFromNostr($userPublickey);
                     }
@@ -5490,7 +5599,7 @@
             <div class="text-sm text-caption mb-2">Send only Bitcoin to this address:</div>
 
             <!-- QR Code -->
-            <div class="qr-wrapper self-center p-4 rounded-xl bg-white" style="width: 100%; max-width: 260px; margin: 0 auto;">
+            <div class="qr-wrapper self-center p-4 rounded-xl bg-white" style="width: 100%;">
               <svg
                 class="w-full"
                 use:qr={{
@@ -5502,7 +5611,11 @@
 
             <!-- Branta Verification Badge -->
             <div class="flex justify-center">
-              <BrantaBadge paymentString={onchainAddress} />
+              <BrantaBadge
+                paymentString={onchainAddress}
+                secret={onchainAddressBrantaSecret}
+                encryptedDestination={onchainAddressBrantaEncryptedDestination}
+              />
             </div>
 
             <!-- Address (segmented for easier verification) -->
@@ -5595,6 +5708,8 @@
               class="w-full py-3 px-4 rounded-xl border border-input hover:bg-input text-primary-color font-medium transition-colors"
               on:click={() => {
                 onchainAddress = null;
+                onchainAddressBrantaSecret = '';
+                onchainAddressBrantaEncryptedDestination = '';
                 receiveMode = 'lightning';
               }}
             >
@@ -5672,7 +5787,13 @@
                       on:click={async () => {
                         const wasHidden = showLightningAddressQr !== nwcLud16;
                         if (wasHidden && nwcLud16) {
-                          await registerWithBranta(nwcLud16, 'NWC Lightning Address', false);
+                          const r = await registerWithBranta(
+                            nwcLud16,
+                            'NWC Lightning Address',
+                            'ln_address'
+                          );
+                          nwcLud16BrantaSecret = r.secret ?? '';
+                          nwcLud16BrantaEncryptedDestination = r.encryptedDestination ?? '';
                           showLightningAddressQr = nwcLud16;
                         } else {
                           showLightningAddressQr = null;
@@ -5720,7 +5841,11 @@
                   </div>
                   <!-- Branta Verification Badge -->
                   <div class="flex justify-center mt-2">
-                    <BrantaBadge paymentString={nwcLud16} />
+                    <BrantaBadge
+                      paymentString={nwcLud16}
+                      secret={nwcLud16BrantaSecret}
+                      encryptedDestination={nwcLud16BrantaEncryptedDestination}
+                    />
                   </div>
                 {/if}
               </div>
@@ -5759,11 +5884,14 @@
                       on:click={async () => {
                         const wasHidden = showLightningAddressQr !== $sparkLightningAddressStore;
                         if (wasHidden && $sparkLightningAddressStore) {
-                          await registerWithBranta(
+                          const r = await registerWithBranta(
                             $sparkLightningAddressStore,
                             'Spark Lightning Address',
-                            false
+                            'ln_address'
                           );
+                          sparkLightningAddressBrantaSecret = r.secret ?? '';
+                          sparkLightningAddressBrantaEncryptedDestination =
+                            r.encryptedDestination ?? '';
                           showLightningAddressQr = $sparkLightningAddressStore;
                         } else {
                           showLightningAddressQr = null;
@@ -5811,7 +5939,11 @@
                   </div>
                   <!-- Branta Verification Badge -->
                   <div class="flex justify-center mt-2">
-                    <BrantaBadge paymentString={$sparkLightningAddressStore} />
+                    <BrantaBadge
+                      paymentString={$sparkLightningAddressStore}
+                      secret={sparkLightningAddressBrantaSecret}
+                      encryptedDestination={sparkLightningAddressBrantaEncryptedDestination}
+                    />
                   </div>
                 {/if}
               </div>
@@ -5841,9 +5973,13 @@
               </div>
             </div>
           {:else}
+            <div class="text-lg font-medium text-primary-color">
+              Invoice for {formatBalance(receiveAmount)} sats
+            </div>
+
             <!-- QR Code -->
             {#if generatedInvoice && generatedInvoice.length > 0}
-              <div class="qr-wrapper self-center p-4 rounded-xl bg-white" style="width: 100%; max-width: 240px; margin: 0 auto;">
+              <div class="qr-wrapper self-center p-4 rounded-xl bg-white" style="width: 100%;">
                 <svg
                   class="w-full"
                   use:qr={{
@@ -5852,35 +5988,22 @@
                   }}
                 />
               </div>
-              <div class="text-lg font-medium text-primary-color text-center mt-2">
-                Invoice for {formatBalance(receiveAmount)} sats
-              </div>
               <!-- Branta Verification Badge -->
-              <div class="flex justify-center">
-                <BrantaBadge paymentString={generatedInvoice} />
+              <div class="flex justify-center mt-2">
+                <BrantaBadge
+                  paymentString={generatedInvoice}
+                  secret={generatedInvoiceBrantaSecret}
+                  encryptedDestination={generatedInvoiceBrantaEncryptedDestination}
+                />
               </div>
             {/if}
 
-            <button
-              type="button"
-              class="w-full p-3 rounded-lg bg-input flex items-center justify-between gap-2 transition-colors hover:opacity-80"
-              on:click={() => (invoiceExpanded = !invoiceExpanded)}
-              aria-expanded={invoiceExpanded}
-            >
-              <span class="text-xs text-caption">Invoice</span>
-              <CaretDownIcon
-                size={14}
-                class="text-caption flex-shrink-0 transition-transform duration-200"
-                style="transform: rotate({invoiceExpanded ? '180deg' : '0deg'})"
-              />
-            </button>
-            {#if invoiceExpanded}
-              <div class="p-3 rounded-lg bg-input -mt-1 rounded-t-none border-t border-input">
-                <div class="font-mono text-xs text-primary-color break-all max-h-24 overflow-y-auto">
-                  {generatedInvoice}
-                </div>
+            <div class="p-3 rounded-lg bg-input">
+              <div class="text-xs text-caption mb-2">Invoice</div>
+              <div class="font-mono text-xs text-primary-color break-all max-h-24 overflow-y-auto">
+                {generatedInvoice}
               </div>
-            {/if}
+            </div>
 
             <div class="flex gap-2">
               <button
@@ -6079,8 +6202,11 @@
     background-color: var(--color-bg-secondary);
     /* 1rem horizontal padding gives a visible bg-secondary "border"
        around the balance card on both sides, matching the inner
-       scroll container's padding so balance and history align. */
-    padding: 0 1rem;
+       scroll container's padding so balance and history align. The
+       2rem top padding replaces the buffer we used to get from
+       wallet-modal-body's padding-top (now zeroed to avoid the
+       flex + padding overlap bug on the scroll child below). */
+    padding: 2rem 1rem 0;
     transition: padding-bottom 0.18s ease-out;
     /* Keep the frame above the scrolling content so its solid bg masks
        transactions briefly visible at the card's rounded corners. */
@@ -6106,7 +6232,10 @@
   .wallet-scroll.picker-view,
   .wallet-scroll.wallet-info-view,
   .wallet-scroll.remove-wallet-view {
-    padding-top: 0.5rem;
+    /* Top buffer lives here (not on wallet-modal-body) because the
+       flex container's padding bleeds bg-secondary over the top of
+       the scrollable content. */
+    padding-top: 2rem;
     padding-bottom: 1.5rem;
   }
   @media (min-width: 768px) {
@@ -6117,7 +6246,7 @@
     .wallet-scroll.remove-wallet-view {
       padding-left: 1.5rem;
       padding-right: 1.5rem;
-      padding-top: 0.75rem;
+      padding-top: 2rem;
       padding-bottom: 2rem;
     }
   }
@@ -6230,6 +6359,14 @@
     }
   }
 
+  /* Hover state for the "Explore Zap Cooking" exit card CTA. Layout,
+     colors, and base chrome live as inline styles on the markup to
+     stay above the wallet-modal-body :global() rules that strip
+     button backgrounds otherwise. */
+  .explore-prompt-cta:hover {
+    background-color: rgba(255, 255, 255, 0.05) !important;
+    border-color: rgba(245, 158, 11, 0.5) !important;
+  }
 
   /* :global() so the rule reaches buttons rendered by child components
      (e.g. <Button>) too — Svelte's scoped CSS hash isn't applied to

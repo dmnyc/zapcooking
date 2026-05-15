@@ -35,6 +35,7 @@
   } from '$lib/wallet/bitcoinConnect';
   import LightningIcon from 'phosphor-svelte/lib/Lightning';
   import ArrowClockwiseIcon from 'phosphor-svelte/lib/ArrowClockwise';
+  import ArrowsLeftRightIcon from 'phosphor-svelte/lib/ArrowsLeftRight';
   import SignOutIcon from 'phosphor-svelte/lib/SignOut';
   import CaretDownIcon from 'phosphor-svelte/lib/CaretDown';
   import CaretRightIcon from 'phosphor-svelte/lib/CaretRight';
@@ -44,6 +45,20 @@
   import SparkLogo from './icons/SparkLogo.svelte';
   import NwcLogo from './icons/NwcLogo.svelte';
   import BitcoinConnectLogo from './icons/BitcoinConnectLogo.svelte';
+  import DenominatedBalance from './DenominatedBalance.svelte';
+  import { displayCurrency, getPreferredFiat } from '$lib/currencyStore';
+
+  function onPillKeydown(e: KeyboardEvent) {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      toggleDropdown();
+    }
+  }
+
+  // Target of the SATS ↔ fiat swap, used to label the dropdown item.
+  // Recomputed reactively when the active currency changes so the
+  // label always describes what the next click will switch to.
+  $: cycleTarget = $displayCurrency === 'SATS' ? getPreferredFiat() : 'SATS';
 
   let dropdownActive = false;
   let showRemoveBitcoinConnectModal = false;
@@ -71,17 +86,6 @@
   // Fetch WebLN balance when connected
   $: if ($weblnConnected && weblnBalance === null && !weblnBalanceLoading) {
     refreshWeblnBalance();
-  }
-
-  function formatBalance(balance: number | null): string {
-    if (balance === null) return '---';
-    if (balance >= 1000000) {
-      return `${(balance / 1000000).toFixed(2)}M`;
-    }
-    if (balance >= 1000) {
-      return `${(balance / 1000).toFixed(1)}k`;
-    }
-    return balance.toLocaleString();
   }
 
   async function handleRefresh() {
@@ -127,29 +131,32 @@
 {#if $weblnConnected}
   <!-- WebLN Wallet Widget -->
   <div class="relative" use:clickOutside on:click_outside={() => (dropdownActive = false)}>
-    <!-- Balance button -->
-    <button
-      class="flex items-center gap-1.5 px-3 py-1.5 rounded-full transition-colors cursor-pointer text-sm font-medium"
+    <!-- Balance pill — entire pill toggles the dropdown. Currency
+         switching lives inside the dropdown so an accidental tap on
+         the balance text doesn't change the displayed currency. -->
+    <div
+      class="balance-pill flex items-center gap-1.5 px-3 py-1.5 rounded-full transition-colors cursor-pointer text-sm font-medium"
       style="background-color: var(--color-input-bg); color: var(--color-text-primary); border: 1px solid var(--color-input-border);"
+      role="button"
+      tabindex="0"
       on:click={toggleDropdown}
+      on:keydown={onPillKeydown}
     >
       <div
         class="w-4 h-4 rounded-full bg-gradient-to-br from-orange-500 to-amber-500 flex items-center justify-center flex-shrink-0"
       >
         <LightningIcon size={10} weight="fill" class="text-white" />
       </div>
-      {#if weblnBalanceLoading}
-        <span class="animate-pulse min-w-[3.5rem] text-right">...</span>
-      {:else if weblnBalance === null}
-        <span class="min-w-[3.5rem] text-right">---</span>
-      {:else if $balanceVisible}
-        <span class="min-w-[3.5rem] text-right">{formatBalance(weblnBalance)}</span>
-      {:else}
-        <span class="min-w-[3.5rem] text-right">***</span>
-      {/if}
+      <span class="balance-text min-w-[3.5rem] text-right">
+        <DenominatedBalance
+          sats={weblnBalance}
+          visible={$balanceVisible}
+          loading={weblnBalanceLoading}
+        />
+      </span>
 
       <CaretDownIcon size={12} class="text-caption ml-0.5" />
-    </button>
+    </div>
 
     <!-- Dropdown menu -->
     {#if dropdownActive}
@@ -178,6 +185,14 @@
           </button>
 
           <!-- Actions -->
+          <button
+            class="flex items-center gap-2 text-sm hover:text-primary transition-colors cursor-pointer"
+            on:click={() => displayCurrency.cycleSatsFiat()}
+          >
+            <ArrowsLeftRightIcon size={18} weight="bold" />
+            Switch to {cycleTarget}
+          </button>
+
           <button
             class="flex items-center gap-2 text-sm hover:text-primary transition-colors cursor-pointer"
             on:click={toggleBalanceVisibility}
@@ -222,29 +237,30 @@
 {:else if $bitcoinConnectEnabled && $bitcoinConnectWalletInfo.connected}
   <!-- Bitcoin Connect Wallet Widget -->
   <div class="relative" use:clickOutside on:click_outside={() => (dropdownActive = false)}>
-    <!-- Balance button -->
-    <button
-      class="flex items-center gap-1.5 px-3 py-1.5 rounded-full transition-colors cursor-pointer text-sm font-medium"
+    <!-- Balance pill (see WebLN variant above for click rationale) -->
+    <div
+      class="balance-pill flex items-center gap-1.5 px-3 py-1.5 rounded-full transition-colors cursor-pointer text-sm font-medium"
       style="background-color: var(--color-input-bg); color: var(--color-text-primary); border: 1px solid var(--color-input-border);"
+      role="button"
+      tabindex="0"
       on:click={toggleDropdown}
+      on:keydown={onPillKeydown}
     >
       <div
         class="w-4 h-4 rounded-full bg-gradient-to-br from-yellow-500 to-orange-500 flex items-center justify-center flex-shrink-0"
       >
         <BitcoinConnectLogo size={10} className="text-white" />
       </div>
-      {#if $bitcoinConnectBalanceLoading}
-        <span class="animate-pulse min-w-[3.5rem] text-right">...</span>
-      {:else if $bitcoinConnectBalance === null}
-        <span class="min-w-[3.5rem] text-right">---</span>
-      {:else if $balanceVisible}
-        <span class="min-w-[3.5rem] text-right">{formatBalance($bitcoinConnectBalance)}</span>
-      {:else}
-        <span class="min-w-[3.5rem] text-right">***</span>
-      {/if}
+      <span class="balance-text min-w-[3.5rem] text-right">
+        <DenominatedBalance
+          sats={$bitcoinConnectBalance}
+          visible={$balanceVisible}
+          loading={$bitcoinConnectBalanceLoading}
+        />
+      </span>
 
       <CaretDownIcon size={12} class="text-caption ml-0.5" />
-    </button>
+    </div>
 
     <!-- Dropdown menu -->
     {#if dropdownActive}
@@ -275,6 +291,14 @@
           </button>
 
           <!-- Actions -->
+          <button
+            class="flex items-center gap-2 text-sm hover:text-primary transition-colors cursor-pointer"
+            on:click={() => displayCurrency.cycleSatsFiat()}
+          >
+            <ArrowsLeftRightIcon size={18} weight="bold" />
+            Switch to {cycleTarget}
+          </button>
+
           <button
             class="flex items-center gap-2 text-sm hover:text-primary transition-colors cursor-pointer"
             on:click={toggleBalanceVisibility}
@@ -315,23 +339,26 @@
 {:else if $walletConnected && $activeWallet}
   <!-- Embedded Wallet Widget -->
   <div class="relative" use:clickOutside on:click_outside={() => (dropdownActive = false)}>
-    <!-- Balance button -->
-    <button
-      class="flex items-center gap-1.5 px-3 py-1.5 rounded-full transition-colors cursor-pointer text-sm font-medium"
+    <!-- Balance pill (see WebLN variant above for click rationale) -->
+    <div
+      class="balance-pill flex items-center gap-1.5 px-3 py-1.5 rounded-full transition-colors cursor-pointer text-sm font-medium"
       style="background-color: var(--color-input-bg); color: var(--color-text-primary); border: 1px solid var(--color-input-border);"
+      role="button"
+      tabindex="0"
       on:click={toggleDropdown}
+      on:keydown={onPillKeydown}
     >
       <LightningIcon size={16} weight="fill" class="text-amber-500" />
-      {#if $walletLoading || $walletBalance === null}
-        <span class="animate-pulse min-w-[3.5rem] text-right">...</span>
-      {:else if $balanceVisible}
-        <span class="min-w-[3.5rem] text-right">{formatBalance($walletBalance)}</span>
-      {:else}
-        <span class="min-w-[3.5rem] text-right">***</span>
-      {/if}
+      <span class="balance-text min-w-[3.5rem] text-right">
+        <DenominatedBalance
+          sats={$walletBalance}
+          visible={$balanceVisible}
+          loading={$walletLoading}
+        />
+      </span>
 
       <CaretDownIcon size={12} class="text-caption ml-0.5" />
-    </button>
+    </div>
 
     <!-- Dropdown menu -->
     {#if dropdownActive}
@@ -392,6 +419,14 @@
           {/if}
 
           <!-- Actions -->
+          <button
+            class="flex items-center gap-2 text-sm hover:text-primary transition-colors cursor-pointer"
+            on:click={() => displayCurrency.cycleSatsFiat()}
+          >
+            <ArrowsLeftRightIcon size={18} weight="bold" />
+            Switch to {cycleTarget}
+          </button>
+
           <button
             class="flex items-center gap-2 text-sm hover:text-primary transition-colors cursor-pointer"
             on:click={toggleBalanceVisibility}
@@ -476,5 +511,26 @@
   }
   .wallet-name-pill:active {
     transform: translateY(1px);
+  }
+
+  /* Outer pill is a role=button div; remove the default focus ring
+     style and add our own to match the rest of the header chrome. */
+  .balance-pill {
+    outline: none;
+  }
+  .balance-pill:focus-visible {
+    box-shadow: 0 0 0 2px rgba(251, 191, 36, 0.35);
+  }
+
+  /* Inner balance text — display-only. Currency switching moved into
+     the dropdown so an accidental tap on the balance can't change
+     what's displayed; the outer pill handles the open-dropdown
+     click. */
+  .balance-text {
+    display: inline-block;
+    padding: 0 4px;
+    margin: 0 -2px;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
   }
 </style>
