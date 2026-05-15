@@ -110,8 +110,17 @@
       on:error={handleError}
     ></video>
     {#if !mediaErrored}
-      <div class="play-icon" aria-hidden="true">
-        <svg viewBox="0 0 24 24" width="48" height="48" fill="currentColor">
+      <!-- Play badge: dark circular backdrop with a white triangle.
+           The backdrop's size scales with the tile so the badge has
+           consistent visual weight whether the tile is full-width
+           (single video) or one cell of a 2x2 grid. -->
+      <div class="play-badge" aria-hidden="true">
+        <svg
+          class="play-glyph"
+          viewBox="0 0 24 24"
+          fill="currentColor"
+          aria-hidden="true"
+        >
           <path d="M8 5v14l11-7z" />
         </svg>
       </div>
@@ -165,6 +174,9 @@
        smoothed. Filter it slightly for a softer placeholder; the real
        image crossfades over the top. */
     isolation: isolate;
+    /* Establish a container-query context so .play-badge can scale
+       its width via `cqi` (container inline-size) units. */
+    container-type: inline-size;
   }
   .media-tile.corner-all {
     border-radius: 0.75rem;
@@ -190,6 +202,10 @@
     inset: 0;
     width: 100%;
     height: 100%;
+    /* display:block guards against browsers laying out <video> as an
+       inline-replaced element with its intrinsic dimensions rather
+       than the styled 100% box. */
+    display: block;
     object-fit: cover;
     opacity: 0;
     transition: opacity 0.25s ease-out;
@@ -197,18 +213,38 @@
   .media-element.is-loaded {
     opacity: 1;
   }
-  .play-icon {
+  .play-badge {
     position: absolute;
-    inset: 0;
+    /* Centered via 50% / translate so the badge stays put regardless
+       of the tile size. */
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    /* Scale with the tile: 18% of the tile's smaller dimension,
+       clamped to [40px, 88px]. Reads as a substantial play button at
+       any cell size, from full-width hero to a 4-up grid cell. */
+    width: clamp(40px, 18cqi, 88px);
+    aspect-ratio: 1;
     display: flex;
     align-items: center;
     justify-content: center;
-    color: rgba(255, 255, 255, 0.92);
-    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+    border-radius: 50%;
+    background-color: rgba(0, 0, 0, 0.55);
+    color: rgba(255, 255, 255, 0.95);
     pointer-events: none;
-    /* Slightly larger hit target via the wrapper; the icon itself is
-       48x48 above. The drop-shadow makes it readable over any image. */
-    filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.45));
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.45);
+    /* Fallback width for browsers that don't support container query
+       units (older Safari). cqi falls back to 0 so without this the
+       badge would collapse; the clamp() above masks it for modern
+       browsers and this explicit fallback covers the rest. */
+  }
+  .play-glyph {
+    width: 50%;
+    height: 50%;
+    /* Nudge the triangle's optical center — geometric center of an
+       equilateral play triangle sits slightly left of its bounding
+       box. */
+    margin-left: 6%;
   }
   .error-state {
     position: absolute;
