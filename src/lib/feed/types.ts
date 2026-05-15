@@ -31,6 +31,13 @@ export interface MediaItem {
   /** Optional `x` (sha256) from imeta — for content addressing /
    * deduplication. Not used today but cheap to carry. */
   hash?: string;
+  /** Poster image URL for video items. Many Nostr clients attach a
+   * still-frame URL via NIP-92's `image` slot or a sibling `thumb`
+   * tag. When present, the gallery thumbnail renders this <img>
+   * instead of the <video> element — far more reliable cross-browser
+   * than depending on the video to render its own first frame, and
+   * cheaper (no metadata fetch per tile). */
+  poster?: string;
 }
 
 /** A repost wrapper (kind 6 / kind 16). The repost's body is the inner

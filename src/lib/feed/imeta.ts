@@ -160,6 +160,12 @@ function imetaToMediaItem(tag: string[]): MediaItem | null {
       .map((s) => s.trim())
       .filter(Boolean);
   }
+  // NIP-92 doesn't officially specify a poster slot, but several
+  // clients (Amethyst, nostur, primal) attach a still-frame URL via
+  // `image` (most common) or `thumb`. Accept either; `image` wins
+  // if both are present.
+  if (slots.image) item.poster = slots.image;
+  else if (slots.thumb) item.poster = slots.thumb;
   return item;
 }
 
