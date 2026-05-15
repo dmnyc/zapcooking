@@ -97,23 +97,31 @@
   on:keydown={handleKeydown}
 >
   {#if isVideo}
-    <!-- svelte-ignore a11y-media-has-caption -->
-    <video
-      class="media-element"
-      class:is-loaded={mediaLoaded}
-      src={currentUrl}
-      preload="metadata"
-      muted
-      playsinline
-      on:loadedmetadata={handleLoaded}
-      on:loadeddata={handleLoaded}
-      on:error={handleError}
-    ></video>
+    <!-- For video items we render an <img> poster (not a <video>
+         element) in the gallery — browsers render <video> frames
+         inconsistently before media data loads, often showing the
+         video at its intrinsic aspect inside the styled box. The
+         poster <img> behaves identically to image tiles and the
+         actual <video> only mounts in the Lightbox when the user
+         taps in. Falls back to a plain bg-secondary tile when no
+         poster URL is available. -->
+    {#if item.poster}
+      <img
+        class="media-element"
+        class:is-loaded={mediaLoaded}
+        src={item.poster}
+        alt={item.alt ?? ''}
+        {loading}
+        decoding="async"
+        on:load={handleLoaded}
+        on:error={handleError}
+      />
+    {/if}
     {#if !mediaErrored}
       <!-- Play badge: dark circular backdrop with a white triangle.
-           The backdrop's size scales with the tile so the badge has
-           consistent visual weight whether the tile is full-width
-           (single video) or one cell of a 2x2 grid. -->
+           Size scales with the tile via container-query units so the
+           badge reads as a substantial play button at any cell
+           size — full-width hero through a 2x2 grid cell. -->
       <div class="play-badge" aria-hidden="true">
         <svg
           class="play-glyph"

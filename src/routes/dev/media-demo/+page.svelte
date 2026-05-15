@@ -29,23 +29,29 @@
     };
   }
 
-  /** nostr.build video URLs — the same CDN real users post from, so
-   * the demo exercises actual production media. The first URL is the
-   * bitcoin-only easter-egg clip from PR #393; the others are the
-   * canonical Big Buck Bunny served from Internet Archive (used by
-   * the WHATWG / W3C HTML video samples for ~10 years now). */
-  const SAMPLE_VIDEOS: { url: string; dim: { w: number; h: number } }[] = [
+  /** Sample videos with explicit poster URLs. In real Nostr posts the
+   * poster comes from NIP-92's `image` slot (parsed by imeta.ts); for
+   * the demo we hand-attach a poster from picsum so each video tile
+   * renders a recognizable thumbnail. */
+  const SAMPLE_VIDEOS: {
+    url: string;
+    dim: { w: number; h: number };
+    posterSeed: number;
+  }[] = [
     {
       url: 'https://video.nostr.build/ab7659486ab83bf66fe446251687ede7a3b5779cc16afbadbdb21be60bc596bb.mp4',
-      dim: { w: 1280, h: 720 }
+      dim: { w: 1280, h: 720 },
+      posterSeed: 901
     },
     {
       url: 'https://archive.org/download/BigBuckBunny_124/Content/big_buck_bunny_720p_surround.mp4',
-      dim: { w: 1280, h: 720 }
+      dim: { w: 1280, h: 720 },
+      posterSeed: 902
     },
     {
       url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyrides.mp4',
-      dim: { w: 1280, h: 720 }
+      dim: { w: 1280, h: 720 },
+      posterSeed: 903
     }
   ];
 
@@ -55,7 +61,8 @@
       url: src.url,
       mime: 'video/mp4',
       dim: src.dim,
-      alt
+      alt,
+      poster: `https://picsum.photos/seed/zc-vid-${src.posterSeed}/1280/720`
     };
   }
 
@@ -105,8 +112,19 @@
        muted with controls; flick / arrow / button nav to a new video
        re-mounts the slot so autoplay refires every time. */
     {
-      label: '1 video',
+      label: '1 video, with poster',
       items: [vid(0, 'nostr.build sample clip')]
+    },
+    {
+      label: '1 video, no poster → bg fallback + play badge',
+      items: [
+        {
+          url: SAMPLE_VIDEOS[1].url,
+          mime: 'video/mp4',
+          dim: SAMPLE_VIDEOS[1].dim,
+          alt: 'No-poster video'
+        }
+      ]
     },
     {
       label: 'Mixed: 1 photo + 1 video',
