@@ -105,14 +105,17 @@
       preload="metadata"
       muted
       playsinline
+      on:loadedmetadata={handleLoaded}
       on:loadeddata={handleLoaded}
       on:error={handleError}
     ></video>
-    <div class="play-icon" aria-hidden="true">
-      <svg viewBox="0 0 24 24" width="48" height="48" fill="currentColor">
-        <path d="M8 5v14l11-7z" />
-      </svg>
-    </div>
+    {#if !mediaErrored}
+      <div class="play-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="48" height="48" fill="currentColor">
+          <path d="M8 5v14l11-7z" />
+        </svg>
+      </div>
+    {/if}
   {:else}
     <img
       class="media-element"
@@ -127,7 +130,19 @@
   {/if}
 
   {#if mediaErrored}
-    <div class="error-state" aria-hidden="true">⚠</div>
+    <!-- Video and image error states render differently so a broken
+         video tile reads as a video (play icon + label) rather than a
+         bare alert that looks like a missing image. -->
+    <div class="error-state" aria-hidden="true">
+      {#if isVideo}
+        <svg viewBox="0 0 24 24" width="40" height="40" fill="currentColor" aria-hidden="true">
+          <path d="M8 5v14l11-7z" />
+        </svg>
+        <span class="error-label">Video unavailable</span>
+      {:else}
+        ⚠
+      {/if}
+    </div>
   {/if}
 
   {#if overflowCount !== null && overflowCount > 0}
@@ -199,11 +214,17 @@
     position: absolute;
     inset: 0;
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
+    gap: 0.5rem;
     color: var(--color-caption);
     font-size: 2rem;
     background-color: var(--color-bg-secondary);
+  }
+  .error-label {
+    font-size: 0.75rem;
+    letter-spacing: 0.02em;
   }
   .overflow-scrim {
     position: absolute;

@@ -29,23 +29,32 @@
     };
   }
 
-  /** Google's public sample-videos bucket — short MP4 clips that
-   * stream cleanly, with first-frame posters that work for the
-   * MediaTile's poster behaviour and the Lightbox prev/next preview. */
-  const SAMPLE_VIDEOS = [
-    'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
-    'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyrides.mp4',
-    'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerMeltdowns.mp4',
-    'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4'
+  /** nostr.build video URLs — the same CDN real users post from, so
+   * the demo exercises actual production media. The first URL is the
+   * bitcoin-only easter-egg clip from PR #393; the others are the
+   * canonical Big Buck Bunny served from Internet Archive (used by
+   * the WHATWG / W3C HTML video samples for ~10 years now). */
+  const SAMPLE_VIDEOS: { url: string; dim: { w: number; h: number } }[] = [
+    {
+      url: 'https://video.nostr.build/ab7659486ab83bf66fe446251687ede7a3b5779cc16afbadbdb21be60bc596bb.mp4',
+      dim: { w: 1280, h: 720 }
+    },
+    {
+      url: 'https://archive.org/download/BigBuckBunny_124/Content/big_buck_bunny_720p_surround.mp4',
+      dim: { w: 1280, h: 720 }
+    },
+    {
+      url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyrides.mp4',
+      dim: { w: 1280, h: 720 }
+    }
   ];
 
   function vid(index: number, alt: string): MediaItem {
+    const src = SAMPLE_VIDEOS[index % SAMPLE_VIDEOS.length];
     return {
-      url: SAMPLE_VIDEOS[index % SAMPLE_VIDEOS.length],
+      url: src.url,
       mime: 'video/mp4',
-      // Sample videos are 1280x720 — declare it so the tile reserves
-      // aspect-ratio and doesn't shift when the first frame loads.
-      dim: { w: 1280, h: 720 },
+      dim: src.dim,
       alt
     };
   }
@@ -97,17 +106,17 @@
        re-mounts the slot so autoplay refires every time. */
     {
       label: '1 video',
-      items: [vid(0, 'For Bigger Blazes (sample)')]
+      items: [vid(0, 'nostr.build sample clip')]
     },
     {
       label: 'Mixed: 1 photo + 1 video',
-      items: [pic(1200, 1200, 200), vid(1, 'For Bigger Joyrides (sample)')]
+      items: [pic(1200, 1200, 200), vid(1, 'Big Buck Bunny (Internet Archive)')]
     },
     {
       label: 'Mixed: 2 photos + 1 video in a 3-up grid',
       items: [
         pic(1200, 1200, 201),
-        vid(2, 'For Bigger Meltdowns (sample)'),
+        vid(2, 'For Bigger Joyrides (GTV sample)'),
         pic(1200, 1200, 202)
       ]
     },
@@ -116,14 +125,14 @@
       items: [
         pic(1200, 1200, 210),
         pic(1200, 1200, 211),
-        vid(3, 'Sintel (sample)'),
+        vid(0, 'nostr.build sample clip'),
         pic(1200, 1200, 212)
       ]
     },
     {
       label: 'Mixed: 5 items (video + 4 photos), 2x2 with "+1" overlay',
       items: [
-        vid(0, 'Cover video'),
+        vid(1, 'Big Buck Bunny cover'),
         pic(1200, 1200, 220),
         pic(1200, 1200, 221),
         pic(1200, 1200, 222),
