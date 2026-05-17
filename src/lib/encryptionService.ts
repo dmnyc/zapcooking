@@ -393,14 +393,41 @@ export async function encrypt(
     );
   }
 
-  // For NIP-46 signers: NIP-44 goes through the raw RPC (NDK has no
-  // built-in for it); NIP-04 uses NDK's encrypt() which issues a
-  // nip04_encrypt RPC under the hood. Prefer NIP-44 and fall through
-  // to NIP-04 if the signer rejects NIP-44 (e.g. older signer that
-  // only grants nip04 permissions).
+  // For NIP-46 signers: some remote signers (notably nsec.app) also
+  // inject a working window.nostr alongside the NIP-46 connection.
+  // decryptViaSigner already prefers window.nostr for every signer
+  // type, so a relay backup decrypts through it — but if encrypt()
+  // skipped straight to the raw NIP-46 RPC here, the post-decrypt
+  // saveMnemonic re-encryption would fail (RPC channel unavailable /
+  // permission not granted on the RPC path) and abort an otherwise
+  // successful restore with a misleading "signer does not support
+  // encryption" error. Mirror the decrypt path: try window.nostr
+  // first, then fall back to the raw RPC. NIP-44 goes through the raw
+  // RPC (NDK has no built-in for it); NIP-04 uses NDK's encrypt()
+  // which issues a nip04_encrypt RPC under the hood. Prefer NIP-44 and
+  // fall through to NIP-04 if the signer rejects NIP-44 (e.g. older
+  // signer that only grants nip04 permissions).
   if (signerName.includes('Nip46Signer') && signer) {
     const recipient = new NDKUser({ pubkey: recipientPubkey });
     const nip46Signer = signer as unknown as NDKNip46Signer;
+
+    const nostr = (window as any).nostr;
+    if (nostr?.nip44?.encrypt && (!preferredMethod || preferredMethod === 'nip44')) {
+      try {
+        const ciphertext = await nostr.nip44.encrypt(recipientPubkey, plaintext);
+        return { ciphertext, method: 'nip44' };
+      } catch (e) {
+        console.warn('[Encryption] NIP-46 window.nostr.nip44.encrypt failed:', e);
+      }
+    }
+    if (nostr?.nip04?.encrypt && (!preferredMethod || preferredMethod === 'nip04')) {
+      try {
+        const ciphertext = await nostr.nip04.encrypt(recipientPubkey, plaintext);
+        return { ciphertext, method: 'nip04' };
+      } catch (e) {
+        console.warn('[Encryption] NIP-46 window.nostr.nip04.encrypt failed:', e);
+      }
+    }
 
     if (!preferredMethod || preferredMethod === 'nip44') {
       try {
