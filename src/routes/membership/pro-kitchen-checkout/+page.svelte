@@ -21,11 +21,11 @@
 
   // Read billing period from URL query param
   $: periodParam = $page.url.searchParams.get('period');
-  $: selectedPeriod = periodParam === 'monthly' ? 'monthly' as const : 'annual' as const;
+  $: selectedPeriod = periodParam === 'monthly' ? ('monthly' as const) : ('annual' as const);
 
   // Pro Kitchen pricing (dynamic based on period)
   $: PRO_KITCHEN_PRICE_USD = selectedPeriod === 'annual' ? 89 : 8.99;
-  
+
   // Dynamic Bitcoin pricing (fetched from API)
   let bitcoinPriceLoading = true;
   let bitcoinPriceError: string | null = null;
@@ -33,9 +33,73 @@
   let amountSats: number | null = null;
   let discountPercent = 5;
 
+  // Promo code (Lightning only). The apply-promo endpoint recomputes the
+  // FULL effective price (promo stacked with the 5% BTC discount) and returns
+  // amountSats + totalDiscountPercent. We bind the Lightning card's USD, sats,
+  // AND badge to those figures so the price and the badge can never disagree.
+  // discountedUsdAmount / amountSats / discountPercent are the single source of
+  // truth for what's displayed; applying/clearing a code rewrites all three.
+  let promoCode = '';
+  let promoApplying = false;
+  let promoError: string | null = null;
+  let appliedPromo: { code: string; label: string } | null = null;
+
+  function promoErrorMessage(code: string | undefined): string {
+    switch (code) {
+      case 'expired':
+        return 'This code has expired.';
+      case 'wrong_scope':
+        return "This code isn't valid for this membership.";
+      case 'invalid_for_scope':
+        return "This code can't be applied here.";
+      case 'disabled':
+        return 'Promo codes are currently unavailable.';
+      default:
+        return 'Invalid promo code.';
+    }
+  }
+
+  async function applyPromoCode() {
+    const code = promoCode.trim();
+    if (!code) return;
+    promoApplying = true;
+    promoError = null;
+    try {
+      const response = await fetch('/api/membership/apply-promo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, tier: 'pro', period: selectedPeriod })
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        appliedPromo = null;
+        promoError = promoErrorMessage(data.error);
+        return;
+      }
+      appliedPromo = { code: data.code, label: data.label };
+      // Drive the card from the promo-adjusted totals so price/sats/badge agree.
+      discountedUsdAmount = data.discountedUsd;
+      amountSats = data.amountSats;
+      discountPercent = data.totalDiscountPercent;
+    } catch {
+      appliedPromo = null;
+      promoError = 'Could not validate code. Please try again.';
+    } finally {
+      promoApplying = false;
+    }
+  }
+
+  function clearPromo() {
+    appliedPromo = null;
+    promoCode = '';
+    promoError = null;
+    // Restore the base (5%-only) Lightning quote.
+    fetchBitcoinPriceQuote();
+  }
+
   onMount(() => {
     if (!browser) return;
-    
+
     // Redirect to login if not logged in
     if (!isLoggedIn) {
       goto('/login?redirect=/membership/pro-kitchen-checkout');
@@ -44,32 +108,33 @@
     // Check for payment success (Stripe)
     const paymentStatus = $page.url.searchParams.get('payment');
     const sessionId = $page.url.searchParams.get('session_id');
-    
+
     if (paymentStatus === 'success' && sessionId) {
       goto(`/membership/confirmation?tier=pro&payment_method=stripe&session_id=${sessionId}`);
     }
-    
+
     // Fetch Bitcoin price quote
     fetchBitcoinPriceQuote();
   });
-  
+
   async function fetchBitcoinPriceQuote() {
     bitcoinPriceLoading = true;
     bitcoinPriceError = null;
-    
+
     try {
-      const response = await fetch(`/api/membership/bitcoin-price-quote?tier=pro&period=${selectedPeriod}`);
-      
+      const response = await fetch(
+        `/api/membership/bitcoin-price-quote?tier=pro&period=${selectedPeriod}`
+      );
+
       if (!response.ok) {
         const data = await response.json();
         throw new Error(data.error || 'Failed to fetch Bitcoin price');
       }
-      
+
       const data = await response.json();
       discountedUsdAmount = data.discountedUsdAmount;
       amountSats = data.amountSats;
       discountPercent = data.discountPercent;
-      
     } catch (err) {
       console.error('[Pro Kitchen Checkout] Bitcoin price error:', err);
       bitcoinPriceError = err instanceof Error ? err.message : 'Failed to fetch Bitcoin price';
@@ -86,7 +151,7 @@
       error = 'Please log in to continue';
       return;
     }
-    
+
     if (paymentMethod === 'stripe') {
       await proceedWithStripe();
     } else {
@@ -107,7 +172,7 @@
       const response = await fetch('/api/stripe/create-session', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           tier: 'pro',
@@ -115,8 +180,8 @@
           successUrl,
           cancelUrl,
           customerEmail: undefined,
-          pubkey: $userPublickey,
-        }),
+          pubkey: $userPublickey
+        })
       });
 
       if (!response.ok) {
@@ -137,13 +202,12 @@
 
       const data = await response.json();
       console.log('[Pro Kitchen Checkout] Session created, redirecting to Stripe...');
-      
+
       if (!data.url) {
         throw new Error('No checkout URL returned from server');
       }
 
       window.location.href = data.url;
-      
     } catch (err) {
       console.error('[Pro Kitchen Checkout] Error:', err);
       error = err instanceof Error ? err.message : 'Failed to start checkout. Please try again.';
@@ -168,13 +232,14 @@
       const response = await fetch('/api/membership/create-lightning-invoice', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           pubkey: $userPublickey,
           tier: 'pro',
           period: selectedPeriod,
-        }),
+          promoCode: appliedPromo?.code
+        })
       });
 
       if (!response.ok) {
@@ -194,6 +259,24 @@
       lightningInvoice = data.invoice;
       paymentHash = data.paymentHash;
       receiveRequestId = data.receiveRequestId;
+      // The displayed price must equal what we're actually charging. Warn if the
+      // invoice's sats differ from what the card previewed before reconciling.
+      if (
+        typeof data.amountSats === 'number' &&
+        amountSats !== null &&
+        data.amountSats !== amountSats
+      ) {
+        console.warn('[Pro Kitchen Checkout] Displayed sats != invoice sats', {
+          displayed: amountSats,
+          invoice: data.amountSats,
+          promo: appliedPromo?.code ?? null
+        });
+      }
+      // Server is the source of truth for the charged amount — reflect any
+      // promo-adjusted figures it returned.
+      if (typeof data.discountedUsdAmount === 'number')
+        discountedUsdAmount = data.discountedUsdAmount;
+      if (typeof data.amountSats === 'number') amountSats = data.amountSats;
 
       const { setPaid } = await lightningService.launchPayment({
         invoice: data.invoice,
@@ -215,10 +298,12 @@
 
       // Start polling our verify endpoint to detect external wallet payments
       startPaymentPolling(setPaid);
-
     } catch (err) {
       console.error('[Pro Kitchen Checkout] Error:', err);
-      error = err instanceof Error ? err.message : 'Failed to create Lightning invoice. Please try again.';
+      error =
+        err instanceof Error
+          ? err.message
+          : 'Failed to create Lightning invoice. Please try again.';
       loading = false;
     }
   }
@@ -235,15 +320,15 @@
       const response = await fetch('/api/membership/verify-lightning-payment', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           receiveRequestId,
           paymentHash,
           pubkey: $userPublickey,
           tier: 'pro',
-          period: selectedPeriod,
-        }),
+          period: selectedPeriod
+        })
       });
 
       if (!response.ok) {
@@ -258,7 +343,7 @@
       }
 
       const data = await response.json();
-      
+
       if (data.success) {
         // Build success URL with NIP-05 info if available
         const params = new URLSearchParams({
@@ -275,10 +360,10 @@
       } else {
         throw new Error('Payment verification failed');
       }
-
     } catch (err) {
       console.error('[Pro Kitchen Checkout] Verification error:', err);
-      error = err instanceof Error ? err.message : 'Failed to verify payment. Please contact support.';
+      error =
+        err instanceof Error ? err.message : 'Failed to verify payment. Please contact support.';
       loading = false;
     }
   }
@@ -296,8 +381,8 @@
             paymentHash,
             pubkey: $userPublickey,
             tier: 'pro',
-            period: selectedPeriod,
-          }),
+            period: selectedPeriod
+          })
         });
 
         if (response.ok) {
@@ -342,7 +427,7 @@
 <div class="checkout-page">
   <div class="checkout-container">
     <h1>Join Pro Kitchen</h1>
-    
+
     {#if error}
       <div class="error-message">
         {error}
@@ -363,14 +448,17 @@
 
       <div class="checkout-benefits">
         <h3>What you get:</h3>
-        
+
         <!-- Includes All Cook+ Features -->
         <div class="benefit-section">
           <h4 class="section-header">Includes All Cook+ Features</h4>
           <ul class="benefit-list">
             <li>
               <span class="checkmark">✓</span>
-              <span class="feature-text muted-text">Everything in Cook+ (Sous Chef, NIP-05 identity, pantry relay access, collections, badge, early access, voting)</span>
+              <span class="feature-text muted-text"
+                >Everything in Cook+ (Sous Chef, NIP-05 identity, pantry relay access, collections,
+                badge, early access, voting)</span
+              >
             </li>
           </ul>
         </div>
@@ -405,10 +493,13 @@
           <h4 class="section-header">Kitchen Tools</h4>
           <ul class="benefit-list">
             <li>
-              <span class="feature-icon">🤖</span>
+              <span class="feature-icon">🧑‍🍳</span>
               <div class="feature-content">
-                <span class="feature-text">Chef ₿ - Kitchen assistant to scan your fridge, generate recipes, and recommend what to make tonight</span>
-                <span class="feature-subtext">Your personal kitchen companion</span>
+                <span class="feature-text"
+                  >Cheffy - Ask cooking questions, use what you have, fix a mistake, or turn an idea
+                  into dinner</span
+                >
+                <span class="feature-subtext">Your kitchen companion</span>
               </div>
             </li>
             <li>
@@ -417,7 +508,6 @@
             </li>
           </ul>
         </div>
-
       </div>
 
       <!-- Payment Method Selection -->
@@ -425,10 +515,10 @@
         <h3>Choose Payment Method</h3>
         <div class="payment-methods">
           <label class="payment-method-option {paymentMethod === 'stripe' ? 'selected' : ''}">
-            <input 
-              type="radio" 
-              name="paymentMethod" 
-              value="stripe" 
+            <input
+              type="radio"
+              name="paymentMethod"
+              value="stripe"
               bind:group={paymentMethod}
               disabled={loading}
             />
@@ -442,10 +532,10 @@
           </label>
 
           <label class="payment-method-option {paymentMethod === 'lightning' ? 'selected' : ''}">
-            <input 
-              type="radio" 
-              name="paymentMethod" 
-              value="lightning" 
+            <input
+              type="radio"
+              name="paymentMethod"
+              value="lightning"
               bind:group={paymentMethod}
               disabled={loading}
             />
@@ -453,7 +543,6 @@
               <div class="payment-method-header">
                 <span class="payment-icon">⚡</span>
                 <span class="payment-name">Bitcoin Lightning</span>
-                <span class="discount-badge">{discountPercent}% OFF</span>
               </div>
               <div class="payment-provider bitcoin-pricing">
                 {#if bitcoinPriceLoading}
@@ -463,11 +552,13 @@
                   <span class="usd-pricing">
                     <span class="original-price">${PRO_KITCHEN_PRICE_USD}</span>
                     <span class="discounted-price">${discountedUsdAmount?.toFixed(2)}</span>
+                    <span class="discount-badge">{discountPercent}% OFF</span>
                   </span>
                 {:else}
                   <span class="usd-pricing">
                     <span class="original-price">${PRO_KITCHEN_PRICE_USD}</span>
                     <span class="discounted-price">${discountedUsdAmount?.toFixed(2)}</span>
+                    <span class="discount-badge">{discountPercent}% OFF</span>
                   </span>
                 {/if}
               </div>
@@ -476,7 +567,42 @@
         </div>
       </div>
 
-      <button 
+      {#if paymentMethod === 'lightning'}
+        <div class="promo-section">
+          {#if appliedPromo}
+            <div class="promo-applied">
+              <span class="promo-applied-text">✓ {appliedPromo.code} — {appliedPromo.label}</span>
+              <button type="button" class="promo-clear" on:click={clearPromo} disabled={loading}>
+                Remove
+              </button>
+            </div>
+          {:else}
+            <div class="promo-input-row">
+              <input
+                type="text"
+                class="promo-input"
+                placeholder="Have a promo code?"
+                bind:value={promoCode}
+                disabled={promoApplying || loading}
+                on:keydown={(e) => e.key === 'Enter' && applyPromoCode()}
+              />
+              <button
+                type="button"
+                class="promo-apply"
+                on:click={applyPromoCode}
+                disabled={promoApplying || loading || !promoCode.trim()}
+              >
+                {promoApplying ? '…' : 'Apply'}
+              </button>
+            </div>
+          {/if}
+          {#if promoError}
+            <p class="promo-error">{promoError}</p>
+          {/if}
+        </div>
+      {/if}
+
+      <button
         class="checkout-button"
         on:click={proceedToCheckout}
         disabled={loading || !isLoggedIn}
@@ -550,7 +676,12 @@
     border-image: linear-gradient(135deg, var(--color-primary) 0%, #ff6b00 50%, #ff4500 100%) 1;
     border-radius: 16px;
     padding: 2.5rem;
-    box-shadow: 
+    /* Contain the card within the viewport: count padding+border in the width
+       and never let a flex child push it past the screen edge. */
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 100%;
+    box-shadow:
       0 8px 32px rgba(236, 71, 0, 0.15),
       0 0 0 1px rgba(236, 71, 0, 0.1);
   }
@@ -740,7 +871,7 @@
     background: rgba(236, 71, 0, 0.1);
   }
 
-  .payment-method-option input[type="radio"] {
+  .payment-method-option input[type='radio'] {
     margin-right: 1rem;
     width: 20px;
     height: 20px;
@@ -793,6 +924,7 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
+    flex-wrap: wrap;
   }
 
   .original-price {
@@ -814,7 +946,9 @@
     border-radius: 10px;
     font-size: 0.65rem;
     font-weight: 700;
-    margin-left: auto;
+    flex-shrink: 0;
+    /* Sits inline with the price (see .usd-pricing), not floated to its own
+       line — so the badge's % always reads next to the price it describes. */
   }
 
   .loading-price {
@@ -878,11 +1012,21 @@
   }
 
   @media (max-width: 480px) {
+    /* Tighten the outer chrome so the card fits narrow screens without
+       horizontal overflow. */
+    .checkout-page {
+      padding: 1rem;
+    }
+
+    .checkout-card {
+      padding: 1.5rem;
+    }
+
     .payment-method-option {
       padding: 0.75rem;
     }
 
-    .payment-method-option input[type="radio"] {
+    .payment-method-option input[type='radio'] {
       margin-right: 0.6rem;
     }
 
@@ -894,8 +1038,78 @@
       font-size: 0.9rem;
     }
 
-    .discount-badge {
+    /* Drop the indent that pushed "57,470 sats" onto a second line. */
+    .payment-provider {
       margin-left: 0;
     }
+  }
+
+  /* Promo code */
+  .promo-section {
+    margin-bottom: 1.5rem;
+  }
+  .promo-input-row {
+    display: flex;
+    gap: 0.5rem;
+  }
+  .promo-input {
+    flex: 1;
+    /* Allow the flex input to shrink below its intrinsic/placeholder width so
+       the row (input + Apply) never forces the card wider than the screen. */
+    min-width: 0;
+    box-sizing: border-box;
+    padding: 0.75rem 1rem;
+    background: rgba(17, 24, 39, 0.6);
+    border: 2px solid rgba(236, 71, 0, 0.2);
+    border-radius: 8px;
+    color: #f3f4f6;
+    font-size: 0.95rem;
+  }
+  .promo-input:focus {
+    outline: none;
+    border-color: var(--color-primary);
+  }
+  .promo-apply {
+    padding: 0.75rem 1.25rem;
+    background: rgba(236, 71, 0, 0.15);
+    border: 2px solid rgba(236, 71, 0, 0.4);
+    border-radius: 8px;
+    color: var(--color-primary);
+    font-weight: 600;
+    cursor: pointer;
+    /* Keep its size and stay on screen instead of being clipped off the right. */
+    flex-shrink: 0;
+  }
+  .promo-apply:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .promo-applied {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    background: rgba(16, 185, 129, 0.1);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    border-radius: 8px;
+  }
+  .promo-applied-text {
+    color: #10b981;
+    font-weight: 600;
+    font-size: 0.9rem;
+  }
+  .promo-clear {
+    background: none;
+    border: none;
+    color: #9ca3af;
+    cursor: pointer;
+    font-size: 0.85rem;
+    text-decoration: underline;
+  }
+  .promo-error {
+    margin: 0.5rem 0 0;
+    color: #ef4444;
+    font-size: 0.85rem;
   }
 </style>

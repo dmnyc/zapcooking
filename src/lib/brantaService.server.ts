@@ -7,20 +7,33 @@
  *
  * Environment variables:
  * - BRANTA_API_KEY: Your Branta API key
- * - BRANTA_API_BASE_URL: Base URL (defaults to https://guardrail.branta.pro)
+ * - BRANTA_ENVIRONMENT: Server environment — one of "Production" (default),
+ *   "Staging", or "Localhost". The SDK resolves the actual base URL.
  *
  * NOTE: This file is server-only and uses SvelteKit's $env system.
+ *
+ * Branta SDK 3.1 layout: the service class and the Payment/Destination types
+ * are exported from the `/v2` entry point; the client-options type,
+ * `BrantaServerBaseUrl`, and the `DestinationType` enum live at the package
+ * root. `BrantaServerBaseUrl` is a value (an enum-like const whose members
+ * carry the resolved URL), so it's imported as a value and used to build
+ * `baseUrl`.
  */
 
 import { env } from '$env/dynamic/private';
-import { type BrantaClientOptions } from '@branta-ops/branta';
-import { BrantaService, type Destination, type DestinationType, type Payment } from '@branta-ops/branta/v2';
+import {
+  BrantaServerBaseUrl,
+  type BrantaClientOptions,
+  type DestinationType
+} from '@branta-ops/branta';
+import { BrantaService, type Destination, type Payment } from '@branta-ops/branta/v2';
 
 export type { Payment };
+export type PaymentWithVerifyUrl = Payment & { verifyUrl?: string };
 
 export interface RegisterPaymentResult {
   success: boolean;
-  verifyLink?: string;
+  verifyUrl?: string;
   secret?: string;
   encryptedDestination?: string;
   error?: string;
@@ -37,10 +50,16 @@ export function getBrantaConfig(platform?: any): BrantaClientOptions | null {
     return null;
   }
 
+  const raw = platform?.env?.BRANTA_ENVIRONMENT || env.BRANTA_ENVIRONMENT;
+  // BrantaServerBaseUrl members carry the resolved URL; baseUrl accepts a
+  // ServerEnvironment value (or a plain URL string), so map the env name to
+  // the matching member rather than passing the bare name.
   const baseUrl =
-    platform?.env?.BRANTA_API_BASE_URL ||
-    env.BRANTA_API_BASE_URL ||
-    'https://guardrail.branta.pro';
+    raw === 'Staging'
+      ? BrantaServerBaseUrl.Staging
+      : raw === 'Localhost'
+        ? BrantaServerBaseUrl.Localhost
+        : BrantaServerBaseUrl.Production;
 
   return { defaultApiKey: apiKey, baseUrl, privacy: 'strict' };
 }
@@ -57,7 +76,10 @@ export function isBrantaConfigured(platform?: any): boolean {
  * Register a payment address/invoice with Branta
  *
  * @param paymentString - The Bitcoin address, Lightning invoice, or Lightning address
- * @param options - Optional configuration (ttl, description, metadata)
+ * @param ttl - Optional time-to-live in seconds
+ * @param description - Optional human-readable description
+ * @param metadata - Optional metadata object (coerced to Record<string, string>)
+ * @param destinationType - Optional explicit destination type
  * @param platform - Optional platform object for Cloudflare Workers
  */
 export async function registerPayment(
@@ -80,7 +102,7 @@ export async function registerPayment(
     // secret/encryptedDestination to verify later.
     const destination: Destination = {
       value: paymentString.trim(),
-      zk: true
+      isZk: true
     };
 
     if (destinationType) {
@@ -96,9 +118,9 @@ export async function registerPayment(
       body.description = description;
     }
 
-    // metadata must be stringified JSON per API spec
+    // Payment.metadata is a JSON string in SDK 3.1; serialize the object.
     if (metadata) {
-      body.metadata = metadata as Record<string, string>;
+      body.metadata = JSON.stringify(metadata);
     }
 
     const brantaService = new BrantaService(config);
@@ -107,7 +129,7 @@ export async function registerPayment(
 
     return {
       success: true,
-      verifyLink: result.verifyLink,
+      verifyUrl: result.verifyUrl,
       secret: result.secret,
       encryptedDestination: result.payment.destinations[0]?.value
     };
@@ -132,14 +154,18 @@ export async function getPaymentInfo(
   paymentString: string,
   encryptionKey?: string,
   platform?: any
-): Promise<Payment | null> {
+): Promise<PaymentWithVerifyUrl | null> {
   const config = getBrantaConfig(platform);
   if (!config || !paymentString?.trim()) return null;
 
   try {
     const brantaService = new BrantaService(config);
-    const response = await brantaService.getPayments(paymentString.trim(), encryptionKey);
-    return response[0] ?? null;
+    // getPayments resolves to a PaymentsResult { payments, verifyUrl }; the
+    // verifyUrl is shared across the result, so attach it to the payment we
+    // return.
+    const result = await brantaService.getPayments(paymentString.trim(), encryptionKey);
+    const payment = result.payments[0];
+    return payment ? { ...payment, verifyUrl: result.verifyUrl } : null;
   } catch (error) {
     console.warn('[Branta] getPaymentInfo failed:', error);
     return null;
@@ -152,18 +178,17 @@ export async function getPaymentInfo(
 export async function getPaymentInfoByQRCode(
   qrText: string,
   platform?: any
-): Promise<Payment | null> {
+): Promise<PaymentWithVerifyUrl | null> {
   const config = getBrantaConfig(platform);
   if (!config || !qrText?.trim()) return null;
 
   try {
     const brantaService = new BrantaService(config);
-    const response = await brantaService.getPaymentsByQRCode(qrText.trim());
-
-    return response[0] ?? null;
+    const result = await brantaService.getPaymentsByQrCode(qrText.trim());
+    const payment = result.payments[0];
+    return payment ? { ...payment, verifyUrl: result.verifyUrl } : null;
   } catch (error) {
     console.warn('[Branta] getPaymentInfoByQRCode failed:', error);
     return null;
   }
 }
-

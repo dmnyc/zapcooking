@@ -5,6 +5,9 @@
   import CloudArrowUpIcon from 'phosphor-svelte/lib/CloudArrowUp';
   import ClockCounterClockwiseIcon from 'phosphor-svelte/lib/ClockCounterClockwise';
   import CloseIcon from 'phosphor-svelte/lib/XCircle';
+  import CaretDownIcon from 'phosphor-svelte/lib/CaretDown';
+  import CheckCircleIcon from 'phosphor-svelte/lib/CheckCircle';
+  import WarningCircleIcon from 'phosphor-svelte/lib/WarningCircle';
   import Button from './Button.svelte';
   import { ndk, userPublickey } from '$lib/nostr';
   import { NDKEvent } from '@nostr-dev-kit/ndk';
@@ -21,7 +24,9 @@
   export let profile: any = null;
   export let onProfileUpdated: () => void = () => {};
 
-  // Form state
+  // Form state. `noffer` is the user's CLINK static offer (matches the
+  // `noffer` custom field bxrd.app's profile editor writes — see
+  // https://github.com/shocknet/CLINK/blob/main/specs/clink-offers.md).
   let formData = {
     display_name: '',
     name: '',
@@ -30,8 +35,13 @@
     banner: '',
     nip05: '',
     website: '',
-    lud16: ''
+    lud16: '',
+    noffer: ''
   };
+
+  // Advanced section visibility — image URL fields (picture / banner)
+  // live under here so the main form stays focused on identity fields.
+  let showAdvanced = false;
 
   // UI state
   let saving = false;
@@ -47,12 +57,160 @@
   let creatingManualBackup = false;
   let backupSectionEl: HTMLElement;
 
+  // NIP-05 and lud16 are both `local@domain.tld` shaped. NIP-05 allows
+  // `_` as the local part (root identifier); both fields are
+  // case-insensitive in practice. This is the shape check — actual
+  // resolution against the domain's /.well-known endpoint is done
+  // below after a debounce.
+  const ADDRESS_REGEX = /^[A-Za-z0-9_.+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$/;
+
+  type FieldStatus = 'idle' | 'invalid' | 'checking' | 'valid' | 'unresolved';
+  let nip05Status: FieldStatus = 'idle';
+  let lud16Status: FieldStatus = 'idle';
+  let nip05Message = '';
+  let lud16Message = '';
+  let nip05Controller: AbortController | null = null;
+  let lud16Controller: AbortController | null = null;
+  let nip05Timer: ReturnType<typeof setTimeout> | null = null;
+  let lud16Timer: ReturnType<typeof setTimeout> | null = null;
+
+  function onNip05Change(value: string) {
+    const trimmed = value.trim();
+    if (nip05Timer) {
+      clearTimeout(nip05Timer);
+      nip05Timer = null;
+    }
+    nip05Controller?.abort();
+    nip05Controller = null;
+    if (!trimmed) {
+      nip05Status = 'idle';
+      nip05Message = '';
+      return;
+    }
+    if (!ADDRESS_REGEX.test(trimmed)) {
+      nip05Status = 'invalid';
+      nip05Message = 'Use the form name@example.com';
+      return;
+    }
+    nip05Status = 'checking';
+    nip05Message = '';
+    nip05Timer = setTimeout(() => {
+      verifyNip05(trimmed);
+    }, 500);
+  }
+
+  async function verifyNip05(value: string) {
+    const at = value.indexOf('@');
+    const local = value.slice(0, at);
+    const domain = value.slice(at + 1);
+    const controller = new AbortController();
+    nip05Controller = controller;
+    try {
+      const url = `https://${domain}/.well-known/nostr.json?name=${encodeURIComponent(local)}`;
+      const res = await fetch(url, { signal: controller.signal });
+      if (controller.signal.aborted) return;
+      if (!res.ok) {
+        nip05Status = 'unresolved';
+        nip05Message = `Could not reach ${domain} (${res.status})`;
+        return;
+      }
+      const json = await res.json();
+      const found: string | undefined = json?.names?.[local];
+      if (!found) {
+        nip05Status = 'unresolved';
+        nip05Message = `${domain} has no entry for "${local}"`;
+        return;
+      }
+      if ($userPublickey && found.toLowerCase() !== $userPublickey.toLowerCase()) {
+        nip05Status = 'unresolved';
+        nip05Message = 'Domain points to a different pubkey than yours';
+        return;
+      }
+      nip05Status = 'valid';
+      nip05Message = '';
+    } catch (e: any) {
+      if (e?.name === 'AbortError' || controller.signal.aborted) return;
+      nip05Status = 'unresolved';
+      nip05Message = `Could not verify with ${domain}`;
+    }
+  }
+
+  function onLud16Change(value: string) {
+    const trimmed = value.trim();
+    if (lud16Timer) {
+      clearTimeout(lud16Timer);
+      lud16Timer = null;
+    }
+    lud16Controller?.abort();
+    lud16Controller = null;
+    if (!trimmed) {
+      lud16Status = 'idle';
+      lud16Message = '';
+      return;
+    }
+    if (!ADDRESS_REGEX.test(trimmed)) {
+      lud16Status = 'invalid';
+      lud16Message = 'Use the form name@example.com';
+      return;
+    }
+    lud16Status = 'checking';
+    lud16Message = '';
+    lud16Timer = setTimeout(() => {
+      verifyLud16(trimmed);
+    }, 500);
+  }
+
+  async function verifyLud16(value: string) {
+    const at = value.indexOf('@');
+    const local = value.slice(0, at);
+    const domain = value.slice(at + 1);
+    const controller = new AbortController();
+    lud16Controller = controller;
+    try {
+      const url = `https://${domain}/.well-known/lnurlp/${encodeURIComponent(local)}`;
+      const res = await fetch(url, { signal: controller.signal });
+      if (controller.signal.aborted) return;
+      if (!res.ok) {
+        lud16Status = 'unresolved';
+        lud16Message = `Could not reach ${domain} (${res.status})`;
+        return;
+      }
+      const json = await res.json();
+      if (json?.tag !== 'payRequest' || !json?.callback) {
+        lud16Status = 'unresolved';
+        lud16Message = `${domain} did not return a valid LNURL response`;
+        return;
+      }
+      lud16Status = 'valid';
+      lud16Message = '';
+    } catch (e: any) {
+      if (e?.name === 'AbortError' || controller.signal.aborted) return;
+      lud16Status = 'unresolved';
+      lud16Message = `Could not verify Lightning address with ${domain}`;
+    }
+  }
+
+  // Drive verification off form changes (debounced inside the handlers).
+  $: onNip05Change(formData.nip05);
+  $: onLud16Change(formData.lud16);
+  $: hasValidationError = nip05Status === 'invalid' || lud16Status === 'invalid';
+
   // Track modal open state to initialize only once per open
   let wasOpen = false;
 
   // Initialize form when modal transitions from closed to open
   function initializeForm() {
     if (!profile) return;
+
+    // Read noffer tolerantly — the field key isn't formally
+    // standardised; `noffer` is what bxrd.app writes but accept
+    // `offer` / `clink_offer` as fallbacks in case a different client
+    // chose a slightly different key for the same value.
+    const rawNoffer =
+      (typeof profile.noffer === 'string' && profile.noffer) ||
+      (typeof profile.offer === 'string' && profile.offer) ||
+      (typeof profile.clink_offer === 'string' && profile.clink_offer) ||
+      '';
 
     formData = {
       display_name: profile.displayName || profile.display_name || '',
@@ -62,11 +220,13 @@
       banner: profile.banner || '',
       nip05: profile.nip05 || '',
       website: profile.website || '',
-      lud16: profile.lud16 || ''
+      lud16: profile.lud16 || '',
+      noffer: rawNoffer
     };
     error = null;
     backupStatus = 'idle';
     showRestorePanel = false;
+    showAdvanced = false;
     fetchLastBackupTimestamp();
   }
 
@@ -252,6 +412,14 @@
   async function saveProfile() {
     if (!$userPublickey || saving) return;
 
+    if (hasValidationError) {
+      error =
+        (nip05Status === 'invalid' && nip05Message) ||
+        (lud16Status === 'invalid' && lud16Message) ||
+        'Please fix the highlighted fields.';
+      return;
+    }
+
     saving = true;
     error = null;
     backupStatus = 'backing-up';
@@ -283,7 +451,8 @@
         banner: formData.banner.trim(),
         nip05: formData.nip05.trim(),
         website: formData.website.trim(),
-        lud16: formData.lud16.trim()
+        lud16: formData.lud16.trim(),
+        noffer: formData.noffer.trim()
       };
 
       // Remove empty strings (optional - keeps profile clean)
@@ -403,8 +572,11 @@
 </script>
 
 <Modal bind:open cleanup={close} noHeader>
-  <!-- Banner Upload Area -->
-  <div class="relative h-40 overflow-hidden -mx-2 md:-mx-8 -mt-6 rounded-b-xl" style="background-color: var(--color-input-bg);">
+  <!-- Banner Upload Area. Top corners inherit the dialog's rounding
+       (clipped via the dialog's overflow-hidden); bottom is squared so
+       the banner sits flush against the avatar / form below instead of
+       carving an awkward curve into the modal content area. -->
+  <div class="relative h-40 overflow-hidden -mx-2 md:-mx-8 -mt-6" style="background-color: var(--color-input-bg);">
     {#if formData.banner}
       <img src={formData.banner} alt="Banner" class="w-full h-full object-cover" />
     {:else}
@@ -429,41 +601,54 @@
         disabled={uploadingBanner}
       />
     </label>
+
+    <!-- Close button — overlays the banner's top-right corner so it
+         sits in the actual top-right of the dialog (the banner bleeds
+         past the dialog padding via -mx/-mt). Z-index above the
+         upload label so clicks land on the X, not the upload picker. -->
+    <button
+      type="button"
+      class="profile-edit-close-btn"
+      on:click={close}
+      aria-label="Close"
+    >
+      <CloseIcon size={24} weight="fill" />
+    </button>
   </div>
 
-  <!-- Avatar and Close button row -->
-  <div class="flex justify-between items-center -mt-12 mb-4 relative z-10">
+  <!-- Avatar row -->
+  <div class="flex -mt-12 mb-4 relative z-10">
     <!-- Avatar Upload Area -->
     <div class="relative w-24 h-24 ml-2">
-    <div class="w-24 h-24 rounded-full overflow-hidden border-4" style="border-color: var(--color-bg-secondary); background-color: var(--color-input-bg);">
-      {#if formData.picture}
-        <img src={formData.picture} alt="Profile" class="w-full h-full object-cover" />
-      {:else}
-        <div class="w-full h-full flex items-center justify-center">
-          <CameraIcon size={32} class="text-caption" />
-        </div>
-      {/if}
+      <div
+        class="w-24 h-24 rounded-full overflow-hidden border-4"
+        style="border-color: var(--color-bg-secondary); background-color: var(--color-input-bg);"
+      >
+        {#if formData.picture}
+          <img src={formData.picture} alt="Profile" class="w-full h-full object-cover" />
+        {:else}
+          <div class="w-full h-full flex items-center justify-center">
+            <CameraIcon size={32} class="text-caption" />
+          </div>
+        {/if}
+      </div>
+      <label
+        class="absolute inset-0 w-24 h-24 rounded-full flex items-center justify-center cursor-pointer bg-black/30 hover:bg-black/50 transition-all"
+      >
+        {#if uploadingPicture}
+          <SpinnerIcon size={24} class="text-white animate-spin" />
+        {:else}
+          <CameraIcon size={24} class="text-white" />
+        {/if}
+        <input
+          type="file"
+          class="sr-only"
+          accept="image/*"
+          on:change={handlePictureUpload}
+          disabled={uploadingPicture}
+        />
+      </label>
     </div>
-    <label class="absolute inset-0 w-24 h-24 rounded-full flex items-center justify-center cursor-pointer bg-black/30 hover:bg-black/50 transition-all">
-      {#if uploadingPicture}
-        <SpinnerIcon size={24} class="text-white animate-spin" />
-      {:else}
-        <CameraIcon size={24} class="text-white" />
-      {/if}
-      <input
-        type="file"
-        class="sr-only"
-        accept="image/*"
-        on:change={handlePictureUpload}
-        disabled={uploadingPicture}
-      />
-    </label>
-    </div>
-
-    <!-- Close button -->
-    <button class="cursor-pointer" style="color: var(--color-text-primary)" on:click={close}>
-      <CloseIcon size={24} />
-    </button>
   </div>
 
   <!-- Error Message -->
@@ -485,7 +670,11 @@
     </div>
   {/if}
 
-  <!-- Form Fields -->
+  <!-- Form Fields. Order matches the natural profile-page reading
+       order — identity first, then payment fields, then website at the
+       end. Image URL inputs live under "Advanced" because the avatar /
+       banner are typically set via the upload UI above, not the URL
+       field; surfacing them inline crowded the form. -->
   <div class="flex flex-col gap-4" style="touch-action: auto; user-select: text;">
     <div>
       <label for="profile-display-name" class="block text-sm font-medium mb-1 text-caption">Display Name</label>
@@ -525,41 +714,113 @@
     </div>
 
     <div>
-      <label for="profile-picture-url" class="block text-sm font-medium mb-1 text-caption">Profile Picture URL</label>
-      <input
-        id="profile-picture-url"
-        type="url"
-        class="input w-full"
-        style="touch-action: auto; user-select: text; -webkit-user-select: text;"
-        placeholder="https://..."
-        bind:value={formData.picture}
-      />
-      <p class="text-xs text-caption mt-1">Or click the avatar above to upload</p>
-    </div>
-
-    <div>
-      <label for="profile-banner-url" class="block text-sm font-medium mb-1 text-caption">Banner URL</label>
-      <input
-        id="profile-banner-url"
-        type="url"
-        class="input w-full"
-        style="touch-action: auto; user-select: text; -webkit-user-select: text;"
-        placeholder="https://..."
-        bind:value={formData.banner}
-      />
-      <p class="text-xs text-caption mt-1">Or click the banner above to upload</p>
-    </div>
-
-    <div>
       <label for="profile-nip05" class="block text-sm font-medium mb-1 text-caption">NIP-05 Identifier</label>
-      <input
-        id="profile-nip05"
-        type="text"
-        class="input w-full"
-        style="touch-action: auto; user-select: text; -webkit-user-select: text;"
-        placeholder="you@example.com"
-        bind:value={formData.nip05}
-      />
+      <div class="relative">
+        <input
+          id="profile-nip05"
+          type="text"
+          autocomplete="off"
+          autocapitalize="none"
+          spellcheck="false"
+          inputmode="email"
+          class="input w-full pr-10"
+          class:input-error={nip05Status === 'invalid'}
+          class:input-warning={nip05Status === 'unresolved'}
+          class:input-valid={nip05Status === 'valid'}
+          style="touch-action: auto; user-select: text; -webkit-user-select: text;"
+          placeholder="you@example.com"
+          aria-invalid={nip05Status === 'invalid' || nip05Status === 'unresolved'}
+          aria-describedby={nip05Message ? 'profile-nip05-msg' : undefined}
+          bind:value={formData.nip05}
+        />
+        {#if nip05Status === 'checking'}
+          <SpinnerIcon
+            size={20}
+            class="absolute right-3 top-1/2 -translate-y-1/2 text-caption animate-spin pointer-events-none"
+          />
+        {:else if nip05Status === 'valid'}
+          <CheckCircleIcon
+            size={20}
+            weight="fill"
+            class="absolute right-3 top-1/2 -translate-y-1/2 text-green-500 pointer-events-none"
+          />
+        {:else if nip05Status === 'unresolved'}
+          <WarningCircleIcon
+            size={20}
+            weight="fill"
+            class="absolute right-3 top-1/2 -translate-y-1/2 text-amber-500 pointer-events-none"
+          />
+        {:else if nip05Status === 'invalid'}
+          <WarningCircleIcon
+            size={20}
+            weight="fill"
+            class="absolute right-3 top-1/2 -translate-y-1/2 text-red-500 pointer-events-none"
+          />
+        {/if}
+      </div>
+      {#if nip05Message}
+        <p
+          id="profile-nip05-msg"
+          class="text-xs mt-1"
+          class:text-red-500={nip05Status === 'invalid'}
+          class:text-amber-500={nip05Status === 'unresolved'}
+        >{nip05Message}</p>
+      {/if}
+    </div>
+
+    <div>
+      <label for="profile-lud16" class="block text-sm font-medium mb-1 text-caption">Lightning Address</label>
+      <div class="relative">
+        <input
+          id="profile-lud16"
+          type="text"
+          autocomplete="off"
+          autocapitalize="none"
+          spellcheck="false"
+          inputmode="email"
+          class="input w-full pr-10"
+          class:input-error={lud16Status === 'invalid'}
+          class:input-warning={lud16Status === 'unresolved'}
+          class:input-valid={lud16Status === 'valid'}
+          style="touch-action: auto; user-select: text; -webkit-user-select: text;"
+          placeholder="you@getalby.com"
+          aria-invalid={lud16Status === 'invalid' || lud16Status === 'unresolved'}
+          aria-describedby={lud16Message ? 'profile-lud16-msg' : undefined}
+          bind:value={formData.lud16}
+        />
+        {#if lud16Status === 'checking'}
+          <SpinnerIcon
+            size={20}
+            class="absolute right-3 top-1/2 -translate-y-1/2 text-caption animate-spin pointer-events-none"
+          />
+        {:else if lud16Status === 'valid'}
+          <CheckCircleIcon
+            size={20}
+            weight="fill"
+            class="absolute right-3 top-1/2 -translate-y-1/2 text-green-500 pointer-events-none"
+          />
+        {:else if lud16Status === 'unresolved'}
+          <WarningCircleIcon
+            size={20}
+            weight="fill"
+            class="absolute right-3 top-1/2 -translate-y-1/2 text-amber-500 pointer-events-none"
+          />
+        {:else if lud16Status === 'invalid'}
+          <WarningCircleIcon
+            size={20}
+            weight="fill"
+            class="absolute right-3 top-1/2 -translate-y-1/2 text-red-500 pointer-events-none"
+          />
+        {/if}
+      </div>
+      {#if lud16Message}
+        <p
+          id="profile-lud16-msg"
+          class="text-xs mt-1"
+          class:text-red-500={lud16Status === 'invalid'}
+          class:text-amber-500={lud16Status === 'unresolved'}
+        >{lud16Message}</p>
+      {/if}
     </div>
 
     <div>
@@ -574,16 +835,82 @@
       />
     </div>
 
-    <div>
-      <label for="profile-lud16" class="block text-sm font-medium mb-1 text-caption">Lightning Address</label>
-      <input
-        id="profile-lud16"
-        type="text"
-        class="input w-full"
-        style="touch-action: auto; user-select: text; -webkit-user-select: text;"
-        placeholder="you@getalby.com"
-        bind:value={formData.lud16}
-      />
+    <!-- Advanced: image URLs. Collapsed by default — most users set
+         these via the avatar/banner upload widgets above. -->
+    <div class="border-t pt-3" style="border-color: var(--color-input-border);">
+      <button
+        type="button"
+        class="w-full flex items-center justify-between text-sm font-medium text-caption hover:text-primary transition-colors"
+        on:click={() => (showAdvanced = !showAdvanced)}
+        aria-expanded={showAdvanced}
+        aria-controls="profile-advanced-section"
+      >
+        <span>Advanced</span>
+        <CaretDownIcon
+          size={16}
+          weight="bold"
+          class="transition-transform {showAdvanced ? 'rotate-180' : ''}"
+        />
+      </button>
+
+      {#if showAdvanced}
+        <div id="profile-advanced-section" class="flex flex-col gap-4 mt-4">
+          <div>
+            <label
+              for="profile-picture-url"
+              class="block text-sm font-medium mb-1 text-caption">Profile Picture URL</label
+            >
+            <input
+              id="profile-picture-url"
+              type="url"
+              class="input w-full"
+              style="touch-action: auto; user-select: text; -webkit-user-select: text;"
+              placeholder="https://..."
+              bind:value={formData.picture}
+            />
+            <p class="text-xs text-caption mt-1">Or click the avatar above to upload</p>
+          </div>
+
+          <div>
+            <label
+              for="profile-banner-url"
+              class="block text-sm font-medium mb-1 text-caption">Banner URL</label
+            >
+            <input
+              id="profile-banner-url"
+              type="url"
+              class="input w-full"
+              style="touch-action: auto; user-select: text; -webkit-user-select: text;"
+              placeholder="https://..."
+              bind:value={formData.banner}
+            />
+            <p class="text-xs text-caption mt-1">Or click the banner above to upload</p>
+          </div>
+
+          <div>
+            <label
+              for="profile-noffer"
+              class="block text-sm font-medium mb-1 text-caption">CLINK offer</label
+            >
+            <input
+              id="profile-noffer"
+              type="text"
+              class="input w-full"
+              style="touch-action: auto; user-select: text; -webkit-user-select: text;"
+              placeholder="noffer1..."
+              bind:value={formData.noffer}
+              autocomplete="off"
+              autocorrect="off"
+              autocapitalize="off"
+              spellcheck="false"
+            />
+            <p class="text-xs text-caption mt-1">
+              CLINK static offer for self-custodial Lightning payments. Generate one with Zeus,
+              ShockWallet or Lightning.Pub.
+            </p>
+          </div>
+        </div>
+      {/if}
     </div>
   </div>
 
@@ -594,7 +921,7 @@
     </Button>
     <Button
       on:click={saveProfile}
-      disabled={saving || uploadingPicture || uploadingBanner}
+      disabled={saving || uploadingPicture || uploadingBanner || hasValidationError}
       class="flex-1"
     >
       {#if saving}
@@ -672,3 +999,58 @@
     {/if}
   </div>
 </Modal>
+
+<style>
+  /* Close (×) — overlays the banner's top-right corner. The banner
+     bleeds past the dialog's padding via `-mx-2 md:-mx-8 -mt-6` and
+     this button rides along, sitting in the actual top-right of the
+     dialog regardless of the dialog's padding. Translucent black pill
+     so the X reads on both light and dark banner photos. */
+  .profile-edit-close-btn {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    width: 36px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 9999px;
+    background-color: rgba(0, 0, 0, 0.45);
+    color: #fff;
+    border: none;
+    cursor: pointer;
+    z-index: 20;
+    transition: background-color 0.15s ease-out;
+  }
+  .profile-edit-close-btn:hover {
+    background-color: rgba(0, 0, 0, 0.65);
+  }
+  .profile-edit-close-btn:focus-visible {
+    outline: 2px solid #fff;
+    outline-offset: 2px;
+  }
+
+
+  .input-error {
+    border-color: rgb(239 68 68) !important;
+  }
+  .input-error:focus {
+    outline-color: rgb(239 68 68);
+    box-shadow: 0 0 0 1px rgb(239 68 68);
+  }
+  .input-valid {
+    border-color: rgb(34 197 94) !important;
+  }
+  .input-valid:focus {
+    outline-color: rgb(34 197 94);
+    box-shadow: 0 0 0 1px rgb(34 197 94);
+  }
+  .input-warning {
+    border-color: rgb(245 158 11) !important;
+  }
+  .input-warning:focus {
+    outline-color: rgb(245 158 11);
+    box-shadow: 0 0 0 1px rgb(245 158 11);
+  }
+</style>

@@ -12,6 +12,7 @@
   import SignOutIcon from 'phosphor-svelte/lib/SignOut';
   import ShieldCheckIcon from 'phosphor-svelte/lib/ShieldCheck';
   import WarningIcon from 'phosphor-svelte/lib/Warning';
+  import ChatIcon from 'phosphor-svelte/lib/ChatCircle';
   import Button from '../../components/Button.svelte';
   import Modal from '../../components/Modal.svelte';
   import Accordion from '../../components/Accordion.svelte';
@@ -20,6 +21,7 @@
   import { theme, type Theme } from '$lib/themeStore';
   import { displayCurrency, SUPPORTED_CURRENCIES, type CurrencyCode } from '$lib/currencyStore';
   import { getAuthManager, type NIP46ConnectionInfo } from '$lib/authManager';
+  import { signNip98AuthHeader } from '$lib/nip98';
   import {
     userPublickey,
     ndk,
@@ -36,9 +38,12 @@
   import {
     oneTapZapEnabled,
     oneTapZapAmount,
+    defaultZapMessage,
     setOneTapZapEnabled,
     setOneTapZapAmount,
-    MAX_ONE_TAP_ZAP_AMOUNT
+    setDefaultZapMessage,
+    MAX_ONE_TAP_ZAP_AMOUNT,
+    MAX_ZAP_MESSAGE_LENGTH
   } from '$lib/autoZapSettings';
   import { hellthreadThreshold } from '$lib/hellthreadFilterSettings';
   import {
@@ -369,10 +374,24 @@
     if (!pk) return;
     membershipLoading = true;
     try {
+      // NIP-98 auth proves we own this pubkey, unlocking the full
+      // record (expiry, payment method). Without a signer we fall back
+      // to the public shape — tier badge only.
+      const bodyString = JSON.stringify({ pubkey: pk });
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      try {
+        headers.Authorization = await signNip98AuthHeader($ndk, {
+          method: 'POST',
+          url: `${location.origin}/api/membership/check-status`,
+          bodyString
+        });
+      } catch {
+        // No signer available — public shape is fine.
+      }
       const res = await fetch('/api/membership/check-status', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pubkey: pk })
+        headers,
+        body: bodyString
       });
       if (res.ok) {
         membershipData = await res.json();
@@ -574,16 +593,19 @@
           </div>
 
           <div class="flex flex-col gap-2 text-sm">
-            <div class="flex justify-between">
-              <span class="text-caption">{membershipData.isExpired ? 'Expired' : 'Expires'}</span>
-              <span style="color: var(--color-text-primary)">
-                {expiryDate.toLocaleDateString('en-US', {
-                  year: 'numeric',
-                  month: 'long',
-                  day: 'numeric'
-                })}
-              </span>
-            </div>
+            <!-- Only present on the NIP-98 owner-tier response; the public shape carries no expiry -->
+            {#if member.subscription_end}
+              <div class="flex justify-between">
+                <span class="text-caption">{membershipData.isExpired ? 'Expired' : 'Expires'}</span>
+                <span style="color: var(--color-text-primary)">
+                  {expiryDate.toLocaleDateString('en-US', {
+                    year: 'numeric',
+                    month: 'long',
+                    day: 'numeric'
+                  })}
+                </span>
+              </div>
+            {/if}
             <div class="flex justify-between">
               <span class="text-caption">Payment</span>
               <span style="color: var(--color-text-primary)">
@@ -1029,6 +1051,40 @@
               Connect a Spark or NWC wallet to enable one-tap zaps.
             </p>
           {/if}
+        </div>
+
+        <!-- Default Zap Message — applies to ALL zaps (both ZapModal and
+             one-tap), not just one-tap, so it sits outside the one-tap
+             wallet-gating block. Pre-fills the ZapModal message textarea
+             on open; users can override per-zap. -->
+        <div class="p-4 rounded-xl" style="border: 1px solid var(--color-input-border);">
+          <label for="default-zap-message" class="block">
+            <div class="flex items-center gap-2 mb-1">
+              <ChatIcon size={18} weight="fill" class="text-amber-500" />
+              <span class="font-medium" style="color: var(--color-text-primary)"
+                >Default zap message</span
+              >
+            </div>
+            <p class="text-sm text-caption mb-3">
+              Pre-fills the zap message field. You can edit or clear it before each zap.
+            </p>
+          </label>
+          <!-- bind:value keeps the store + localStorage in sync on every
+               keystroke (the autoZapSettings subscriber persists). on:change
+               (which fires on blur) handles the NIP-78 relay publish so we
+               don't spam relays during typing. -->
+          <textarea
+            id="default-zap-message"
+            rows="2"
+            maxlength={MAX_ZAP_MESSAGE_LENGTH}
+            bind:value={$defaultZapMessage}
+            on:change={() => setDefaultZapMessage($defaultZapMessage)}
+            placeholder="e.g. Thanks for the great recipe!"
+            class="input w-full resize-none"
+          ></textarea>
+          <p class="text-xs text-caption mt-2 text-right">
+            {$defaultZapMessage.length}/{MAX_ZAP_MESSAGE_LENGTH}
+          </p>
         </div>
       </div>
     </Accordion>
