@@ -1,6 +1,6 @@
 <script lang="ts">
   import { fly, slide } from 'svelte/transition';
-  import { goto } from '$app/navigation';
+  import { goto, afterNavigate } from '$app/navigation';
   import { nip19 } from 'nostr-tools';
   import { onMount, onDestroy } from 'svelte';
   import { browser } from '$app/environment';
@@ -13,7 +13,6 @@
   import ShoppingCartIcon from 'phosphor-svelte/lib/ShoppingCart';
   import FloppyDiskIcon from 'phosphor-svelte/lib/FloppyDisk';
   import WalletIcon from 'phosphor-svelte/lib/Wallet';
-  import PlantIcon from 'phosphor-svelte/lib/Plant';
   import SparkleIcon from 'phosphor-svelte/lib/Sparkle';
   import CheffyIcon from './icons/CheffyIcon.svelte';
   import SunIcon from 'phosphor-svelte/lib/Sun';
@@ -108,6 +107,13 @@
   function close() {
     userSidePanelOpen.set(false);
   }
+
+  // The desktop side nav stays visible and clickable above the
+  // backdrop while this panel is open — close the panel whenever a
+  // navigation happens so it doesn't linger over the new page.
+  afterNavigate(() => {
+    if ($userSidePanelOpen) close();
+  });
 
   function handleBackdropClick(e: MouseEvent) {
     if (e.target === e.currentTarget) {
@@ -467,16 +473,6 @@
           Community Relays
         </h3>
         <ul class="flex flex-col gap-1">
-          <li>
-            <button
-              on:click={() => navigate('/garden')}
-              class="w-full flex items-center gap-4 px-4 py-3 rounded-xl hover:bg-opacity-50 transition-colors cursor-pointer"
-              style="color: var(--color-text-primary);"
-            >
-              <PlantIcon size={22} />
-              <span class="font-medium">The Garden</span>
-            </button>
-          </li>
           <li>
             <button
               on:click={() => navigate('/pantry')}

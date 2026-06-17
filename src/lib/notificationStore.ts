@@ -20,12 +20,15 @@ export interface Notification {
   read: boolean;
 }
 
-const STORAGE_KEY = 'zc_notifications_v6'; // Cursor-based pagination
+// v7: drop caches written before the cleanContentForPreview lookbehind fix —
+// they contain mentions already mangled to a dangling "nostr: ".
+const STORAGE_KEY = 'zc_notifications_v7';
 const MAX_STORED_NOTIFICATIONS = 100; // Only store recent notifications for quick load
 
 // Load from localStorage
 function loadNotifications(): Notification[] {
   try {
+    localStorage.removeItem('zc_notifications_v6'); // orphaned pre-v7 cache
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored) {
       const parsed = JSON.parse(stored) as Notification[];
@@ -225,36 +228,63 @@ export function subscribeToNotifications(ndk: NDK, userPubkey: string, forceFull
     { closeOnEose: false }
   );
 
-  activeSubscription.on('event', async (event: NDKEvent) => {
+  // Buffer events received before EOSE so we can insert them in one
+  // addBulk() call (one sort + one localStorage write) instead of doing
+  // a full sort + localStorage write for every individual event.
+  let eoseReceived = false;
+  const preEoseBuffer: NDKEvent[] = [];
+
+  function handleEvent(event: NDKEvent, isRealtime: boolean) {
     // For zap receipts (9735), the pubkey is the zapper service, not the sender.
     // Self-zap filtering happens in parseNotification after extracting the real sender.
-    if (event.kind !== 9735 && event.pubkey === userPubkey) {
-      return;
-    }
-
-    // Filter out hellthreads (events with excessive p tags)
-    if (isHellthread(event)) {
-      return;
-    }
+    if (event.kind !== 9735 && event.pubkey === userPubkey) return;
+    if (isHellthread(event)) return;
 
     const notification = parseNotification(event, userPubkey);
-    if (notification) {
-      // Add to store
-      notifications.add(notification);
+    if (!notification) return;
 
-      // Record NIP-57 zap data to Spark SDK for received zaps
-      if (event.kind === 9735) {
-        recordZapToSparkSdk(event);
-      }
+    if (!isRealtime) {
+      // Pre-EOSE: buffer for bulk insert
+      preEoseBuffer.push(event);
+      return;
+    }
 
-      // Send local notification if app is backgrounded and permissions are granted
-      if (browser) {
-        try {
-          await sendLocalNotificationForNostrEvent(notification);
-        } catch (error) {
-          console.error('[Notifications] Error sending local notification:', error);
-        }
+    // Post-EOSE realtime event: add individually (rare, no perf issue)
+    notifications.add(notification);
+
+    if (event.kind === 9735) recordZapToSparkSdk(event);
+
+    if (browser) {
+      sendLocalNotificationForNostrEvent(notification).catch((error) => {
+        console.error('[Notifications] Error sending local notification:', error);
+      });
+    }
+  }
+
+  activeSubscription.on('event', (event: NDKEvent) => {
+    handleEvent(event, eoseReceived);
+  });
+
+  activeSubscription.on('eose', () => {
+    eoseReceived = true;
+    if (preEoseBuffer.length === 0) return;
+
+    // Parse + dedup the buffer, then bulk-insert (one sort + one localStorage write)
+    const parsed: Notification[] = [];
+    const seenIds = new Set<string>();
+    for (const event of preEoseBuffer) {
+      if (seenIds.has(event.id)) continue;
+      seenIds.add(event.id);
+      const notification = parseNotification(event, userPubkey);
+      if (notification) {
+        parsed.push(notification);
+        if (event.kind === 9735) recordZapToSparkSdk(event);
       }
+    }
+    preEoseBuffer.length = 0;
+
+    if (parsed.length > 0) {
+      notifications.addBulk(parsed);
     }
   });
 
@@ -375,8 +405,11 @@ function cleanContentForPreview(content: string): string {
     // Remove image URLs (they don't render in text previews)
     .replace(/https?:\/\/[^\s]+\.(?:jpg|jpeg|png|gif|webp|svg|bmp|avif)(?:\?[^\s]*)?/gi, '')
     .replace(/https?:\/\/(?:i\.)?(?:nostr\.build|imgur\.com|primal\.b-cdn\.net|image\.nostr\.build|void\.cat|m\.primal\.net|cdn\.satellite\.earth)[^\s]*/gi, '')
-    // Remove standalone bech32 identifiers (without nostr: prefix) — display layer only resolves nostr: URIs
-    .replace(/\b(?:note1|nevent1|naddr1|npub1|nprofile1)[023456789ac-hj-np-z]{20,}\b/gi, ' ')
+    // Remove standalone bech32 identifiers (without nostr: prefix) — display layer only resolves nostr: URIs.
+    // The lookbehind keeps `nostr:npub1…` mentions intact; without it the bech32
+    // gets stripped out of the URI, leaving a dangling literal "nostr: " that the
+    // display layer can no longer resolve to a name.
+    .replace(/(?<!nostr:)\b(?:note1|nevent1|naddr1|npub1|nprofile1)[023456789ac-hj-np-z]{20,}\b/gi, ' ')
     // Clean up multiple spaces and newlines
     .replace(/\s+/g, ' ')
     .trim();
@@ -451,9 +484,9 @@ function parseNotification(event: NDKEvent, userPubkey: string): Notification | 
     }
 
     case 1: { // Reply or mention
-      // NIP-10: Distinguish replies from mentions.
-      // A reply has e tags with 'reply'/'root' markers or uses deprecated positional e tags.
-      // A mention is a standalone post that p-tags the user but has no e tags (not in a thread).
+      // NIP-10: events with e-tags are replies in a thread; events without are standalone notes.
+      // Both types p-tag the user — "mention" here means no thread context, "comment" means
+      // there is one. The Mentions UI tab shows both types (any note that tagged you).
       const eTags = event.tags.filter((t) => t[0] === 'e');
       const isReply = eTags.length > 0;
 

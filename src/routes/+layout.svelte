@@ -3,8 +3,8 @@
   import '../app.css';
   import Header from '../components/Header.svelte';
   import { browser } from '$app/environment';
-  import { page } from '$app/stores';
-  import { goto } from '$app/navigation';
+  import { page, updated } from '$app/stores';
+  import { goto, beforeNavigate } from '$app/navigation';
   import { userPublickey, ndk } from '$lib/nostr';
   import BottomNav from '../components/BottomNav.svelte';
   import DesktopSideNav from '../components/DesktopSideNav.svelte';
@@ -52,6 +52,98 @@
   // Refresh engagement counts when the tab returns from background
   import { tabVisibleAfterHide } from '$lib/tabVisibility';
   import { refreshActiveEngagement } from '$lib/engagementCache';
+
+  // Version-skew guard: when a new deploy is detected (kit.version
+  // pollInterval in svelte.config.js), turn the next client-side navigation
+  // into a full-page load. Cloudflare Pages removes the previous deploy's
+  // immutable assets, so stale clients otherwise 404 on chunk imports when
+  // navigating (broken tabs until a hard refresh).
+  beforeNavigate(({ willUnload, to, cancel }) => {
+    if ($updated && !willUnload && to?.url) {
+      // Cancel the client-side navigation first so SvelteKit doesn't start
+      // resolving (stale) route chunks before the full-page load takes over.
+      cancel();
+      location.href = to.url.href;
+    }
+  });
+
+  // Recovery for chunk-load failures (stale deploy assets): reload AT MOST
+  // ONCE per browser session. The previous design re-armed after 10s of
+  // health, which produced a reload roughly every 10s on clients where the
+  // failure recurs indefinitely (e.g. iOS Safari with a content blocker or
+  // poisoned HTML cache). sessionStorage survives reloads in the same tab,
+  // so a recovery reload that didn't fix the problem can never repeat —
+  // further failures are only counted and logged.
+  const RECOVERY_RELOAD_KEY = 'zc:recovery-reload';
+
+  interface RecoveryReloadRecord {
+    /** Set when the one recovery reload of this session was triggered. */
+    reloadedAt?: number;
+    /** Total vite:preloadError events this session, including suppressed ones. */
+    errors: number;
+    /** Message of the most recent preload error (failing chunk URL when available). */
+    lastError?: string;
+    lastErrorAt?: number;
+  }
+
+  onMount(() => {
+    const readRecord = (): RecoveryReloadRecord => {
+      try {
+        const parsed = JSON.parse(sessionStorage.getItem(RECOVERY_RELOAD_KEY) ?? '');
+        if (parsed && typeof parsed === 'object') {
+          const rec = parsed as Partial<RecoveryReloadRecord>;
+          return { ...rec, errors: typeof rec.errors === 'number' ? rec.errors : 0 };
+        }
+      } catch {
+        // Missing or corrupt record — start fresh.
+      }
+      return { errors: 0 };
+    };
+
+    const onPreloadError = (event: Event) => {
+      // Vite attaches the underlying error as `payload` on the event.
+      const payload = (event as Event & { payload?: unknown }).payload;
+      const message =
+        payload instanceof Error ? payload.message : String(payload ?? 'unknown preload error');
+
+      const record = readRecord();
+      record.errors += 1;
+      record.lastError = message;
+      record.lastErrorAt = Date.now();
+
+      if (record.reloadedAt) {
+        // Already used this session's one recovery reload — never reload
+        // again. Persist the counter for diagnostics and let the failure
+        // surface normally (SvelteKit error handling / console).
+        try {
+          sessionStorage.setItem(RECOVERY_RELOAD_KEY, JSON.stringify(record));
+        } catch {
+          // ignore storage errors
+        }
+        console.warn(
+          `[recovery] Chunk preload failed again after recovery reload (error #${record.errors}); suppressing further reloads.`,
+          message
+        );
+        return;
+      }
+
+      record.reloadedAt = Date.now();
+      try {
+        // sessionStorage writes are synchronous — the record is durably in
+        // place before reload() below, so the post-reload page always sees
+        // reloadedAt and cannot reload a second time.
+        sessionStorage.setItem(RECOVERY_RELOAD_KEY, JSON.stringify(record));
+      } catch {
+        // No storage means no loop protection — never reload in that case.
+        return;
+      }
+      event.preventDefault();
+      location.reload();
+    };
+    window.addEventListener('vite:preloadError', onPreloadError);
+
+    return () => window.removeEventListener('vite:preloadError', onPreloadError);
+  });
 
   // Accept props from SvelteKit to prevent warnings
   export let data: LayoutData = {} as LayoutData;
@@ -352,6 +444,20 @@
       cleanupLegacyScanCache();
     } catch (err) {
       console.warn('[nourish.scan-cleanup.import-failed]', err);
+    }
+  });
+
+  // Drop the Garden feed's IndexedDB cache, orphaned when the garden
+  // relay was decommissioned. Fire-and-forget: a failed or blocked
+  // delete must never delay app init — it simply runs again on a
+  // future load (deleting a nonexistent database is a no-op).
+  onMount(() => {
+    if (browser) {
+      try {
+        indexedDB.deleteDatabase('zapcooking-garden-cache');
+      } catch {
+        // ignore — implicitly retried on the next app load
+      }
     }
   });
 

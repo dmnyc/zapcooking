@@ -19,6 +19,7 @@
   import LongformFoodFeed from '../../components/LongformFoodFeed.svelte';
   import LandingImportHero from '../../components/LandingImportHero.svelte';
   import CheffyHomeCard from '../../components/CheffyHomeCard.svelte';
+  import CheffyExploreInvite from '../../components/CheffyExploreInvite.svelte';
   import type { NDKEvent } from '@nostr-dev-kit/ndk';
   import { nip19 } from 'nostr-tools';
   import { init, markOnce } from '$lib/perf/explorePerf';
@@ -46,6 +47,7 @@
   let cookingToolsTipEl: HTMLDivElement | null = null;
   let tipPointerX = '2.5rem';
   let tipTop = '0.5rem';
+  let tipLeft = '0.75rem';
   let tipPointerScheduled = false;
   $: showCookingToolsTip = $cookingToolsTipVisible;
   function dismissCookingToolsTip() {
@@ -88,12 +90,28 @@
     const anchorRect = anchor.getBoundingClientRect();
     const anchorCenter = anchorRect.left + anchorRect.width / 2;
     const arrowOffset = 16;
-    const rawPointerX = anchorCenter - tipRect.left;
+
+    // Preferred arrow inset from the tip's left edge
+    const arrowInset = 28;
+    const leftMargin = 8;
+    const rightMargin = 12;
+    const viewportWidth = window.innerWidth;
+
+    // Position the balloon so the arrow lands on the anchor center
+    const idealLeft = anchorCenter - arrowInset;
+    const clampedLeft = Math.min(
+      Math.max(idealLeft, leftMargin),
+      viewportWidth - tipRect.width - rightMargin
+    );
+
+    // Recalculate the arrow's actual offset within the (possibly clamped) balloon
+    const actualPointerX = anchorCenter - clampedLeft;
     const minPointerX = 18;
     const maxPointerX = Math.max(minPointerX, tipRect.width - 18);
 
     tipTop = `${Math.max(anchorRect.bottom + arrowOffset, 8)}px`;
-    tipPointerX = `${Math.min(Math.max(rawPointerX, minPointerX), maxPointerX)}px`;
+    tipLeft = `${clampedLeft}px`;
+    tipPointerX = `${Math.min(Math.max(actualPointerX, minPointerX), maxPointerX)}px`;
   }
 
   $: if (showCookingToolsTip) {
@@ -515,7 +533,7 @@
       </section>
 
       <!-- What are you cooking? — Intent Cards -->
-      <section class="flex flex-col gap-3">
+      <section class="flex flex-col gap-3" data-cheffy-invite-anchor>
         <h2 class="text-lg font-semibold" style="color: var(--color-text-primary);">
           What are you cooking?
         </h2>
@@ -580,6 +598,9 @@
   </div>
 </PullToRefresh>
 
+<!-- First-use Cheffy experience invite (non-members only; self-gating) -->
+<CheffyExploreInvite />
+
 <!-- One-time Cooking Tools tip (4.2 first-60-seconds) -->
 {#if showCookingToolsTip}
   <div use:portal>
@@ -587,7 +608,7 @@
       <div
         bind:this={cookingToolsTipEl}
         class="flex items-start gap-3 p-4 cooking-tools-tip"
-        style={`--tip-pointer-x: ${tipPointerX}; --tip-top: ${tipTop};`}
+        style={`--tip-pointer-x: ${tipPointerX}; --tip-top: ${tipTop}; --tip-left: ${tipLeft};`}
       >
         <span class="text-2xl flex-shrink-0" aria-hidden="true">🍳</span>
         <div class="flex-1 min-w-0">
@@ -658,7 +679,7 @@
   .cooking-tools-tip {
     position: absolute;
     top: var(--tip-top, 0.5rem);
-    right: 0.75rem;
+    left: var(--tip-left, 0.75rem);
     max-width: min(260px, 78vw);
     border-radius: 18px;
     border: 2px solid var(--tip-border);

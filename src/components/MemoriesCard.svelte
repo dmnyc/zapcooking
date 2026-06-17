@@ -137,7 +137,7 @@
               class="text-sm font-semibold whitespace-nowrap"
               style="color: var(--color-text-primary);"
             >
-              On this day
+              Memories
             </span>
             <span
               class="ml-auto flex-shrink-0 pr-1"
@@ -157,7 +157,10 @@
               </span>
             </span>
           </span>
-          <!-- Row 2: summary -->
+          <!-- Row 2: subheading + summary -->
+          <span class="block text-xs mt-0.5" style="color: var(--color-text-secondary);">
+            A look back at notes from this day
+          </span>
           <span class="block text-xs mt-0.5" style="color: var(--color-text-secondary);">
             {summary}
           </span>

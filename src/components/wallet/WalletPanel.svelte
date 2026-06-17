@@ -159,6 +159,10 @@
     getWeblnBalance
   } from '$lib/wallet/webln';
   import { lightningService } from '$lib/lightningService';
+  import { isNofferString, decodeNoffer } from '$lib/clink/noffer';
+  import { decode as decodeBolt11 } from '@gandlaf21/bolt11-decode';
+  import { requestInvoice } from '$lib/clink/nofferClient';
+  import { NofferError, type NofferData } from '$lib/clink/types';
   import { displayCurrency } from '$lib/currencyStore';
   import CurrencySelector from '../CurrencySelector.svelte';
   import DenominatedBalance from '../DenominatedBalance.svelte';
@@ -417,14 +421,35 @@
   // future session can decrypt. Since we can't reliably tell which
   // remote signers do this, the conservative default is to allow new
   // backups only from nsec / NIP-07 users.
-  $: canShowNostrBackup = encryptionSupported && !isNip46User;
+  //
+  // NOTE: the gate is deliberately NOT a `$:` derived. In this
+  // component (large enough to exceed 192 reactive slots) the compiled
+  // dirty-bitmask guard for `$: canShowNostrBackup = …` stopped
+  // matching the slots its dependencies invalidate, so the derived
+  // latched its initial `false` even after encryptionSupported flipped
+  // true — and the backup buttons never appeared. Template gates
+  // inline the expression (`encryptionSupported && !isNip46User`)
+  // instead, which tracks the two plain variables directly and updates
+  // reliably.
 
-  // Re-check encryption support when NDK signer changes (reactive)
+  // Re-check encryption support when NDK signer changes (reactive).
+  // Note: this only fires when the $ndk STORE re-emits — authManager
+  // attaches the signer by mutating the existing NDK instance, which
+  // the store never re-emits, so this alone can latch a too-early
+  // "false" for the whole session (e.g. checked before a NIP-07
+  // extension injected window.nostr).
   $: {
     const signer = $ndk?.signer;
     if (browser) {
       checkEncryptionSupport();
     }
+  }
+
+  // …so also re-check every time the wallet panel opens. By the time a
+  // user can open the wallet, the extension/signer is up, which makes
+  // the Backup-to-Nostr buttons appear reliably for NIP-07 sessions.
+  $: if (browser && $walletModalOpen) {
+    checkEncryptionSupport();
   }
 
   // Filter pending transactions to only show those for the active wallet
@@ -600,6 +625,24 @@
 
   // Check if input is a Lightning address (contains @)
   $: isLightningAddress = sendInput.includes('@') && !sendInput.toLowerCase().startsWith('lnbc');
+
+  // Check if input is a CLINK noffer1… offer string. Users can paste an
+  // offer string (or scan a `lightning:noffer1…` QR, which the scanner
+  // strips down to the bare token) directly into the Send field. We
+  // decode it here so the amount UI and pay button can react; the actual
+  // RPC + bolt11 payment happens in handleSend → handleSendNoffer.
+  $: isNoffer = isNofferString(sendInput);
+  $: nofferData = (() => {
+    if (!isNoffer) return null;
+    try {
+      return decodeNoffer(sendInput);
+    } catch {
+      return null;
+    }
+  })();
+  // Variable / Spontaneous offers need the user to enter an amount; Fixed
+  // offers carry their price in the offer (TLV-4) so the amount is read-only.
+  $: nofferNeedsAmount = nofferData ? nofferData.pricingType !== 'fixed' : false;
 
   // Breez API key (should be in environment variable)
   const BREEZ_API_KEY = import.meta.env.VITE_BREEZ_API_KEY || '';
@@ -1656,6 +1699,14 @@
       return;
     }
 
+    // CLINK noffer offer string: run the kind-21001 RPC to fetch a bolt11,
+    // then pay that. Handled in a dedicated path because it requires a
+    // round-trip to the offer's relay before there's anything to pay.
+    if (isNoffer) {
+      await handleSendNoffer();
+      return;
+    }
+
     // For Lightning addresses, require amount
     if (isLightningAddress && sendAmount <= 0) {
       sendError = 'Please enter an amount for Lightning address';
@@ -1692,6 +1743,114 @@
       }
     } catch (e) {
       sendError = e instanceof Error ? e.message : 'Payment failed';
+    } finally {
+      isSending = false;
+    }
+  }
+
+  // Pay a CLINK noffer1… offer string pasted (or QR-scanned) into the
+  // Send field. Decodes the offer, runs the kind-21001 RPC against the
+  // offer's relay to obtain a bolt11, then pays it via the active wallet.
+  async function handleSendNoffer() {
+    let data: NofferData;
+    try {
+      data = decodeNoffer(sendInput);
+    } catch (e) {
+      sendError = e instanceof Error ? e.message : "Couldn't read this offer";
+      return;
+    }
+
+    const needsAmount = data.pricingType !== 'fixed';
+    if (needsAmount && sendAmount <= 0) {
+      sendError = 'Please enter an amount for this offer';
+      return;
+    }
+
+    isSending = true;
+    sendError = '';
+    sendSuccess = '';
+
+    try {
+      const { bolt11 } = await requestInvoice(data, {
+        amountSats: needsAmount && sendAmount > 0 ? sendAmount : undefined,
+        description: `Offer: ${data.offerId}`
+      });
+
+      // The service's bolt11 is the source of truth for the amount —
+      // the offer's TLV-4 price can be stale for Fixed offers, and
+      // Spark treats metadata.amount as an explicit amount override
+      // when paying a bolt11, which must match the invoice. Fall back
+      // to the entered/TLV amount only when the invoice is amountless
+      // (Spark needs an explicit amount to pay those).
+      let invoiceAmountSats = 0;
+      try {
+        const decoded = decodeBolt11(bolt11);
+        const amountSection = decoded.sections.find(
+          (s: { name: string; value?: unknown }) => s.name === 'amount'
+        );
+        if (amountSection?.value) {
+          invoiceAmountSats = Math.floor(Number(amountSection.value) / 1000);
+        }
+      } catch {
+        // Undecodable amount section — fall back below.
+      }
+      const paidAmount =
+        invoiceAmountSats > 0 ? invoiceAmountSats : needsAmount ? sendAmount : (data.price ?? 0);
+
+      const result = await sendPayment(bolt11, {
+        amount: paidAmount,
+        description: `CLINK offer: ${data.offerId}`,
+        pubkey: data.pubkey
+      });
+
+      if (result.success) {
+        sendSuccess = 'Payment sent successfully!';
+        await refreshBalance();
+        loadTransactionHistory(true);
+        setTimeout(() => {
+          showSendModal = false;
+          resetSendModal();
+        }, 1500);
+      } else {
+        sendError = result.error || 'Payment failed';
+      }
+    } catch (e) {
+      // Map the most common CLINK failures to friendly copy; fall back to
+      // the raw message otherwise.
+      if (e instanceof NofferError) {
+        switch (e.code) {
+          case 1:
+            sendError = 'This offer is no longer valid.';
+            break;
+          case 2:
+            sendError = "The service couldn't complete the request. Try again in a moment.";
+            break;
+          case 3:
+            sendError = e.latest
+              ? 'This offer has a newer version. Ask the recipient for an updated offer.'
+              : 'This offer has been retired by the recipient.';
+            break;
+          case 4:
+            sendError = "The service doesn't support this kind of payment request.";
+            break;
+          case 5:
+            sendError = e.range
+              ? `Pick an amount between ${e.range.min.toLocaleString()} and ${e.range.max.toLocaleString()} sats.`
+              : "The amount is outside the offer's allowed range.";
+            break;
+          default:
+            sendError = e.message;
+        }
+      } else {
+        const msg = (e instanceof Error ? e.message : String(e)).toLowerCase();
+        if (msg.includes('timed out') || msg.includes('timeout')) {
+          sendError = "The service didn't respond in time. Check your connection and try again.";
+        } else if (msg.includes('sign in')) {
+          sendError = 'Sign in to pay an offer.';
+        } else {
+          sendError = e instanceof Error ? e.message : 'Payment failed';
+        }
+      }
     } finally {
       isSending = false;
     }
@@ -2074,9 +2233,19 @@
       return;
     }
 
-    const mnemonic = restoreMnemonicInput.trim();
+    const mnemonic = restoreMnemonicInput.trim().toLowerCase().replace(/\s+/g, ' ');
     if (!mnemonic) {
       errorMessage = 'Please enter your recovery phrase';
+      return;
+    }
+
+    const words = mnemonic.split(' ');
+    if (![12, 15, 18, 21, 24].includes(words.length)) {
+      errorMessage = `Recovery phrases must be 12, 15, 18, 21, or 24 words (you entered ${words.length})`;
+      return;
+    }
+    if (!words.every((w) => /^[a-z]+$/.test(w))) {
+      errorMessage = 'Recovery phrase contains invalid characters — enter BIP-39 words only';
       return;
     }
 
@@ -3034,7 +3203,7 @@
                       <PencilSimpleIcon size={18} class="text-amber-500 flex-shrink-0" />
                       <span class="text-primary-color">Write down recovery phrase</span>
                     </button>
-                    {#if canShowNostrBackup}
+                    {#if encryptionSupported && !isNip46User}
                       <button
                         class="flex items-center gap-3 w-full py-2.5 px-4 rounded-xl text-sm font-medium text-left transition-colors hover:bg-white/5 disabled:opacity-40"
                         style="border: 1px solid var(--color-input-border);"
@@ -3377,7 +3546,7 @@
                           <KeyIcon size={16} />
                           Recovery Phrase
                         </button>
-                        {#if canShowNostrBackup}
+                        {#if encryptionSupported && !isNip46User}
                           <button
                             class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer hover:bg-white/5 dark:hover:bg-white/5"
                             style="color: var(--color-text-secondary); border: 1px solid var(--color-input-border);"
@@ -3678,7 +3847,7 @@
                         Backup & Recovery
                       </div>
                       <div class="grid grid-cols-2 gap-2">
-                        {#if canShowNostrBackup}
+                        {#if encryptionSupported && !isNip46User}
                           <button
                             class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer hover:bg-white/5"
                             style="background-color: transparent; color: var(--color-text-secondary); border: 1px solid var(--color-input-border);"
@@ -4850,8 +5019,8 @@
 
         <div
           class="grid gap-2 mb-4"
-          class:grid-cols-2={canShowNostrBackup}
-          class:grid-cols-1={!canShowNostrBackup}
+          class:grid-cols-2={encryptionSupported && !isNip46User}
+          class:grid-cols-1={!(encryptionSupported && !isNip46User)}
         >
           {#if walletToDelete.kind === 4}
             <button
@@ -4873,7 +5042,7 @@
               Download
             </button>
           {/if}
-          {#if canShowNostrBackup}
+          {#if encryptionSupported && !isNip46User}
             <button
               class="flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors cursor-pointer hover:bg-white/5"
               style="border: 1px solid var(--color-input-border); color: var(--color-text-primary);"
@@ -5152,16 +5321,16 @@
           <div>
             <label class="block text-sm font-medium mb-2 text-caption">
               {#if $activeWallet?.kind === 4}
-                Invoice, Lightning Address, or Bitcoin Address
+                Invoice, Lightning Address, Bitcoin Address, or CLINK Offer
               {:else}
-                Invoice or Lightning Address
+                Invoice, Lightning Address, or CLINK Offer
               {/if}
             </label>
             <textarea
               bind:value={sendInput}
               placeholder={$activeWallet?.kind === 4
-                ? 'lnbc..., user@example.com, or bc1...'
-                : 'lnbc... or user@example.com'}
+                ? 'lnbc..., user@example.com, bc1..., or noffer1...'
+                : 'lnbc..., user@example.com, or noffer1...'}
               class="w-full p-3 rounded-lg bg-input border border-input text-primary-color placeholder-caption resize-none focus:outline-none focus:ring-2 focus:ring-amber-500"
               rows="3"
               disabled={isSending || isSendingOnchain}
@@ -5192,9 +5361,21 @@
               <div class="mt-1 text-xs text-amber-500 flex items-center gap-1">
                 ₿ Bitcoin address detected - on-chain payment
               </div>
+            {:else if isNoffer}
+              <div class="mt-1 text-xs text-amber-500 flex items-center gap-1">
+                <LightningIcon size={12} weight="fill" />
+                {#if nofferData}
+                  CLINK offer detected{nofferData.pricingType === 'fixed' &&
+                  nofferData.price != null
+                    ? ` · ${nofferData.price.toLocaleString()} sats`
+                    : ''}
+                {:else}
+                  CLINK offer detected
+                {/if}
+              </div>
             {/if}
             <div class="mt-1">
-              {#if sendInput.trim()}
+              {#if sendInput.trim() && !isNoffer}
                 {#if brantaVerifyTriggered}
                   <BrantaBadge paymentString={sendInput.trim()} {rawQrText} />
                 {:else}
@@ -5217,7 +5398,7 @@
             {/if}
           </div>
 
-          {#if isLightningAddress || isBtcAddress}
+          {#if isLightningAddress || isBtcAddress || (isNoffer && nofferNeedsAmount)}
             <div>
               <div class="flex items-center justify-between mb-2">
                 <label class="block text-sm font-medium text-caption">Amount (sats)</label>
@@ -5418,14 +5599,18 @@
           <button
             class="w-full py-3 px-4 rounded-xl bg-amber-500 hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium transition-colors flex items-center justify-center gap-2"
             on:click={handleSend}
-            disabled={isSending || !sendInput.trim() || (isLightningAddress && sendAmount <= 0)}
+            disabled={isSending ||
+              !sendInput.trim() ||
+              (isLightningAddress && sendAmount <= 0) ||
+              (isNoffer && !nofferData) ||
+              (isNoffer && nofferNeedsAmount && sendAmount <= 0)}
           >
             {#if isSending}
               <span class="animate-spin"><ArrowClockwiseIcon size={20} weight="bold" /></span>
-              Sending...
+              {isNoffer ? 'Paying offer...' : 'Sending...'}
             {:else}
               <ArrowUpIcon size={20} weight="bold" />
-              Send Payment
+              {isNoffer ? 'Pay Offer' : 'Send Payment'}
             {/if}
           </button>
         {/if}
@@ -5607,7 +5792,7 @@
             <div class="text-sm text-caption mb-2">Send only Bitcoin to this address:</div>
 
             <!-- QR Code -->
-            <div class="qr-wrapper self-center p-4 rounded-xl bg-white" style="width: 100%;">
+            <div class="qr-wrapper mx-auto p-4 rounded-xl bg-white max-w-xs w-full">
               <svg
                 class="w-full"
                 use:qr={{
@@ -5987,7 +6172,7 @@
 
             <!-- QR Code -->
             {#if generatedInvoice && generatedInvoice.length > 0}
-              <div class="qr-wrapper self-center p-4 rounded-xl bg-white" style="width: 100%;">
+              <div class="qr-wrapper mx-auto p-4 rounded-xl bg-white max-w-xs w-full">
                 <svg
                   class="w-full"
                   use:qr={{

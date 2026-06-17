@@ -293,7 +293,15 @@
   }
 
   async function uploadImage(file: File, type: 'picture' | 'banner'): Promise<string | null> {
-    const url = 'https://nostr.build/api/v2/upload/profile';
+    // Avatars use nostr.build's profile endpoint, which crops to a square pfp.
+    // Banners must NOT be square-cropped — that endpoint squares the image
+    // regardless of the NIP-96 `media_type` hint, which is why banners came
+    // out pfp-shaped. Route banners through the general media endpoint, which
+    // preserves the uploaded aspect ratio (same endpoint the composer uses).
+    const url =
+      type === 'picture'
+        ? 'https://nostr.build/api/v2/upload/profile'
+        : 'https://nostr.build/api/v2/upload/files';
 
     // Validate file
     if (!file.type.startsWith('image/')) {
@@ -576,7 +584,7 @@
        (clipped via the dialog's overflow-hidden); bottom is squared so
        the banner sits flush against the avatar / form below instead of
        carving an awkward curve into the modal content area. -->
-  <div class="relative h-40 overflow-hidden -mx-2 md:-mx-8 -mt-6" style="background-color: var(--color-input-bg);">
+  <div class="relative h-40 overflow-hidden -mx-4 md:-mx-8 -mt-6" style="background-color: var(--color-input-bg);">
     {#if formData.banner}
       <img src={formData.banner} alt="Banner" class="w-full h-full object-cover" />
     {:else}

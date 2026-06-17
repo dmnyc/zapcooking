@@ -157,7 +157,7 @@
     if (activeTab === 'all') return true;
     if (activeTab === 'zaps') return n.type === 'zap';
     if (activeTab === 'replies') return n.type === 'comment';
-    if (activeTab === 'mentions') return n.type === 'mention';
+    if (activeTab === 'mentions') return n.type === 'mention' || n.type === 'comment';
     return true;
   });
 
@@ -695,7 +695,9 @@
         class="flex flex-col items-center justify-center py-16 px-4 rounded-xl text-center"
         style="background-color: var(--color-bg-secondary); border: 1px solid var(--color-input-border);"
       >
-        <span class="text-5xl mb-4" aria-hidden="true">🔔</span>
+        <span class="mb-4" aria-hidden="true" style="color: var(--color-caption);">
+          <BellIcon size={48} weight="regular" />
+        </span>
         <h2 class="text-xl font-semibold mb-2" style="color: var(--color-text-primary);">
           Sign in to see your notifications
         </h2>
@@ -735,14 +737,14 @@
       </div>
 
       {#if $visibleNotifications.length === 0}
-      <div class="text-center py-12 text-caption">
-        <span class="text-5xl">🔔</span>
+      <div class="flex flex-col items-center text-center py-12 text-caption">
+        <BellIcon size={48} weight="regular" aria-hidden="true" />
         <p class="mt-4 text-lg">No notifications yet</p>
         <p class="mt-2">When someone reacts, zaps, or replies to you, it will show up here.</p>
       </div>
     {:else if filteredNotifications.length === 0}
-      <div class="text-center py-12 text-caption">
-        <span class="text-5xl">🔔</span>
+      <div class="flex flex-col items-center text-center py-12 text-caption">
+        <BellIcon size={48} weight="regular" aria-hidden="true" />
         <p class="mt-4 text-lg">No {activeTab === 'all' ? '' : activeTab} notifications</p>
       </div>
     {:else}
@@ -775,7 +777,7 @@
             <button
               on:click={() => item.kind === 'single' ? handleNotificationClick(item.notification) : handleGroupedClick(item)}
               class="notif-row"
-              class:notif-read={isRead}
+              class:notif-unread={!isRead}
               class:notif-zap-accent={isLargeZap(item)}
             >
               <!-- Left gutter: icon + avatar -->
@@ -900,8 +902,11 @@
   .notif-row:hover {
     background-color: var(--color-input-bg);
   }
-  .notif-read {
-    opacity: 0.55;
+  .notif-unread {
+    background-color: color-mix(in srgb, #f97316 6%, transparent);
+  }
+  .notif-unread:hover {
+    background-color: color-mix(in srgb, #f97316 10%, transparent);
   }
   .notif-zap-accent {
     border-left: 2.5px solid #f59e0b;

@@ -95,7 +95,7 @@
 
 <svelte:head>
   <title>Memories - zap.cooking</title>
-  <meta name="description" content="Your notes from this day in past years" />
+  <meta name="description" content="Memories — a look back at notes from this day" />
 </svelte:head>
 
 <div class="px-4 max-w-2xl mx-auto w-full memories-page">
@@ -106,7 +106,7 @@
         Memories
       </h1>
       <p class="text-sm mb-4" style="color: var(--color-text-secondary);">
-        Sign in to see what you were cooking up on this day in past years.
+        A look back at notes from this day. Sign in to see yours.
       </p>
       <a
         href="/login?redirect=/memories"
@@ -120,7 +120,7 @@
       <div>
         <h1 class="text-2xl font-bold" style="color: var(--color-text-primary);">Memories</h1>
         <p class="text-sm mt-1" style="color: var(--color-text-secondary);">
-          On this day · {todayLabel}
+          A look back at notes from this day · {todayLabel}
         </p>
       </div>
       <button
