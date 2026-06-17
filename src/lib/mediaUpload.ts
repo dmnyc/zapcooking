@@ -1,5 +1,6 @@
 import { NDKEvent } from '@nostr-dev-kit/ndk';
 import type NDK from '@nostr-dev-kit/ndk';
+import { verifyEvent, getEventHash } from 'nostr-tools';
 
 const NOSTR_BUILD_URL = 'https://nostr.build/api/v2/upload/files';
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB
@@ -66,6 +67,31 @@ async function buildAuthHeader(ndk: NDK, url: string): Promise<string> {
 		sig: template.sig
 	};
 
+	// TEMP DIAGNOSTICS — confirm whether the signed NIP-98 token is internally
+	// consistent (some NIP-46 bunkers re-stamp created_at when signing, but NDK
+	// keeps the local fields and only attaches the bunker's sig → mismatched id
+	// → nostr.build 401). Remove once root cause is confirmed.
+	try {
+		const recomputedId = getEventHash(authEvent as any);
+		const idMatches = recomputedId === authEvent.id;
+		const sigValid = verifyEvent(authEvent as any);
+		const skew = Math.floor(Date.now() / 1000) - (authEvent.created_at ?? 0);
+		console.log('[NIP98-DEBUG]', {
+			pubkey: authEvent.pubkey,
+			created_at: authEvent.created_at,
+			skewSeconds: skew,
+			kind: authEvent.kind,
+			tags: authEvent.tags,
+			sigPrefix: (authEvent.sig ?? '').slice(0, 16),
+			idMatches,
+			recomputedId,
+			localId: authEvent.id,
+			sigValid
+		});
+	} catch (e) {
+		console.warn('[NIP98-DEBUG] verification threw', e);
+	}
+
 	return `Nostr ${btoa(JSON.stringify(authEvent))}`;
 }
 
@@ -114,6 +140,7 @@ export async function uploadToNostrBuild(
 
 	if (!response.ok) {
 		const firstText = await response.text();
+		console.warn('[NIP98-DEBUG] upload rejected', response.status, firstText); // TEMP
 		if (isAuthFailure(response.status, firstText)) {
 			// Token likely arrived stale (slow remote sign). Retry once with a
 			// fresh timestamp — the signer is warm and approval is now granted.
