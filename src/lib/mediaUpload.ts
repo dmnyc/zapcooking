@@ -76,18 +76,21 @@ async function buildAuthHeader(ndk: NDK, url: string): Promise<string> {
 		const idMatches = recomputedId === authEvent.id;
 		const sigValid = verifyEvent(authEvent as any);
 		const skew = Math.floor(Date.now() / 1000) - (authEvent.created_at ?? 0);
-		console.log('[NIP98-DEBUG]', {
-			pubkey: authEvent.pubkey,
-			created_at: authEvent.created_at,
-			skewSeconds: skew,
-			kind: authEvent.kind,
-			tags: authEvent.tags,
-			sigPrefix: (authEvent.sig ?? '').slice(0, 16),
-			idMatches,
-			recomputedId,
-			localId: authEvent.id,
-			sigValid
-		});
+		console.log(
+			'[NIP98-DEBUG] ' +
+				JSON.stringify({
+					pubkey: authEvent.pubkey,
+					created_at: authEvent.created_at,
+					skewSeconds: skew,
+					kind: authEvent.kind,
+					tags: authEvent.tags,
+					sigPrefix: (authEvent.sig ?? '').slice(0, 16),
+					idMatches,
+					recomputedId,
+					localId: authEvent.id,
+					sigValid
+				})
+		);
 	} catch (e) {
 		console.warn('[NIP98-DEBUG] verification threw', e);
 	}
