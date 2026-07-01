@@ -41,6 +41,7 @@
   import { postComposerOpen } from '$lib/postComposerStore';
   import CookingToolsWidget from '../components/CookingToolsWidget.svelte';
   import UserSidePanel from '../components/UserSidePanel.svelte';
+  import MobileNavDrawer from '../components/MobileNavDrawer.svelte';
   import MobileSearchOverlay from '../components/MobileSearchOverlay.svelte';
   import CheffyLauncher from '../components/CheffyLauncher.svelte';
   import CheffyMessenger from '../components/CheffyMessenger.svelte';
@@ -572,6 +573,7 @@
         <CheffyLauncher />
         <CheffyMessenger />
       {/if}
+      <MobileNavDrawer />
       <UserSidePanel />
       <MobileSearchOverlay />
       <PostModal bind:open={$postComposerOpen} />
