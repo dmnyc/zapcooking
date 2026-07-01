@@ -123,7 +123,11 @@
 </PullToRefresh>
 
 <style>
-  /* Keep relay tabs pinned; feed scrolls beneath them */
+  /* Keep relay tabs pinned below the fixed header; feed scrolls beneath them.
+     top:0 — NOT var(--header-h): #app-scroll already reserves the header height
+     via padding-top, and a sticky child's offset is measured from that
+     container's content box (after the padding), so top: var(--header-h) would
+     pin the tabs at 2x the header height. top:0 pins them flush below it. */
   .kitchen-tabs {
     position: sticky;
     top: 0;

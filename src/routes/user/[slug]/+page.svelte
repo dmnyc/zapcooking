@@ -10,6 +10,7 @@
   import { validateMarkdownTemplate } from '$lib/parser';
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
+  import { browser } from '$app/environment';
   import Avatar from '../../../components/Avatar.svelte';
   import CustomName from '../../../components/CustomName.svelte';
   import Button from '../../../components/Button.svelte';
@@ -37,7 +38,6 @@
   import BookOpenIcon from 'phosphor-svelte/lib/BookOpen';
   import ImageSquareIcon from 'phosphor-svelte/lib/ImageSquare';
   import PlayIcon from 'phosphor-svelte/lib/Play';
-  import type { PageData } from './$types';
   import { onMount, onDestroy } from 'svelte';
   import { Fetch } from 'hurdak';
   import { profileCacheManager } from '$lib/profileCache';
@@ -45,8 +45,10 @@
   import ArticleFeed from '../../../components/ArticleFeed.svelte';
   import MembershipBeltBadge from '../../../components/MembershipBeltBadge.svelte';
   import { fetchUserStatsFromPrimal, getPrimalCache, type PrimalUserStats } from '$lib/primalCache';
-
-  export let data: PageData;
+  import FollowListRecoveryModal from '../../../components/FollowListRecoveryModal.svelte';
+  import QuestionIcon from 'phosphor-svelte/lib/Question';
+  import ArrowCounterClockwiseIcon from 'phosphor-svelte/lib/ArrowCounterClockwise';
+  import MuteListEditor from '../../../components/MuteListEditor.svelte';
 
   let hexpubkey: string | undefined = undefined;
   let events: NDKEvent[] = [];
@@ -54,6 +56,7 @@
   let profile: NDKUserProfile | null = null;
   let loaded = false;
   let zapModal = false;
+  let followRecoveryModal = false;
   let isZapping = false;
 
   // CLINK noffer pulled from the user's kind:0 custom field. NDK
@@ -80,7 +83,8 @@
     | 'media'
     | 'reads'
     | 'following'
-    | 'drafts' = 'posts';
+    | 'drafts'
+    | 'muted' = 'posts';
 
   // Reads tab state (longform articles)
   let readsEvents: NDKEvent[] = [];
@@ -116,9 +120,14 @@
     about?: string;
   };
   let followingProfiles: FollowingProfile[] = [];
+  let followingAllPubkeys: string[] = [];
+  let followingPageOffset = 0;
+  let followingLoadingMore = false;
   let followingLoaded = false;
   let followingLoading = false;
   let followingCount: number | null = null;
+  let followingFetchFailed = false;
+  const FOLLOWING_PAGE_SIZE = 50;
 
   // Infinite scroll state for recipes
   let hasMoreRecipes = true;
@@ -159,7 +168,7 @@
 
   // Track slug changes and reload data when navigating between profiles
   let currentSlug: string | undefined;
-  $: if ($page.params.slug && $page.params.slug !== currentSlug) {
+  $: if (browser && $page.params.slug && $page.params.slug !== currentSlug) {
     currentSlug = $page.params.slug;
     loadData();
   }
@@ -223,9 +232,13 @@
       profileStats = null;
       // Reset following tab state
       followingProfiles = [];
+      followingAllPubkeys = [];
+      followingPageOffset = 0;
+      followingLoadingMore = false;
       followingLoaded = false;
       followingLoading = false;
       followingCount = null;
+      followingFetchFailed = false;
       // Reset mute state
       isMuted = false;
       mutedUsers = [];
@@ -1114,6 +1127,93 @@
     });
   }
 
+  async function fetchFollowingPage(pubkeys: string[]): Promise<FollowingProfile[]> {
+    const profiles: FollowingProfile[] = [];
+    const resolvedPubkeys = new Set<string>();
+    const batchSize = 100;
+
+    for (let i = 0; i < pubkeys.length; i += batchSize) {
+      const batch = pubkeys.slice(i, i + batchSize);
+      try {
+        const profileEvents = await fetchEventsWithTimeout({ kinds: [0], authors: batch }, 8000);
+        for (const event of profileEvents) {
+          try {
+            const profileData = JSON.parse(event.content);
+            resolvedPubkeys.add(event.pubkey);
+            profiles.push({
+              pubkey: event.pubkey,
+              npub: nip19.npubEncode(event.pubkey),
+              name: profileData.display_name || profileData.name || nip19.npubEncode(event.pubkey).slice(0, 12) + '...',
+              picture: profileData.picture,
+              nip05: profileData.nip05,
+              about: profileData.about
+            });
+          } catch {
+            resolvedPubkeys.add(event.pubkey);
+            profiles.push({
+              pubkey: event.pubkey,
+              npub: nip19.npubEncode(event.pubkey),
+              name: nip19.npubEncode(event.pubkey).slice(0, 12) + '...'
+            });
+          }
+        }
+      } catch {
+        console.debug('[Following] Profile batch failed, continuing with what we have');
+      }
+    }
+
+    // Placeholders for pubkeys with no kind:0
+    for (const pk of pubkeys) {
+      if (!resolvedPubkeys.has(pk)) {
+        profiles.push({
+          pubkey: pk,
+          npub: nip19.npubEncode(pk),
+          name: nip19.npubEncode(pk).slice(0, 12) + '...'
+        });
+      }
+    }
+
+    // Resolved names first, truncated npubs last
+    profiles.sort((a, b) => {
+      const aIsNpub = a.name.startsWith('npub1');
+      const bIsNpub = b.name.startsWith('npub1');
+      if (aIsNpub && !bIsNpub) return 1;
+      if (!aIsNpub && bIsNpub) return -1;
+      return a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+    });
+
+    return profiles;
+  }
+
+  async function loadMoreFollowing() {
+    if (followingLoadingMore || followingPageOffset >= followingAllPubkeys.length) return;
+    const requestedPubkey = hexpubkey;
+    followingLoadingMore = true;
+    try {
+      const nextSlice = followingAllPubkeys.slice(
+        followingPageOffset,
+        followingPageOffset + FOLLOWING_PAGE_SIZE
+      );
+      const nextPage = await fetchFollowingPage(nextSlice);
+      if (hexpubkey !== requestedPubkey) return;
+      const combined = [...followingProfiles, ...nextPage];
+      combined.sort((a, b) => {
+        const aIsNpub = a.name.startsWith('npub1');
+        const bIsNpub = b.name.startsWith('npub1');
+        if (aIsNpub && !bIsNpub) return 1;
+        if (!aIsNpub && bIsNpub) return -1;
+        return a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+      });
+      followingProfiles = combined;
+      followingPageOffset = Math.min(
+        followingPageOffset + FOLLOWING_PAGE_SIZE,
+        followingAllPubkeys.length
+      );
+    } finally {
+      followingLoadingMore = false;
+    }
+  }
+
   async function loadFollowing() {
     if (!hexpubkey || followingLoading) return;
 
@@ -1123,28 +1223,34 @@
     try {
       // Step 1: Get the followed pubkeys — try Primal first (fast), fall back to NDK
       let followPubkeys: string[] = [];
+      let fetchSucceeded = false;
 
       const primal = getPrimalCache();
       if (primal) {
         try {
           followPubkeys = await primal.fetchContactList(requestedPubkey, 5000);
+          fetchSucceeded = true;
         } catch (e) {
           console.debug('[Following] Primal contact list failed, trying NDK:', e);
         }
       }
 
       if (followPubkeys.length === 0) {
-        // NDK fallback with a resolving timeout (empty set = timed out)
+        // NDK fallback — use a longer timeout for large contact lists
         try {
           const contactEvents = await fetchEventsWithTimeout(
             { authors: [requestedPubkey], kinds: [3], limit: 1 },
-            8000
+            20000
           );
           const contactList = Array.from(contactEvents)[0];
           if (contactList) {
             followPubkeys = contactList.tags
               .filter((t) => t[0] === 'p' && t[1])
               .map((t) => t[1]);
+            fetchSucceeded = true;
+          } else if (!fetchSucceeded) {
+            // Neither source returned data — may be a network/relay issue
+            console.warn('[Following] Could not fetch contact list from Primal or NDK');
           }
         } catch (e) {
           console.debug('[Following] NDK contact list also failed:', e);
@@ -1158,77 +1264,25 @@
 
       if (followPubkeys.length === 0) {
         followingProfiles = [];
+        // Only mark as a confirmed "no follows" if fetch actually succeeded
+        followingFetchFailed = !fetchSucceeded;
         followingLoaded = true;
         followingLoading = false;
         return;
       }
 
-      // Step 2: Fetch profile metadata via NDK with resolving timeouts per batch
-      const profiles: FollowingProfile[] = [];
-      const resolvedPubkeys = new Set<string>();
-      const batchSize = 100;
-      for (let i = 0; i < followPubkeys.length; i += batchSize) {
-        const batch = followPubkeys.slice(i, i + batchSize);
-
-        // Bail if user navigated away mid-batch
-        if (hexpubkey !== requestedPubkey) return;
-
-        try {
-          const profileEvents = await fetchEventsWithTimeout(
-            { kinds: [0], authors: batch },
-            8000
-          );
-
-          for (const event of profileEvents) {
-            try {
-              const profileData = JSON.parse(event.content);
-              resolvedPubkeys.add(event.pubkey);
-              profiles.push({
-                pubkey: event.pubkey,
-                npub: nip19.npubEncode(event.pubkey),
-                name: profileData.display_name || profileData.name || nip19.npubEncode(event.pubkey).slice(0, 12) + '...',
-                picture: profileData.picture,
-                nip05: profileData.nip05,
-                about: profileData.about
-              });
-            } catch (e) {
-              resolvedPubkeys.add(event.pubkey);
-              profiles.push({
-                pubkey: event.pubkey,
-                npub: nip19.npubEncode(event.pubkey),
-                name: nip19.npubEncode(event.pubkey).slice(0, 12) + '...'
-              });
-            }
-          }
-        } catch (e) {
-          console.debug('[Following] Profile batch failed, continuing with what we have');
-        }
-      }
+      // Step 2: Store all pubkeys and load first page of profiles
+      followingAllPubkeys = followPubkeys;
 
       // Bail if user navigated away
       if (hexpubkey !== requestedPubkey) return;
 
-      // Add placeholder entries for pubkeys we couldn't resolve
-      for (const pk of followPubkeys) {
-        if (!resolvedPubkeys.has(pk)) {
-          profiles.push({
-            pubkey: pk,
-            npub: nip19.npubEncode(pk),
-            name: nip19.npubEncode(pk).slice(0, 12) + '...'
-          });
-        }
-      }
+      const firstPage = await fetchFollowingPage(followPubkeys.slice(0, FOLLOWING_PAGE_SIZE));
 
-      // Sort: resolved names first, then truncated npubs at the end
-      profiles.sort((a, b) => {
-        const aIsNpub = a.name.startsWith('npub1');
-        const bIsNpub = b.name.startsWith('npub1');
-        if (aIsNpub && !bIsNpub) return 1;
-        if (!aIsNpub && bIsNpub) return -1;
-        return a.name.toLowerCase().localeCompare(b.name.toLowerCase());
-      });
+      if (hexpubkey !== requestedPubkey) return;
 
-      followingProfiles = profiles;
+      followingProfiles = firstPage;
+      followingPageOffset = Math.min(FOLLOWING_PAGE_SIZE, followPubkeys.length);
       followingLoaded = true;
     } catch (error) {
       console.error('Error loading following list:', error);
@@ -1493,15 +1547,16 @@
     ? profile.name || (user ? user.npub.slice(0, 10) + '...' : 'Unknown User')
     : 'Unknown User';
 
-  // OG meta: prefer server-provided data (for crawlers), fall back to client data when loaded
+  // OG meta derived entirely from client-side NDK profile data once loaded,
+  // with static defaults before load. No server load — see <svelte:head>.
   $: og_meta = {
-    title: loaded ? `${profileTitleBase} - zap.cooking` : (data?.ogMeta?.title || 'User Profile - zap.cooking'),
+    title: loaded ? `${profileTitleBase} - zap.cooking` : 'User Profile - zap.cooking',
     description: loaded
       ? (profile?.about ? profile.about.slice(0, 155) : "View this user's recipes on zap.cooking")
-      : (data?.ogMeta?.description || "A user on zap.cooking - Food. Friends. Freedom."),
+      : 'A user on zap.cooking - Food. Friends. Freedom.',
     image: loaded
       ? (profile?.picture || 'https://zap.cooking/social-share.png')
-      : (data?.ogMeta?.image || 'https://zap.cooking/social-share.png')
+      : 'https://zap.cooking/social-share.png'
   };
 
   // Setup IntersectionObserver for infinite scroll
@@ -1678,6 +1733,11 @@
   <ZapModal bind:open={zapModal} event={user} />
 {/if}
 
+<!-- Follow List Recovery Modal -->
+{#if hexpubkey}
+  <FollowListRecoveryModal bind:open={followRecoveryModal} pubkey={hexpubkey} />
+{/if}
+
 <!-- Profile Edit Modal -->
 <ProfileEditModal
   bind:open={profileEditModal}
@@ -1833,10 +1893,15 @@
 </Modal>
 
 <div class="max-w-4xl mx-auto w-full">
-  <!-- Profile Banner -->
-  <div class="relative -mx-4 sm:-mx-6 lg:-mx-8 mb-4">
+  <!-- Profile Banner. Below xl (no sidebar) it's full-bleed and flush under
+       the top bar with square corners. At xl it's a contained, fixed-size
+       rounded card constrained to the content column — never wider than the
+       top bar — with a gap below the header. The outer wrapper stays the
+       container width so the overlapping avatar aligns with the name/content
+       below it (left edge), regardless of the banner's bleed. -->
+  <div class="relative mb-4 xl:mt-4">
     <div
-      class="h-32 sm:h-40 overflow-hidden rounded-2xl"
+      class="banner-fullbleed h-32 sm:h-40 overflow-hidden rounded-none xl:rounded-2xl"
       style="background: {profile?.banner
         ? 'transparent'
         : 'linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-hover) 100%)'}"
@@ -1846,8 +1911,8 @@
       {/if}
     </div>
 
-    <!-- Avatar overlapping banner -->
-    <div class="absolute -bottom-10 left-4 sm:left-6 lg:left-8">
+    <!-- Avatar overlapping banner; left edge aligns with the name/content. -->
+    <div class="absolute -bottom-10 left-4">
       <button
         class="hover:opacity-90 transition-opacity flex-shrink-0 rounded-full ring-4 ring-[var(--color-bg-primary)]"
         on:click={() => (qrModal = true)}
@@ -1865,12 +1930,11 @@
     </div>
   </div>
 
-  <!-- Profile Header -->
-  <div class="flex items-start gap-5 pb-5 pt-8">
-    <!-- Spacer for avatar (hidden on mobile where avatar overlaps banner) -->
-    <div class="hidden sm:block w-20 flex-shrink-0"></div>
-
-    <!-- Profile Info (right side) -->
+  <!-- Profile Header. Name/bio align to the container's left edge (under
+       the avatar) so they share the same margin as the stats, tabs and
+       note body text below. pt-12 clears the avatar's overhang. -->
+  <div class="flex items-start pb-5 pt-12">
+    <!-- Profile Info -->
     <div class="flex-1 min-w-0 flex flex-col gap-2">
       <!-- Name Row with Action Buttons on Right -->
       <div class="flex items-start justify-between gap-3">
@@ -1984,12 +2048,12 @@
       <!-- Bio -->
       {#if profile?.about}
         {@const bioText = profile.about.trim()}
-        {@const needsTruncation = bioText.length > 200}
+        {@const needsTruncation = bioText.length > 400}
 
         <div class="max-w-2xl">
           <p
             class="text-sm text-caption leading-relaxed"
-            class:line-clamp-2={!bioExpanded && needsTruncation}
+            class:line-clamp-4={!bioExpanded && needsTruncation}
           >
             <ParsedBio text={bioText} />
           </p>
@@ -2008,7 +2072,7 @@
 
   <!-- Profile Stats -->
   {#if profileStats}
-    <div class="flex items-center gap-5 pb-3">
+    <div class="flex flex-wrap items-center gap-x-5 gap-y-1.5 pb-3">
       <button
         on:click={() => (activeTab = 'following')}
         class="flex items-center gap-1.5 text-sm transition-colors hover:opacity-70"
@@ -2024,6 +2088,18 @@
         <span class="font-semibold" style="color: var(--color-text-primary)">{profileStats.followers_count.toLocaleString()}</span>
         <span>Followers</span>
       </div>
+      {#if $userPublickey === hexpubkey}
+        <button
+          on:click={() => (followRecoveryModal = true)}
+          class="flex items-center gap-1 text-xs transition-colors hover:opacity-80"
+          style="color: var(--color-text-secondary)"
+          title="If another client clobbered your follow list, scan relays to find and restore an older version"
+        >
+          <ArrowCounterClockwiseIcon size={13} />
+          <span>Restore Follow List</span>
+          <QuestionIcon size={13} class="opacity-60" />
+        </button>
+      {/if}
     </div>
   {/if}
 
@@ -2115,6 +2191,21 @@
         {/if}
       </button>
       {#if $userPublickey && $userPublickey === hexpubkey}
+        <button
+          on:click={() => (activeTab = 'muted')}
+          class="px-4 py-2 text-sm font-medium transition-colors relative flex items-center gap-1"
+          style="color: {activeTab === 'muted'
+            ? 'var(--color-text-primary)'
+            : 'var(--color-text-secondary)'}"
+        >
+          <SpeakerSimpleSlashIcon size={16} />
+          Muted
+          {#if activeTab === 'muted'}
+            <span
+              class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-orange-500 to-amber-500"
+            ></span>
+          {/if}
+        </button>
         <button
           on:click={() => (activeTab = 'drafts')}
           class="px-4 py-2 text-sm font-medium transition-colors relative flex items-center gap-1"
@@ -2330,7 +2421,7 @@
       </div>
     {/if}
   {:else if activeTab === 'following'}
-    {#if followingLoading && !followingLoaded}
+    {#if !followingLoaded}
       <!-- Loading skeleton -->
       <div class="flex flex-col gap-3">
         {#each Array(6) as _}
@@ -2342,6 +2433,12 @@
             </div>
           </div>
         {/each}
+      </div>
+    {:else if followingFetchFailed}
+      <div class="py-12 text-center">
+        <UsersIcon size={48} class="mx-auto mb-4 opacity-30" />
+        <p class="text-lg font-medium" style="color: var(--color-text-secondary)">Couldn't load following list</p>
+        <p class="text-sm mt-1" style="color: var(--color-text-secondary)">Relay didn't respond in time. Try again later.</p>
       </div>
     {:else if followingProfiles.length === 0}
       <div class="py-12 text-center">
@@ -2366,6 +2463,21 @@
           </a>
         {/each}
       </div>
+      {#if followingPageOffset < followingAllPubkeys.length}
+        <div class="py-4 text-center">
+          {#if followingLoadingMore}
+            <div class="text-sm" style="color: var(--color-text-secondary)">Loading more...</div>
+          {:else}
+            <button
+              on:click={loadMoreFollowing}
+              class="px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+              style="background: var(--color-bg-secondary); color: var(--color-text-primary);"
+            >
+              Load more ({followingAllPubkeys.length - followingPageOffset} remaining)
+            </button>
+          {/if}
+        </div>
+      {/if}
     {/if}
   {:else if activeTab === 'drafts'}
     {#if $userPublickey === hexpubkey}
@@ -2380,6 +2492,8 @@
         </div>
       {/if}
     {/if}
+  {:else if activeTab === 'muted' && $userPublickey === hexpubkey && hexpubkey}
+    <MuteListEditor pubkey={hexpubkey} />
   {/if}
 </div>
 
@@ -2392,11 +2506,27 @@
 {/if}
 
 <style>
+  /* Below xl (no sidebar) the banner is full-bleed: symmetric
+     viewport-relative margins stretch it to the viewport width (= the top
+     bar), clipped by #app-scroll's overflow-x-hidden. At xl it's contained to
+     the content container (margins reset to 0) so it's a fixed-size card that
+     is never wider than the top bar. */
+  .banner-fullbleed {
+    margin-left: calc(50% - 50vw);
+    margin-right: calc(50% - 50vw);
+  }
+  @media (min-width: 1280px) {
+    .banner-fullbleed {
+      margin-left: 0;
+      margin-right: 0;
+    }
+  }
+
   /* Ensure line-clamp works for bio text */
-  :global(.line-clamp-2) {
+  :global(.line-clamp-4) {
     display: -webkit-box;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
+    -webkit-line-clamp: 4;
+    line-clamp: 4;
     -webkit-box-orient: vertical;
     overflow: hidden;
   }

@@ -222,9 +222,9 @@
   <div class="px-4 max-w-2xl mx-auto community-page w-full">
     <!-- Orientation text for signed-out users -->
     {#if $userPublickey === ''}
-      <div class="mb-4 pt-1">
-        <p class="text-sm text-caption">Food. Friends. Freedom.</p>
-        <p class="text-xs text-caption mt-0.5">
+      <div class="mb-6 pt-4 pb-2">
+        <p class="text-xl font-semibold text-caption">Food. Friends. Freedom. ⚡</p>
+        <p class="text-sm text-caption mt-2">
           People share meals, recipes, and food ideas here. <a
             href="/login"
             class="text-caption hover:opacity-80 underline">Sign in</a
@@ -364,9 +364,15 @@
   /* Keep relay tabs pinned below the glass header */
   .tabs-container {
     position: sticky;
-    /* Position below the glass header (~60px on desktop) */
-    top: 60px;
-    z-index: 15; /* Below header (z-20) but above content */
+    /* top:0 — NOT var(--header-h). The scroll container (#app-scroll) already
+       reserves the header height via padding-top: var(--header-h), and a
+       sticky child's offset is measured from that container's content box
+       (i.e. AFTER its padding). Setting top: var(--header-h) here would stack
+       a second header-height on top, pinning the tabs at 2x the header height
+       and leaving a header-tall gap that clips the top of the feed. top:0 pins
+       the tabs flush at the bottom of the header on every breakpoint. */
+    top: 0;
+    z-index: 15; /* Below header (z-30) but above content */
     /* Frosted glass effect - matches header */
     /* Fallback for browsers that don't support color-mix */
     background-color: var(--color-bg-primary);
@@ -380,13 +386,6 @@
       opacity 0.3s ease-in-out,
       transform 0.3s ease-in-out;
     will-change: opacity, transform;
-  }
-
-  /* On mobile, account for safe area inset that the header uses */
-  @media (max-width: 1023px) {
-    .tabs-container {
-      top: calc(56px + env(safe-area-inset-top, 0px));
-    }
   }
 
   /* Bottom padding to prevent fixed mobile nav from covering content */

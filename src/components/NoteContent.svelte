@@ -10,10 +10,12 @@
   import MediaCarousel from './MediaCarousel.svelte';
   import { processContentWithProfiles } from '$lib/contentProcessor';
   import MediaLightbox from './MediaLightbox.svelte';
+  import LightningInvoiceCard from './LightningInvoiceCard.svelte';
 
   export let content: string;
   export let className: string = '';
   export let showLinkPreviews: boolean = true;
+  export let showNostrEmbeds: boolean = true;
   export let embedDepth: number = 0; // Track nesting depth to prevent infinite recursion
   export let collapsible: boolean = true; // Enable collapsible long content
   export let maxLength: number = 500; // Character limit before collapse
@@ -312,8 +314,37 @@
     return cut;
   }
   $: displayContent = shouldCollapse && !isExpanded ? truncateAtUrlBoundary(content, maxLength) : content;
-  $: finalParsedContent = parseContent(displayContent);
+  $: finalParsedContent = splitLightningInvoices(parseContent(displayContent));
   $: renderParts = groupMediaRuns(finalParsedContent);
+
+  const LIGHTNING_REGEX = /(?:(?:lightning|nostr):)?((lnbc|lntb|lnbcrt)[a-z0-9]{50,})/gi;
+
+  function splitLightningInvoices(parts: any[]): any[] {
+    const out: any[] = [];
+    let keyCounter = 0;
+    for (const part of parts) {
+      if (part.type !== 'text') { out.push(part); continue; }
+      LIGHTNING_REGEX.lastIndex = 0;
+      const text: string = part.content;
+      let last = 0;
+      let m;
+      while ((m = LIGHTNING_REGEX.exec(text)) !== null) {
+        if (m.index > last) {
+          out.push({ type: 'text', content: text.slice(last, m.index), key: `text-ln-${keyCounter++}` });
+        }
+        out.push({ type: 'lightning', invoice: m[0].replace(/^(?:lightning|nostr):/i, ''), key: `ln-${keyCounter++}` });
+        last = m.index + m[0].length;
+      }
+      if (last === 0) {
+        // No invoice matched — keep the original text part untouched.
+        out.push(part);
+      } else if (last < text.length) {
+        // Trailing text after the final match.
+        out.push({ type: 'text', content: text.slice(last), key: `text-ln-${keyCounter++}` });
+      }
+    }
+    return out;
+  }
 
   // Preload profiles when content changes
   $: if (content) {
@@ -389,10 +420,14 @@
           colorClass="text-orange-500 hover:text-orange-600"
         />
       {:else if part.prefix === 'nevent1' || part.prefix === 'note1'}
-        <NoteEmbed nostrString={part.content} depth={embedDepth} />
+        {#if showNostrEmbeds}
+          <NoteEmbed nostrString={part.content} depth={embedDepth} />
+        {/if}
       {:else if part.prefix === 'naddr1'}
         <!-- Addressable event (recipe, article, etc.) - render as embedded content -->
-        <NoteEmbed nostrString={part.content} depth={embedDepth} />
+        {#if showNostrEmbeds}
+          <NoteEmbed nostrString={part.content} depth={embedDepth} />
+        {/if}
       {:else if part.prefix === 'noffer1'}
         <!-- CLINK static offer — render an inline "⚡ Pay" pill that opens
              NofferPayModal. Matches the bxrd.app affordance. -->
@@ -405,6 +440,8 @@
           {part.content}
         </button>
       {/if}
+    {:else if part.type === 'lightning'}
+      <LightningInvoiceCard invoice={part.invoice} />
     {/if}
   {/each}
 

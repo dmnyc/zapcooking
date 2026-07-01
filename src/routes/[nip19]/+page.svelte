@@ -1,6 +1,7 @@
 <script lang="ts">
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
+  import { browser } from '$app/environment';
   import { nip19 } from 'nostr-tools';
   import { ndk, userPublickey } from '$lib/nostr';
   import { mutedPubkeys, muteListStore } from '$lib/muteListStore';
@@ -11,25 +12,89 @@
   import PollDisplay from '../../components/PollDisplay.svelte';
   import NoteActionBar from '../../components/NoteActionBar.svelte';
   import ClientAttribution from '../../components/ClientAttribution.svelte';
+  import { NDKRelaySet } from '@nostr-dev-kit/ndk';
   import type { NDKEvent } from '@nostr-dev-kit/ndk';
-  import type { PageData } from './$types';
   import { createCommentFilter } from '$lib/commentFilters';
+  import { stripTrackingParams } from '$lib/utils/stripTrackingParams';
   import PostActionsMenu from '../../components/PostActionsMenu.svelte';
   import ReplyComposer from '../../components/comments/ReplyComposer.svelte';
-
-  export let data: PageData;
-
-  // OG meta from server (for crawlers/SSR)
-  $: ogTitle = data?.ogMeta?.title || 'Note Thread - zap.cooking';
-  $: ogDescription = data?.ogMeta?.description || 'A note shared on zap.cooking - Food. Friends. Freedom.';
-  $: ogImage = data?.ogMeta?.image || 'https://zap.cooking/social-share.png';
-  $: ogCreatedAt =
-    data?.ogMeta && 'created_at' in data.ogMeta ? (data.ogMeta.created_at ?? null) : null;
 
   let decoded: any = null;
   let event: NDKEvent | null = null;
   let loading = true;
   let error = false;
+  let authorName: string | null = null;
+  // Track the identifier we've already loaded so the reactive block below
+  // only fires loadEvent() when the nip19 param actually changes — not on
+  // every $page update (e.g. the stripTrackingParams goto in onMount, which
+  // strips query params but leaves the route param unchanged).
+  let loadedNip19: string | undefined;
+
+  // ── Client-side OG meta (no server load) ──────────────────────────
+  // Derived from the note we fetch over NDK. Crawler-grade SSR OG was
+  // removed with the +page.server.ts that caused the __data.json 500s.
+  const IMG_EXT = /\.(jpg|jpeg|png|gif|webp|svg|bmp|avif)(\?.*)?$/i;
+  const VID_EXT = /\.(mp4|webm|mov|avi|mkv|ogv)(\?.*)?$/i;
+  const IMG_HOSTS = [
+    'image.nostr.build', 'nostr.build', 'imgur.com', 'imgproxy',
+    'primal.b-cdn.net', 'media.tenor.com', 'i.ibb.co'
+  ];
+
+  function extractFirstImageUrl(content: string): string | null {
+    const urls = (content || '').match(/https?:\/\/[^\s<>"')\]]+/gi) || [];
+    for (const url of urls) {
+      try {
+        const u = new URL(url);
+        if (VID_EXT.test(u.pathname)) continue;
+        if (IMG_EXT.test(u.pathname)) return url;
+        if (IMG_HOSTS.some((h) => u.hostname.includes(h))) {
+          if (u.hostname.includes('nostr.build') && !u.pathname.includes('/i/')) continue;
+          return url;
+        }
+      } catch {
+        continue;
+      }
+    }
+    return null;
+  }
+
+  function cleanNoteContent(content: string): string {
+    const text = (content || '')
+      .replace(/nostr:[a-z0-9]+/gi, '')
+      .replace(/https?:\/\/[^\s]+\.(jpg|jpeg|png|gif|webp|svg|bmp|avif|mp4|webm|mov)(\?[^\s]*)?/gi, '')
+      .replace(/https?:\/\/[^\s]+/gi, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (text.length > 155) {
+      const truncated = text.slice(0, 155);
+      const lastSpace = truncated.lastIndexOf(' ');
+      const lastSentence = Math.max(
+        truncated.lastIndexOf('.'),
+        truncated.lastIndexOf('!'),
+        truncated.lastIndexOf('?')
+      );
+      if (lastSentence > 80) return text.slice(0, lastSentence + 1);
+      return (lastSpace > 80 ? truncated.slice(0, lastSpace) : truncated) + '...';
+    }
+    return text || 'A note shared on zap.cooking';
+  }
+
+  // Resolve the author's display name for the OG title once the note loads.
+  $: if (event?.author) {
+    event.author
+      .fetchProfile()
+      .then((p) => {
+        authorName = p?.displayName || p?.name || null;
+      })
+      .catch(() => {});
+  }
+
+  $: ogTitle = authorName ? `${authorName} on zap.cooking` : 'Note on zap.cooking';
+  $: ogDescription = event
+    ? cleanNoteContent(event.content)
+    : 'A note shared on zap.cooking - Food. Friends. Freedom.';
+  $: ogImage = (event && extractFirstImageUrl(event.content)) || 'https://zap.cooking/social-share.png';
+  $: ogCreatedAt = event?.created_at ?? null;
 
   // Thread hierarchy
   let parentThread: NDKEvent[] = []; // Parent notes above this one
@@ -92,6 +157,25 @@
     loadingParents = false;
   }
 
+  function gotoNoteUnlessInteractive(e: MouseEvent, evt: NDKEvent) {
+    if (e.target instanceof Element && e.target.closest('a, button')) return;
+    goto(noteUrl(evt));
+  }
+
+  // Encode a note/reply event as nevent1 with relay hints for better discoverability.
+  function noteUrl(evt: NDKEvent): string {
+    const relayUrl = evt.relay?.url ?? (evt as any).onRelays?.[0]?.url;
+    try {
+      return '/' + nip19.neventEncode({
+        id: evt.id,
+        relays: relayUrl ? [relayUrl] : [],
+        kind: evt.kind ?? 1
+      });
+    } catch {
+      return '/' + nip19.noteEncode(evt.id);
+    }
+  }
+
   // Fetch replies to this note
   function fetchReplies(eventId: string) {
     loadingReplies = true;
@@ -101,7 +185,29 @@
     if (!event) return;
 
     const filter = createCommentFilter(event);
-    const sub = $ndk.subscribe(filter, { closeOnEose: false });
+
+    // Build a wider relay set: NDK's default pool + the relay that served the
+    // main event + any relay hints embedded in the event's e/p tags.
+    // This handles the common case where replies live on the author's write
+    // relay but not on all of NDK's default pool relays.
+    let relaySet: NDKRelaySet | undefined;
+    try {
+      const extraUrls = new Set<string>();
+      // Relay that served the main event
+      const sourceRelay = event.relay?.url || event.onRelays?.[0]?.url;
+      if (sourceRelay) extraUrls.add(sourceRelay);
+      // Relay hints in event e/p tags (NIP-10 clients often include them)
+      for (const tag of event.tags) {
+        if ((tag[0] === 'e' || tag[0] === 'p') && tag[2]?.startsWith('wss://')) {
+          extraUrls.add(tag[2]);
+        }
+      }
+      if (extraUrls.size > 0 && $ndk) {
+        relaySet = NDKRelaySet.fromRelayUrls([...extraUrls].slice(0, 3), $ndk, true);
+      }
+    } catch { /* non-fatal */ }
+
+    const sub = $ndk.subscribe(filter, { closeOnEose: false }, relaySet);
 
     sub.on('event', (e: NDKEvent) => {
       if (processedReplies.has(e.id)) return;
@@ -137,6 +243,27 @@
       nip19Id = nip19Id.split('nostr:')[1];
     }
 
+    // Plain zap.cooking NIP-05 username (not a NIP-19 identifier): resolve to
+    // a pubkey via /.well-known/nostr.json and redirect to the profile page.
+    // This mirrors the behavior the deleted +page.server.ts used to provide.
+    const isNip19 = /^(?:npub1|nprofile1|note1|nevent1|naddr1)/.test(nip19Id);
+    if (!isNip19 && /^[a-zA-Z0-9_]{3,20}$/.test(nip19Id)) {
+      const username = nip19Id.toLowerCase();
+      try {
+        const res = await fetch('/.well-known/nostr.json?name=' + encodeURIComponent(username));
+        if (res.ok) {
+          const json = await res.json();
+          const pubkey = json?.names?.[username];
+          if (pubkey) {
+            goto(`/user/${nip19.npubEncode(pubkey)}`);
+            return;
+          }
+        }
+      } catch {
+        // Resolution failed — fall through to the not-found state below.
+      }
+    }
+
     // Validate NIP-19 identifier format
     if (nip19Id.length < 8 || !nip19Id.match(/^[a-z0-9]+$/)) {
       error = true;
@@ -151,9 +278,13 @@
       if (decoded.type === 'nevent' || decoded.type === 'note') {
         // Fetch the referenced event
         let eventId = '';
+        let neventRelays: string[] = [];
         switch (decoded.type) {
           case 'nevent':
             eventId = (decoded as nip19.DecodedNevent).data.id;
+            neventRelays = ((decoded as nip19.DecodedNevent).data.relays ?? [])
+              .filter((r) => r.startsWith('wss://'))
+              .slice(0, 3);
             break;
           case 'note':
             eventId = (decoded as nip19.DecodedNote).data;
@@ -163,7 +294,15 @@
           ids: [eventId]
         };
 
-        const subscription = $ndk.subscribe(filter, { closeOnEose: false });
+        // Include relay hints from nevent1 when fetching the main event
+        let eventRelaySet: NDKRelaySet | undefined;
+        if (neventRelays.length > 0 && $ndk) {
+          try {
+            eventRelaySet = NDKRelaySet.fromRelayUrls(neventRelays, $ndk, true);
+          } catch { /* non-fatal */ }
+        }
+
+        const subscription = $ndk.subscribe(filter, { closeOnEose: false }, eventRelaySet);
         let resolved = false;
 
         subscription.on('event', async (receivedEvent: NDKEvent) => {
@@ -207,12 +346,9 @@
     }
   }
 
-  $: {
-    if ($page.params.nip19) {
-      (async () => {
-        await loadEvent($page.params.nip19!);
-      })();
-    }
+  $: if (browser && $page.params.nip19 && $page.params.nip19 !== loadedNip19) {
+    loadedNip19 = $page.params.nip19;
+    loadEvent($page.params.nip19);
   }
 
   // Compact "X-unit-ago" formatter for note headers (e.g. "10m", "3h",
@@ -232,6 +368,7 @@
 
 
   onMount(() => {
+    stripTrackingParams($page.url);
     if ($userPublickey) {
       muteListStore.load();
     }
@@ -474,16 +611,10 @@
     {:else if parentThread.length > 0}
       <div class="space-y-0">
         {#each parentThread as parentNote, index}
-          <div class="relative">
-            <!-- Thread line connecting to next note -->
-            <div
-              class="absolute left-5 top-12 bottom-0 w-0.5"
-              style="background-color: var(--color-input-border)"
-            ></div>
-
+          <div>
             <article class="py-3">
               <div class="flex space-x-3 -mx-2 px-2 py-2 rounded-lg">
-                <div class="flex-shrink-0 z-10">
+                <div class="flex-shrink-0">
                   <a
                     href="/user/{nip19.npubEncode(
                       parentNote.author?.hexpubkey || parentNote.pubkey
@@ -518,11 +649,11 @@
                     <PollDisplay event={parentNote} />
                   {:else}
                     <a
-                      href="/{nip19.noteEncode(parentNote.id)}"
-                      class="block text-sm leading-relaxed hover:opacity-80"
+                      href="{noteUrl(parentNote)}"
+                      class="block text-base leading-relaxed hover:opacity-80"
                       style="color: var(--color-text-secondary)"
                     >
-                      <NoteContent content={parentNote.content} />
+                      <NoteContent content={parentNote.content} showNostrEmbeds={false} />
                     </a>
                   {/if}
                   <!-- Parent note actions -->
@@ -538,7 +669,7 @@
     {/if}
 
     <!-- Main Note -->
-    <article class="py-4 border-b" style="border-color: var(--color-input-border)">
+    <article class="py-6">
       <div class="flex space-x-3">
         <a
           href="/user/{nip19.npubEncode(event.author?.hexpubkey || event.pubkey)}"
@@ -567,7 +698,7 @@
                 </span>
                 <ClientAttribution tags={event.tags} enableEnrichment={true} />
               </div>
-              <div class="text-sm leading-relaxed mb-3" style="color: var(--color-text-primary)">
+              <div class="text-base leading-relaxed mb-3" style="color: var(--color-text-primary)">
                 {#if event.kind === 1068}
                   <PollDisplay {event} />
                 {:else}
@@ -583,21 +714,8 @@
     </article>
 
     <!-- Replies Section -->
-    <div class="mt-4">
-      <div
-        class="flex items-center gap-2 text-sm font-medium mb-3"
-        style="color: var(--color-text-secondary)"
-      >
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            stroke-width="2"
-            d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
-          />
-        </svg>
-        <span>Replies ({directReplies.length})</span>
-      </div>
+    <div class="border-t mt-2" style="border-color: var(--color-input-border)">
+
 
       <!-- Replies List -->
       {#if loadingReplies}
@@ -622,13 +740,18 @@
             {#if !$mutedPubkeys.has(reply.author?.hexpubkey || reply.pubkey)}
               <div>
                 <article
-                  class="py-3 border-b last:border-0"
+                  class="py-8 border-b last:border-0 cursor-pointer hover:bg-[var(--color-bg-hover,rgba(255,255,255,0.03))]"
                   style="border-color: var(--color-input-border)"
+                  on:click={(e) => gotoNoteUnlessInteractive(e, reply)}
+                  role="link"
+                  tabindex="0"
+                  on:keydown|self={(e) => e.key === 'Enter' && goto(noteUrl(reply))}
                 >
                   <div class="flex space-x-3">
                     <a
                       href="/user/{nip19.npubEncode(reply.author?.hexpubkey || reply.pubkey)}"
                       class="flex-shrink-0"
+                      on:click|stopPropagation
                     >
                       <Avatar pubkey={reply.author?.hexpubkey || reply.pubkey} size={32} />
                     </a>
@@ -639,6 +762,7 @@
                             href="/user/{nip19.npubEncode(reply.author?.hexpubkey || reply.pubkey)}"
                             class="font-medium text-sm transition-colors username-link truncate min-w-0"
                             style="color: var(--color-text-primary)"
+                            on:click|stopPropagation
                           >
                             <CustomName pubkey={reply.author?.hexpubkey || reply.pubkey} />
                           </a>
@@ -647,20 +771,22 @@
                             {reply.created_at ? formatTimeAgo(reply.created_at) : ''}
                           </span>
                         </div>
-                        <PostActionsMenu event={reply} />
+                        <span on:click|stopPropagation>
+                          <PostActionsMenu event={reply} />
+                        </span>
                       </div>
                       <div
-                        class="text-sm leading-relaxed"
-                        style="color: var(--color-text-secondary)"
+                        class="text-base leading-relaxed"
+                        style="color: var(--color-text-primary)"
                       >
                         {#if reply.kind === 1068}
                           <PollDisplay event={reply} />
                         {:else}
-                          <NoteContent content={reply.content} />
+                          <NoteContent content={reply.content} showNostrEmbeds={false} />
                         {/if}
                       </div>
                       <!-- Reply actions -->
-                      <div class="mt-2">
+                      <div class="mt-2" on:click|stopPropagation>
                         <NoteActionBar event={reply} />
                       </div>
                     </div>
@@ -671,13 +797,20 @@
                 {#each getNestedReplies(reply.id).slice(0, 2) as nestedReply (nestedReply.id)}
                   {#if !$mutedPubkeys.has(nestedReply.author?.hexpubkey || nestedReply.pubkey)}
                     <div class="ml-8 pl-3">
-                      <article class="py-2">
+                      <article
+                        class="py-2 cursor-pointer hover:bg-[var(--color-bg-hover,rgba(255,255,255,0.03))] rounded"
+                        on:click={(e) => gotoNoteUnlessInteractive(e, nestedReply)}
+                        role="link"
+                        tabindex="0"
+                        on:keydown|self={(e) => e.key === 'Enter' && goto(noteUrl(nestedReply))}
+                      >
                         <div class="flex space-x-2">
                           <a
                             href="/user/{nip19.npubEncode(
                               nestedReply.author?.hexpubkey || nestedReply.pubkey
                             )}"
                             class="flex-shrink-0"
+                            on:click|stopPropagation
                           >
                             <Avatar
                               pubkey={nestedReply.author?.hexpubkey || nestedReply.pubkey}
@@ -691,8 +824,9 @@
                                   href="/user/{nip19.npubEncode(
                                     nestedReply.author?.hexpubkey || nestedReply.pubkey
                                   )}"
-                                  class="font-medium text-xs transition-colors username-link truncate min-w-0"
+                                  class="font-medium text-sm transition-colors username-link truncate min-w-0"
                                   style="color: var(--color-text-primary)"
+                                  on:click|stopPropagation
                                 >
                                   <CustomName
                                     pubkey={nestedReply.author?.hexpubkey || nestedReply.pubkey}
@@ -705,20 +839,22 @@
                                     : ''}
                                 </span>
                               </div>
-                              <PostActionsMenu event={nestedReply} />
+                              <span on:click|stopPropagation>
+                                <PostActionsMenu event={nestedReply} />
+                              </span>
                             </div>
                             <div
-                              class="text-xs leading-relaxed"
-                              style="color: var(--color-text-secondary)"
+                              class="text-sm leading-relaxed"
+                              style="color: var(--color-text-primary)"
                             >
                               {#if nestedReply.kind === 1068}
                                 <PollDisplay event={nestedReply} />
                               {:else}
-                                <NoteContent content={nestedReply.content} />
+                                <NoteContent content={nestedReply.content} showNostrEmbeds={false} />
                               {/if}
                             </div>
                             <!-- Nested reply actions -->
-                            <div class="mt-1.5">
+                            <div class="mt-1.5" on:click|stopPropagation>
                               <NoteActionBar event={nestedReply} variant="compact" />
                             </div>
                           </div>
@@ -731,7 +867,7 @@
                 <!-- Show more nested replies link -->
                 {#if getNestedReplies(reply.id).length > 2}
                   <a
-                    href="/{nip19.noteEncode(reply.id)}"
+                    href="{noteUrl(reply)}"
                     class="ml-8 pl-3 py-2 block text-xs text-primary hover:opacity-80"
                   >
                     Show {getNestedReplies(reply.id).length - 2} more {getNestedReplies(reply.id)
@@ -751,9 +887,11 @@
       <!-- Reply Input -->
       {#if $userPublickey}
         <div class="mt-4 p-3 rounded-lg" style="background-color: var(--color-bg-secondary)">
-          <div class="flex gap-3">
-            <Avatar pubkey={$userPublickey} size={32} />
-            <div class="flex-1">
+          <div class="flex gap-3 items-start">
+            <div class="flex-shrink-0">
+              <Avatar pubkey={$userPublickey} size={32} />
+            </div>
+            <div class="flex-1 min-w-0 -mt-3">
               <ReplyComposer
                 parentEvent={event}
                 placeholder="Write a reply..."

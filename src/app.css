@@ -20,6 +20,35 @@ body {
   --safe-area-inset-bottom: env(safe-area-inset-bottom, 0px);
   --safe-area-inset-left: env(safe-area-inset-left, 0px);
   --safe-area-inset-right: env(safe-area-inset-right, 0px);
+
+  /*
+   * Fixed-header geometry — single, CSS-deterministic source of truth.
+   *
+   * --header-row-h is the height of the header's content row (.zh-root). It is
+   * a fixed value the row is pinned to, so the painted header height never
+   * depends on font/image load timing (no ResizeObserver race). The two values
+   * are the measured content heights, rounded up so nothing inside clips:
+   *   - compact icon row (< 640px):                ~37.77px -> 38px
+   *   - search-bar row (>= 640px, sm: breakpoint):  ~50.36px -> 51px
+   * The content height changes at 640px (where the search bar toggles), NOT at
+   * 1023px, so that is the breakpoint used here.
+   *
+   * --header-h is the total painted height of .header-blur and is the single
+   * value consumed by BOTH #app-scroll's padding-top AND .tabs-container's top:
+   *   row height + bottom padding (0.75rem) + top padding.
+   * Top padding mirrors .header-blur exactly: max(env(safe-area-inset-top),
+   * 0.75rem) — 0.75rem on desktop/non-notched, growing with the notch inset.
+   * Because the header is pinned to these same tokens, the reserved space and
+   * the sticky tab-bar top are always equal on the first frame.
+   */
+  --header-row-h: 38px;
+  --header-h: calc(var(--header-row-h) + 0.75rem + max(env(safe-area-inset-top, 0px), 0.75rem));
+}
+
+@media (min-width: 640px) {
+  :root {
+    --header-row-h: 51px;
+  }
 }
 
 .page-loader {
@@ -61,6 +90,16 @@ body {
   --color-skeleton-base: #e5e7eb;
   --color-skeleton-highlight: #f3f4f6;
 
+  /* Mute editor privacy cards */
+  --mute-private-bg: #ede9fe;
+  --mute-private-border: #c4b5fd;
+  --mute-private-text: #6d28d9;
+  --mute-private-badge-bg: #ddd6fe;
+  --mute-public-bg: #fff7ed;
+  --mute-public-border: #fdba74;
+  --mute-public-text: #ea580c;
+  --mute-public-badge-bg: #fed7aa;
+
   /* Bitcoin Connect theming */
   --bc-color-brand: #ec4700;
   --bc-color-brand-dark: #ff5722;
@@ -75,7 +114,7 @@ html.dark {
   --color-input-bg: #374151;
   --color-input-border: #4b5563;
   --color-accent-gray: #4b5563;
-  --color-caption: #9ca3af;
+  --color-caption: #94a3b8;
   --color-danger: #ef4444;
   --color-text-primary: #f3f4f6;
   --color-text-secondary: #d1d5db;
@@ -83,6 +122,16 @@ html.dark {
   --color-bg-secondary: #1f2937;
   --color-skeleton-base: #1f2937;
   --color-skeleton-highlight: #374151;
+
+  /* Mute editor privacy cards */
+  --mute-private-bg: #2e1f4a;
+  --mute-private-border: #6d28d9;
+  --mute-private-text: #c4b5fd;
+  --mute-private-badge-bg: #3b1f6e;
+  --mute-public-bg: #2d1a0e;
+  --mute-public-border: #c2410c;
+  --mute-public-text: #fb923c;
+  --mute-public-badge-bg: #431d07;
 }
 
 /* Base document styling */
@@ -91,7 +140,12 @@ html {
   color: var(--color-text-primary);
 }
 
+body {
+  font-family: 'Albert Sans', ui-sans-serif, system-ui, sans-serif;
+}
+
 @theme {
+  --font-sans: 'Albert Sans', ui-sans-serif, system-ui, sans-serif;
   --font-display: 'Geist', sans;
   --breakpoint-print: print;
 

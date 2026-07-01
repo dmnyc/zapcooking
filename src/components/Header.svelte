@@ -3,7 +3,6 @@
   import { page } from '$app/stores';
   import { userPublickey, userProfilePictureOverride } from '$lib/nostr';
   import { triggerExploreNav } from '$lib/exploreNav';
-  import SVGNostrCookingWithText from '../assets/nostr.cooking-withtext.svg';
   import SearchIcon from 'phosphor-svelte/lib/MagnifyingGlass';
   import CookingPotIcon from 'phosphor-svelte/lib/CookingPot';
   import TagsSearchAutocomplete from './TagsSearchAutocomplete.svelte';
@@ -17,6 +16,7 @@
   import LightningIcon from 'phosphor-svelte/lib/Lightning';
   import WalletIcon from 'phosphor-svelte/lib/Wallet';
   import { userSidePanelOpen } from '$lib/stores/userSidePanel';
+  import { loginOverlayOpen } from '$lib/stores/loginOverlay';
   import { mobileSearchOpen } from '$lib/stores/mobileSearch';
   import { timerStore } from '$lib/timerStore';
   import {
@@ -143,20 +143,23 @@
     aria-label="zap.cooking home"
   >
     <img
-      src={SVGNostrCookingWithText}
+      src="/zapcooking-text-light.svg"
       class="w-24 sm:w-32 my-1.5 sm:my-2 dark:hidden"
       alt="zap.cooking"
     />
     <img
-      src="/zap_cooking_logo_white.svg"
+      src="/zapcooking-text-dark.svg"
       class="w-24 sm:w-32 my-1.5 sm:my-2 hidden dark:block"
       alt="zap.cooking"
     />
   </button>
 
-  <!-- Center: search bar (desktop) -->
+  <!-- Center: search bar (desktop). Left padding at xl sets the gap from
+       the pipe's vertical line to 12px (10px here + the input's 2px margin),
+       matching the header's 12px top/bottom padding so the search box has
+       equal visual padding on all three framed sides. -->
   <div
-    class="hidden sm:flex flex-1 self-center print:hidden max-w-2xl min-w-[280px] lg:min-w-[500px]"
+    class="hidden sm:flex flex-1 self-center print:hidden max-w-2xl min-w-[280px] lg:min-w-[500px] xl:pl-2.5"
   >
     <TagsSearchAutocomplete
       placeholderString={'Search recipes, tags, or users...'}
@@ -316,11 +319,12 @@
           </span>
         </button>
       {:else}
-        <a
-          href="/login"
+        <button
+          type="button"
+          on:click={() => loginOverlayOpen.set(true)}
           class="px-3 py-1.5 sm:px-4 sm:py-2 rounded-full border font-medium transition duration-300 text-xs sm:text-sm signin-button"
-          style="color: var(--color-text-primary); border-color: var(--color-input-border);"
-          >Sign in</a
+          style="color: var(--color-text-primary); border-color: var(--color-input-border); background: none; cursor: pointer;"
+          >Sign in</button
         >
       {/if}
     </div>
@@ -328,6 +332,14 @@
 </div>
 
 <style>
+  /* Pin the content row to the CSS-deterministic header token so the painted
+     header height equals --header-h on the first frame, independent of font or
+     logo image load timing. The token is >= the natural content height at each
+     breakpoint, so children center within it and never clip. */
+  .zh-root {
+    height: var(--header-row-h);
+  }
+
   /* Shared icon button — minimal, balanced tap target, subtle hover.
      Wrapped in :where() so Tailwind responsive utilities (sm:hidden,
      etc.) can override individual properties without specificity

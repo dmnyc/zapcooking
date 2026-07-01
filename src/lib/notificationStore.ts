@@ -1,6 +1,7 @@
 import { writable, derived, get } from 'svelte/store';
 import { browser } from '$app/environment';
 import type NDK from '@nostr-dev-kit/ndk';
+import { NDKKind } from '@nostr-dev-kit/ndk';
 import type { NDKEvent, NDKSubscription } from '@nostr-dev-kit/ndk';
 import { mutedPubkeys } from '$lib/muteListStore';
 import { isHellthread } from '$lib/notificationUtils';
@@ -122,6 +123,12 @@ function createNotificationStore() {
 export const notifications = createNotificationStore();
 
 /**
+ * True while the initial subscription is fetching (pre-EOSE / pre-timeout).
+ * Components should show a spinner instead of "Nothing here yet" while this is true.
+ */
+export const notificationsLoading = writable(false);
+
+/**
  * Notifications with muted users excluded.
  * Components should use this for display; raw `notifications` is for persistence/dedup only.
  */
@@ -194,6 +201,8 @@ export function subscribeToNotifications(ndk: NDK, userPubkey: string, forceFull
     activeSubscription.stop();
   }
 
+  notificationsLoading.set(true);
+
   // Use a longer lookback window (7 days) for better notification coverage
   // On force refresh, go back 7 days regardless of existing notifications
   const sevenDaysAgo = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60;
@@ -223,7 +232,11 @@ export function subscribeToNotifications(ndk: NDK, userPubkey: string, forceFull
       // Reposts of kind 1 notes (NIP-18)
       { kinds: [6], '#p': [userPubkey], since },
       // Generic reposts — recipes, etc. (NIP-18 kind 16)
-      { kinds: [16], '#p': [userPubkey], since }
+      { kinds: [16], '#p': [userPubkey], since },
+      // NIP-22 comments on my recipes (uppercase P = root event author)
+      { kinds: [1111 as NDKKind], '#P': [userPubkey], since },
+      // NIP-22 replies to my comments (lowercase p = parent comment author)
+      { kinds: [1111 as NDKKind], '#p': [userPubkey], since }
     ],
     { closeOnEose: false }
   );
@@ -233,6 +246,23 @@ export function subscribeToNotifications(ndk: NDK, userPubkey: string, forceFull
   // a full sort + localStorage write for every individual event.
   let eoseReceived = false;
   const preEoseBuffer: NDKEvent[] = [];
+
+  function flushPreEoseBuffer() {
+    if (preEoseBuffer.length === 0) return;
+    const parsed: Notification[] = [];
+    const seenIds = new Set<string>();
+    for (const event of preEoseBuffer) {
+      if (seenIds.has(event.id)) continue;
+      seenIds.add(event.id);
+      const notification = parseNotification(event, userPubkey);
+      if (notification) {
+        parsed.push(notification);
+        if (event.kind === 9735) recordZapToSparkSdk(event);
+      }
+    }
+    preEoseBuffer.length = 0;
+    if (parsed.length > 0) notifications.addBulk(parsed);
+  }
 
   function handleEvent(event: NDKEvent, isRealtime: boolean) {
     // For zap receipts (9735), the pubkey is the zapper service, not the sender.
@@ -265,28 +295,28 @@ export function subscribeToNotifications(ndk: NDK, userPubkey: string, forceFull
     handleEvent(event, eoseReceived);
   });
 
+  const thisSubscription = activeSubscription;
+
   activeSubscription.on('eose', () => {
+    if (activeSubscription !== thisSubscription) return;
+    clearTimeout(eoseTimer);
     eoseReceived = true;
-    if (preEoseBuffer.length === 0) return;
-
-    // Parse + dedup the buffer, then bulk-insert (one sort + one localStorage write)
-    const parsed: Notification[] = [];
-    const seenIds = new Set<string>();
-    for (const event of preEoseBuffer) {
-      if (seenIds.has(event.id)) continue;
-      seenIds.add(event.id);
-      const notification = parseNotification(event, userPubkey);
-      if (notification) {
-        parsed.push(notification);
-        if (event.kind === 9735) recordZapToSparkSdk(event);
-      }
-    }
-    preEoseBuffer.length = 0;
-
-    if (parsed.length > 0) {
-      notifications.addBulk(parsed);
-    }
+    flushPreEoseBuffer();
+    notificationsLoading.set(false);
   });
+
+  // Safety valve: some relays never send EOSE (or send it very late).
+  // After 10 s, flush whatever accumulated so history is always persisted
+  // to localStorage and shown in the UI — even if EOSE never arrives.
+  // Guard against stale timers firing for a replaced subscription.
+  const eoseTimer = setTimeout(() => {
+    if (activeSubscription !== thisSubscription) return;
+    if (!eoseReceived) {
+      eoseReceived = true;
+      flushPreEoseBuffer();
+    }
+    notificationsLoading.set(false);
+  }, 10000);
 
   return activeSubscription;
 }
@@ -331,7 +361,9 @@ export async function fetchOlderNotifications(
         { kinds: [9735], '#p': [userPubkey], since, until },
         { kinds: [1], '#p': [userPubkey], since, until },
         { kinds: [6], '#p': [userPubkey], since, until },
-        { kinds: [16], '#p': [userPubkey], since, until }
+        { kinds: [16], '#p': [userPubkey], since, until },
+        { kinds: [1111 as NDKKind], '#P': [userPubkey], since, until },
+        { kinds: [1111 as NDKKind], '#p': [userPubkey], since, until }
       ],
       { closeOnEose: true }
     );
@@ -508,6 +540,18 @@ function parseNotification(event: NDKEvent, userPubkey: string): Notification | 
         type: isReply ? 'comment' : 'mention',
         eventId: event.id,
         targetEventId: replyToEvent,
+        content: cleanContentForPreview(event.content || '')
+      };
+    }
+
+    case 1111: { // NIP-22 comment on a recipe or reply to a comment
+      // lowercase 'e' tag = parent comment id (present when replying to a comment)
+      const parentETag = event.tags.find((t) => t[0] === 'e');
+      return {
+        ...baseNotification,
+        type: 'comment',
+        eventId: event.id,
+        targetEventId: parentETag?.[1],
         content: cleanContentForPreview(event.content || '')
       };
     }
