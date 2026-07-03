@@ -21,6 +21,7 @@
 import { getRecipeOgMeta, FALLBACK_RECIPE_OG, type RecipeOgMeta } from './recipeOgMeta';
 import { fetchRecipeEventForOg } from './recipeOg.server';
 import { fetchNoteForOg, getNoteOgMeta, FALLBACK_NOTE_OG } from './noteOg.server';
+import { fetchProfileOgMeta, FALLBACK_PROFILE_OG } from './profileOg.server';
 
 /**
  * Crawler / link-unfurl User-Agents. Matched case-insensitively.
@@ -70,6 +71,15 @@ const READS_ROUTE_RE = /^\/reads\/([^/]+)\/?$/;
 
 export function matchReadsOgRoute(pathname: string): { slug: string } | null {
   const m = pathname.match(READS_ROUTE_RE);
+  if (!m) return null;
+  return { slug: m[1] };
+}
+
+/** Profile routes: `/npub1…`, `/nprofile1…`, and `/user/npub1…`. */
+const PROFILE_ROUTE_RE = /^\/(?:user\/)?((?:npub1|nprofile1)[0-9a-z]+)\/?$/i;
+
+export function matchProfileOgRoute(pathname: string): { slug: string } | null {
+  const m = pathname.match(PROFILE_ROUTE_RE);
   if (!m) return null;
   return { slug: m[1] };
 }
@@ -188,6 +198,27 @@ export async function renderReadsOgForCrawler(slug: string, origin: string): Pro
   try {
     const event = await fetchRecipeEventForOg(slug);
     if (event) meta = getRecipeOgMeta(event);
+  } catch {
+    /* keep fallback meta */
+  }
+  return renderDocument(meta, canonicalUrl);
+}
+
+/**
+ * Build the standalone crawler document for a profile route (`/npub1…`,
+ * `/nprofile1…`, `/user/npub1…`). `pathname` is passed through so the canonical
+ * URL matches the actual route (top-level vs `/user/`). Never throws or hangs.
+ */
+export async function renderProfileOgForCrawler(
+  slug: string,
+  origin: string,
+  pathname: string
+): Promise<string> {
+  const canonicalUrl = `${origin}${pathname}`;
+  let meta: RecipeOgMeta = FALLBACK_PROFILE_OG;
+  try {
+    const resolved = await fetchProfileOgMeta(slug);
+    if (resolved) meta = resolved;
   } catch {
     /* keep fallback meta */
   }

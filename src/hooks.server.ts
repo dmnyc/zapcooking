@@ -7,7 +7,9 @@ import {
   matchNoteOgRoute,
   renderNoteOgForCrawler,
   matchReadsOgRoute,
-  renderReadsOgForCrawler
+  renderReadsOgForCrawler,
+  matchProfileOgRoute,
+  renderProfileOgForCrawler
 } from '$lib/recipeOgHtml.server';
 
 /**
@@ -110,16 +112,20 @@ async function maybeRenderBotOg(event: Parameters<Handle>[0]['event']): Promise<
     if (event.request.method !== 'GET') return null;
     if (!isCrawler(event.request.headers.get('user-agent'))) return null;
 
-    const recipe = matchRecipeOgRoute(event.url.pathname);
-    const note = recipe ? null : matchNoteOgRoute(event.url.pathname);
-    const reads = recipe || note ? null : matchReadsOgRoute(event.url.pathname);
-    if (!recipe && !note && !reads) return null;
+    const path = event.url.pathname;
+    const recipe = matchRecipeOgRoute(path);
+    const note = recipe ? null : matchNoteOgRoute(path);
+    const reads = recipe || note ? null : matchReadsOgRoute(path);
+    const profile = recipe || note || reads ? null : matchProfileOgRoute(path);
+    if (!recipe && !note && !reads && !profile) return null;
 
     const html = recipe
       ? await renderRecipeOgForCrawler(recipe.prefix, recipe.slug, event.url.origin)
       : note
         ? await renderNoteOgForCrawler(note.slug, event.url.origin)
-        : await renderReadsOgForCrawler(reads!.slug, event.url.origin);
+        : reads
+          ? await renderReadsOgForCrawler(reads.slug, event.url.origin)
+          : await renderProfileOgForCrawler(profile!.slug, event.url.origin, path);
     return new Response(html, {
       status: 200,
       headers: {
