@@ -5,7 +5,9 @@ import {
   matchRecipeOgRoute,
   renderRecipeOgForCrawler,
   matchNoteOgRoute,
-  renderNoteOgForCrawler
+  renderNoteOgForCrawler,
+  matchReadsOgRoute,
+  renderReadsOgForCrawler
 } from '$lib/recipeOgHtml.server';
 
 /**
@@ -110,11 +112,14 @@ async function maybeRenderBotOg(event: Parameters<Handle>[0]['event']): Promise<
 
     const recipe = matchRecipeOgRoute(event.url.pathname);
     const note = recipe ? null : matchNoteOgRoute(event.url.pathname);
-    if (!recipe && !note) return null;
+    const reads = recipe || note ? null : matchReadsOgRoute(event.url.pathname);
+    if (!recipe && !note && !reads) return null;
 
     const html = recipe
       ? await renderRecipeOgForCrawler(recipe.prefix, recipe.slug, event.url.origin)
-      : await renderNoteOgForCrawler(note!.slug, event.url.origin);
+      : note
+        ? await renderNoteOgForCrawler(note.slug, event.url.origin)
+        : await renderReadsOgForCrawler(reads!.slug, event.url.origin);
     return new Response(html, {
       status: 200,
       headers: {

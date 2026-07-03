@@ -65,6 +65,25 @@ export function matchNoteOgRoute(pathname: string): { slug: string } | null {
   return { slug: m[1] };
 }
 
+/** Long-form article routes (`/reads/naddr1…`). */
+const READS_ROUTE_RE = /^\/reads\/([^/]+)\/?$/;
+
+export function matchReadsOgRoute(pathname: string): { slug: string } | null {
+  const m = pathname.match(READS_ROUTE_RE);
+  if (!m) return null;
+  return { slug: m[1] };
+}
+
+/** Generic article card when a `/reads/` event can't be resolved. */
+const FALLBACK_ARTICLE_OG: RecipeOgMeta = {
+  pageTitle: 'Article - zap.cooking',
+  ogTitle: 'An article on Zap Cooking',
+  description: 'A long-form article shared on zap.cooking - Food. Friends. Freedom.',
+  image: 'https://zap.cooking/social-share.png',
+  publishedAt: null,
+  authorPubkey: null
+};
+
 function escapeAttr(value: string): string {
   return value
     .replace(/&/g, '&amp;')
@@ -152,6 +171,23 @@ export async function renderNoteOgForCrawler(slug: string, origin: string): Prom
   try {
     const data = await fetchNoteForOg(slug);
     if (data) meta = getNoteOgMeta(data);
+  } catch {
+    /* keep fallback meta */
+  }
+  return renderDocument(meta, canonicalUrl);
+}
+
+/**
+ * Build the standalone crawler document for a `/reads/naddr…` article. Reuses
+ * the recipe resolver/derivation (both are kind:30023 with title/summary/image
+ * tags), with a generic article fallback. Never throws or hangs.
+ */
+export async function renderReadsOgForCrawler(slug: string, origin: string): Promise<string> {
+  const canonicalUrl = `${origin}/reads/${slug}`;
+  let meta: RecipeOgMeta = FALLBACK_ARTICLE_OG;
+  try {
+    const event = await fetchRecipeEventForOg(slug);
+    if (event) meta = getRecipeOgMeta(event);
   } catch {
     /* keep fallback meta */
   }
