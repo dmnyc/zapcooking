@@ -20,10 +20,25 @@ import {
   type RecipeOgMeta
 } from './recipeOgMeta';
 
-const RESOLVE_TIMEOUT_MS = 4000;
+// The note event is the card; the author profile is a best-effort enrichment.
+// They're bounded SEPARATELY so a slow kind:0 relay can never consume the
+// note's budget and drop the whole card.
+const NOTE_TIMEOUT_MS = 4000;
+const AUTHOR_TIMEOUT_MS = 1500;
 const FALLBACK_IMAGE = 'https://zap.cooking/social-share.png';
 // First raster image URL in the note body → used as the card image.
 const IMG_RE = /(https?:\/\/[^\s"']+\.(?:jpe?g|png|gif|webp|avif|bmp)(?:\?[^\s"']*)?)/i;
+// Trailing punctuation that markdown/plain text can leave on a captured URL
+// (e.g. from `![](url)` or `(url).`) — strip it so og:image stays valid.
+const TRAILING_PUNCT_RE = /[)\]}.,!?;'"]+$/;
+
+/** Resolve `p`, but never take longer than `ms`; on timeout or error → `fallback`. */
+function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return Promise.race([
+    p.catch(() => fallback),
+    new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms))
+  ]);
+}
 
 interface NoteAuthor {
   name?: string;
@@ -75,24 +90,30 @@ async function resolveNote(slug: string): Promise<NoteOgData | null> {
   const id = decodeNoteId(slug);
   if (!id) return null;
 
-  const event = toOgEvent(await raceRelays({ ids: [id] }));
+  // Bound the note fetch on its own budget.
+  const event = toOgEvent(await withTimeout(raceRelays({ ids: [id] }), NOTE_TIMEOUT_MS, null));
   if (!event) return null;
 
-  // Resolve the author's kind:0 profile for a name + avatar (best-effort).
+  // Author kind:0 profile — best-effort, on its OWN short budget so it can't
+  // starve the note. A timeout just yields a generic title/image.
   let author: NoteAuthor = {};
   if (event.pubkey) {
-    try {
-      const meta = await raceRelays({ kinds: [0], authors: [event.pubkey] });
-      const content = (meta as Record<string, unknown> | null)?.content;
-      if (typeof content === 'string') {
+    const meta = await withTimeout(
+      raceRelays({ kinds: [0], authors: [event.pubkey] }),
+      AUTHOR_TIMEOUT_MS,
+      null
+    );
+    const content = (meta as Record<string, unknown> | null)?.content;
+    if (typeof content === 'string') {
+      try {
         const p = JSON.parse(content) as Record<string, string>;
         author = {
           name: p.display_name || p.displayName || p.name,
           picture: p.picture
         };
+      } catch {
+        /* malformed profile JSON — keep empty author */
       }
-    } catch {
-      /* no profile — fall back to a generic title/image */
     }
   }
 
@@ -111,7 +132,7 @@ function cleanNoteText(content: string): string {
 export function getNoteOgMeta({ event, author }: NoteOgData): RecipeOgMeta {
   const name = author.name?.trim();
   const text = cleanNoteText(event.content);
-  const imageInBody = event.content.match(IMG_RE)?.[1];
+  const imageInBody = event.content.match(IMG_RE)?.[1]?.replace(TRAILING_PUNCT_RE, '');
 
   return {
     pageTitle: name ? `${name} on zap.cooking` : 'Note - zap.cooking',
@@ -125,15 +146,13 @@ export function getNoteOgMeta({ event, author }: NoteOgData): RecipeOgMeta {
 }
 
 /**
- * Resolve a note for OG rendering. Never throws and never hangs past
- * RESOLVE_TIMEOUT_MS — returns null on decode failure, timeout, or not-found.
+ * Resolve a note for OG rendering. Never throws; the note and author fetches
+ * are each independently time-bounded (see NOTE_TIMEOUT_MS / AUTHOR_TIMEOUT_MS)
+ * so a slow author lookup can't drop the note card.
  */
 export async function fetchNoteForOg(slug: string): Promise<NoteOgData | null> {
   try {
-    const timeout = new Promise<null>((resolve) =>
-      setTimeout(() => resolve(null), RESOLVE_TIMEOUT_MS)
-    );
-    return await Promise.race([resolveNote(slug), timeout]);
+    return await resolveNote(slug);
   } catch {
     return null;
   }
