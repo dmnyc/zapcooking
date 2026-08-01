@@ -1744,13 +1744,22 @@ export async function listSparkBackups(pubkey: string): Promise<SparkBackupEntry
     await ndkReady;
     const ndkInstance = get(ndk);
 
-    const events = await ndkInstance.fetchEvents(
-      {
-        kinds: [BACKUP_EVENT_KIND],
-        authors: [pubkey]
-      },
-      { closeOnEose: true }
-    );
+    const filter = {
+      kinds: [BACKUP_EVENT_KIND],
+      authors: [pubkey]
+    };
+
+    // fetchEvents resolves at EOSE, but on a cold start (right after a page
+    // load) not every relay has finished connecting when the REQ goes out —
+    // so a relay holding the backup can be missed and the result comes back
+    // empty even though the backup exists. If the first attempt finds
+    // nothing, give the relays a moment to finish handshaking and try once
+    // more. Warm calls still resolve in a single fetch.
+    let events = await ndkInstance.fetchEvents(filter, { closeOnEose: true });
+    if ((!events || events.size === 0) && browser) {
+      await new Promise((r) => setTimeout(r, 1500));
+      events = await ndkInstance.fetchEvents(filter, { closeOnEose: true });
+    }
 
     if (!events || events.size === 0) {
       return [];
