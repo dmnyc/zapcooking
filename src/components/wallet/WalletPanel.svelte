@@ -4848,7 +4848,12 @@
             {/if}
           {:else if sparkRestoreMode === 'nostr-select'}
             <p class="text-caption mb-4">Choose a backup to restore:</p>
-            <div class="space-y-2 mb-4">
+            <!-- The list scrolls internally with a bounded height so the
+                 "Restore selected backup" button below stays in view no
+                 matter how many backups exist. Previously the list grew
+                 unbounded and pushed the button below the fold (and on
+                 some layouts the panel wouldn't scroll to reach it). -->
+            <div class="spark-backup-list space-y-2 mb-4">
               {#each sparkBackupOptions as backup}
                 <button
                   class={`w-full p-3 rounded-lg text-left transition-colors hover:bg-accent-gray ${
@@ -4878,10 +4883,14 @@
             <Button
               on:click={handleRestoreSelectedSparkBackup}
               disabled={isConnecting}
-              class="w-full"
+              class="w-full mt-2"
             >
               Restore selected backup
             </Button>
+            <!-- Generous clearance below the restore button so it isn't pinned
+                 against the wallet panel's bottom edge / the mobile bottom
+                 nav — large enough to be unmistakable. -->
+            <div aria-hidden="true" style="height: 5rem; flex-shrink: 0;"></div>
           {:else if sparkRestoreMode === 'mnemonic'}
             <p class="text-caption mb-4">
               Enter your 12 or 24 word recovery phrase to restore your wallet.
@@ -6570,6 +6579,17 @@
     overflow-y: auto;
     overscroll-behavior: contain;
     padding: 0 1rem;
+  }
+  /* Spark restore-from-Nostr backup picker: bound + self-scrolling so the
+     "Restore selected backup" button beneath it stays reachable when a user
+     has many relay backups. overscroll-behavior: contain keeps the list's
+     scroll from chaining into the wallet panel behind it. */
+  .spark-backup-list {
+    max-height: 40vh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    /* Room so the scrollbar doesn't crowd the last item's border. */
+    padding-right: 0.25rem;
   }
   /* Inline send / receive / picker / wallet-info / remove-wallet views
      reuse .wallet-scroll for sizing but want a bit of vertical
