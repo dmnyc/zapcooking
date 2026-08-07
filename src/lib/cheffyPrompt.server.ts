@@ -162,6 +162,15 @@ Directions
 2. [Step 2]
 3. [Step 3]`;
 
+// Both note-review modes publish as a kind-1 note, which is plain text in
+// every client — markdown does not render, it just shows up as literal
+// punctuation. Named marker-by-marker because "no markdown" alone still
+// leaves a chat-trained model reaching for bold and bullets out of habit.
+// stripMarkdownForNoteDraft() enforces this server-side regardless; the
+// rule exists so the model writes prose that reads well WITHOUT the
+// markup, rather than prose that needs the markup stripped out of it.
+const NOTE_REVIEW_PLAIN_TEXT_RULE = `This draft is published as a plain-text note in a social feed, where markdown does NOT render — every marker shows up as literal punctuation. Use none of it: no "#" headers or underlined headings, no "**bold**", "__bold__", "*italic*" or "_italic_", no "~~strikethrough~~", no backticks or code fences, no "> " quotes, no "---" divider lines, no tables, and no "[label](url)" links — write a URL out plainly if you genuinely need one.`;
+
 const NOTE_REVIEW_SHARED_RULES = `RULES
 - The photo may include people. You may neutrally mention a visible activity or setting, but NEVER assess bodies, attractiveness, age, health, ethnicity, disability, or other sensitive traits.
 - Never insult, shame, or embarrass the poster. Never invent personal details or claim certainty about context the photo does not establish.
@@ -175,7 +184,9 @@ ${CHEFFY_VOICE_BLOCK}
 ${CHEFFY_SAFETY_BLOCK}
 
 TASK
-Write a short reply-comment of 1-3 sentences: warm, specific, and natural. Reference something actually visible in the photo — an object, color, detail, setting, or activity; for food, that might be the texture, sear, or crumb — so it reads as genuine, not generic. Use the note text only as context, and do not pretend to know anything the photo or note does not establish. Plain text only: no markdown headers, no lists, no hashtags, and at most one emoji (only when it truly fits).
+Write a short reply-comment of 1-3 sentences: warm, specific, and natural. Reference something actually visible in the photo — an object, color, detail, setting, or activity; for food, that might be the texture, sear, or crumb — so it reads as genuine, not generic. Use the note text only as context, and do not pretend to know anything the photo or note does not establish. Plain prose only: no lists, no hashtags, and at most one emoji (only when it truly fits).
+
+${NOTE_REVIEW_PLAIN_TEXT_RULE}
 
 ${NOTE_REVIEW_SHARED_RULES}`;
 
@@ -190,7 +201,7 @@ Reverse-engineer a plausible, complete, home-cook-achievable recipe for the dish
 
 ${NOTE_REVIEW_RECIPE_FORMAT_BLOCK}
 
-This draft becomes a plain-text reply in a social feed, so use NO markdown: no "#" headers, no "**bold**" or "__bold__", no backticks, no hashtags. Section words go on their own line exactly as shown.
+${NOTE_REVIEW_PLAIN_TEXT_RULE} No hashtags either. Section words go on their own line exactly as shown, with nothing underlining them — the "- " and "1. " markers above are ordinary text and are the only line prefixes you may use.
 
 ${NOTE_REVIEW_SHARED_RULES}
 - If the image does not clearly show food or drink, respond with exactly "${NOT_FOOD_PREFIX}" followed by one short, playful sentence about what you can see instead. Produce nothing else in that case.`;
@@ -277,23 +288,89 @@ ${fenceSafe}
  * note-review draft is plain text before it ever reaches the member.
  *
  * The prompt is the request; this is the guarantee. Both note-review
- * modes publish through postComment as a plain-text feed reply, so a
- * stray `## Ingredients` shows up as literal `#` characters in every
- * client. A member should not have to tidy up a draft we sold them.
+ * modes publish through postComment as a kind-1 feed reply, and kind 1 is
+ * plain text in every client that matters — nothing renders markdown, so
+ * a stray `## Ingredients` or `**sear**` shows up as literal `#` and `*`
+ * characters. A member should not have to tidy up a draft we sold them.
  *
- * Deliberately narrow — it removes exactly two markers:
- *   - ATX headers: leading `#` through `######` plus their space
- *   - emphasis pairs: `**bold**` / `__bold__` → `bold`
- * Unpaired markers are left alone (they are not emphasis), `- ` and
- * `1. ` are left alone (they read as ordinary text), and `*` alone is
- * left alone (it is a multiplication sign as often as it is markup).
+ * Every marker below is removed because it renders as garbage in a kind-1
+ * client, never because markdown is untidy:
+ *   - fenced code blocks (``` / ~~~) — fence lines dropped, body kept
+ *   - ATX headers (`#`…`######`) and setext underlines (`===` / `---`)
+ *   - thematic breaks (`---`, `***`, `___` alone on a line)
+ *   - blockquote markers (`> `)
+ *   - table rows and their `|---|` delimiter row → ` · ` separated cells
+ *   - `*`/`+` bullets normalized to `- ` (the format block's marker)
+ *   - images `![alt](url)` → url, links `[label](url)` → `label url`
+ *     (bare URLs are what a nostr client linkifies)
+ *   - inline code, `~~strike~~`, `**bold**`/`__bold__`, `*em*`/`_em_`
+ *
+ * Deliberately NOT touched, because these read as ordinary text in a
+ * feed and stripping them would damage real content:
+ *   - `- ` and `1. ` list markers
+ *   - unpaired markers, and a lone `*` (a multiplication sign as often
+ *     as it is markup) — emphasis requires a non-space-hugging pair
+ *   - intraword underscores, so `NOT_FOOD:` and snake_case survive
+ *   - `#hashtags` and a mid-line `#`
  *
  * NOTE-REVIEW ONLY. The chat path (/api/zappy) must never call this —
  * there markdown is the contract the editor parses.
  */
 export function stripMarkdownForNoteDraft(text: string): string {
-  return text
-    .replace(/^[ \t]*#{1,6}[ \t]+/gm, '')
-    .replace(/(\*\*|__)(?=\S)([\s\S]*?\S)\1/g, '$2')
+  let out = text;
+
+  // Fence lines only — the code inside them is still the draft's words.
+  // Whole-line removals below take their newline with them, so deleting a
+  // line never leaves a blank one in its place.
+  out = out.replace(/^[ \t]*(?:```|~~~)[^\n]*(?:\n|$)/gm, '');
+
+  // Setext headers collapse to their title line. Must run before the
+  // thematic-break rule below, which would otherwise claim the underline
+  // and leave the title looking like a stray fragment.
+  out = out.replace(/^([ \t]*\S[^\n]*)\n[ \t]*(?:={3,}|-{3,})[ \t]*$/gm, '$1');
+  out = out.replace(/^[ \t]*(?:-{3,}|\*{3,}|_{3,})[ \t]*(?:\n|$)/gm, '');
+
+  out = out.replace(/^[ \t]*#{1,6}[ \t]+/gm, '');
+  out = out.replace(/^[ \t]*>[ \t]?/gm, '');
+
+  // Tables: drop the delimiter row outright, then flatten the pipe rows
+  // that remain. Only lines fenced by pipes on both ends qualify, which
+  // no ordinary recipe line is.
+  out = out.replace(/^[ \t]*\|(?:[ \t]*:?-{2,}:?[ \t]*\|)+[ \t]*(?:\n|$)/gm, '');
+  out = out.replace(/^[ \t]*\|(.+)\|[ \t]*$/gm, (_m, row: string) =>
+    row
+      .split('|')
+      .map((cell) => cell.trim())
+      .filter(Boolean)
+      .join(' · ')
+  );
+
+  out = out.replace(/^([ \t]*)[*+][ \t]+/gm, '$1- ');
+
+  // Images keep only the URL (clients preview a bare image URL); links
+  // keep the label and the URL side by side, which is how a person would
+  // have written it in the first place.
+  out = out.replace(/!\[[^\]\n]*\]\([ \t]*<?([^\s)>]*)>?[^)\n]*\)/g, '$1');
+  out = out.replace(
+    /\[([^\]\n]*)\]\([ \t]*<?([^\s)>]*)>?[^)\n]*\)/g,
+    (_m: string, label: string, url: string) => {
+      const shown = label.trim();
+      if (!url) return shown;
+      return !shown || shown === url ? url : `${shown} ${url}`;
+    }
+  );
+
+  out = out.replace(/`+([^`\n]+)`+/g, '$1');
+  out = out.replace(/~~(?=\S)([\s\S]*?\S)~~/g, '$1');
+  out = out.replace(/(\*\*|__)(?=\S)([\s\S]*?\S)\1/g, '$2');
+  out = out.replace(/\*(?=\S)([^*\n]*\S)\*/g, '$1');
+  // Word-boundary guarded so only true emphasis is unwrapped.
+  out = out.replace(/(?<!\w)_(?=\S)([^_\n]*\S)_(?!\w)/g, '$1');
+
+  // The removals above leave blank lines where whole lines used to be;
+  // never let that widen the draft's paragraph spacing.
+  return out
+    .replace(/[ \t]+$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
     .trim();
 }

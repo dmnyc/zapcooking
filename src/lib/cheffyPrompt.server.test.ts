@@ -64,6 +64,17 @@ describe('cheffyPrompt composition', () => {
     expect(NOTE_REVIEW_RECIPE_FORMAT_BLOCK).toContain('Directions\n1. ');
   });
 
+  // Both modes publish to kind 1, so both must carry the same plain-text
+  // contract — the comment mode is not the lenient one.
+  it('both note-review modes forbid markdown marker by marker', () => {
+    for (const prompt of [NOTE_REVIEW_COMMENT_INSTRUCTION, NOTE_REVIEW_RECIPE_INSTRUCTION]) {
+      expect(prompt).toContain('markdown does NOT render');
+      for (const marker of ['**bold**', '*italic*', '~~strikethrough~~', '[label](url)', '---']) {
+        expect(prompt).toContain(marker);
+      }
+    }
+  });
+
   // The chat path keeps the editor-parsed block — this change must not
   // have narrowed it.
   it('chat recipe format still carries its editor-parsed markers', () => {
@@ -114,6 +125,97 @@ describe('stripMarkdownForNoteDraft', () => {
     expect(stripMarkdownForNoteDraft('  **NOT_FOOD:** That is a bicycle.  ')).toBe(
       'NOT_FOOD: That is a bicycle.'
     );
+  });
+
+  it('unwraps single-marker emphasis without touching intraword underscores', () => {
+    expect(stripMarkdownForNoteDraft('A *very* hot pan and _real_ butter.')).toBe(
+      'A very hot pan and real butter.'
+    );
+    expect(stripMarkdownForNoteDraft('NOT_FOOD: check the snake_case_name field')).toBe(
+      'NOT_FOOD: check the snake_case_name field'
+    );
+  });
+
+  it('drops setext underlines but keeps the heading text', () => {
+    expect(stripMarkdownForNoteDraft('Ingredients\n===========\n- 2 eggs')).toBe(
+      'Ingredients\n- 2 eggs'
+    );
+    expect(stripMarkdownForNoteDraft('Directions\n----------\n1. Mix')).toBe('Directions\n1. Mix');
+  });
+
+  it('removes divider lines without widening paragraph spacing', () => {
+    expect(stripMarkdownForNoteDraft('Ingredients\n- 2 eggs\n\n---\n\nDirections\n1. Mix')).toBe(
+      'Ingredients\n- 2 eggs\n\nDirections\n1. Mix'
+    );
+    expect(stripMarkdownForNoteDraft('One\n***\nTwo\n___\nThree')).toBe('One\nTwo\nThree');
+  });
+
+  it('keeps fenced and inline code content, drops the markers', () => {
+    expect(stripMarkdownForNoteDraft('Try this:\n```\nsalt to taste\n```')).toBe(
+      'Try this:\nsalt to taste'
+    );
+    expect(stripMarkdownForNoteDraft('Set it to `350F` and wait.')).toBe(
+      'Set it to 350F and wait.'
+    );
+    // A lone backtick is not a code span.
+    expect(stripMarkdownForNoteDraft('That ` is a stray tick')).toBe('That ` is a stray tick');
+  });
+
+  it('unwraps strikethrough and normalizes asterisk bullets', () => {
+    expect(stripMarkdownForNoteDraft('~~Butter~~ Olive oil works.')).toBe(
+      'Butter Olive oil works.'
+    );
+    expect(stripMarkdownForNoteDraft('Ingredients\n* 2 eggs\n+ 1 cup flour')).toBe(
+      'Ingredients\n- 2 eggs\n- 1 cup flour'
+    );
+  });
+
+  it('strips blockquote markers', () => {
+    expect(stripMarkdownForNoteDraft('> Rest the dough.\n> Then bake.')).toBe(
+      'Rest the dough.\nThen bake.'
+    );
+  });
+
+  it('flattens links and images to bare, linkifiable URLs', () => {
+    expect(stripMarkdownForNoteDraft('See [my method](https://zap.cooking/x) for more.')).toBe(
+      'See my method https://zap.cooking/x for more.'
+    );
+    expect(stripMarkdownForNoteDraft('![plated pasta](https://img.example/1.jpg)')).toBe(
+      'https://img.example/1.jpg'
+    );
+    // A self-linking URL should not be printed twice.
+    expect(stripMarkdownForNoteDraft('[https://zap.cooking](https://zap.cooking)')).toBe(
+      'https://zap.cooking'
+    );
+    // Bracketed text that is not a link is ordinary prose.
+    expect(stripMarkdownForNoteDraft('Add [optional] chili flakes.')).toBe(
+      'Add [optional] chili flakes.'
+    );
+  });
+
+  it('flattens table rows into a single readable line', () => {
+    expect(stripMarkdownForNoteDraft('| Prep | Cook |\n| --- | --- |\n| 15 min | 3 hr |')).toBe(
+      'Prep · Cook\n15 min · 3 hr'
+    );
+  });
+
+  it('leaves a fully plain-text recipe draft byte-identical', () => {
+    const draft = [
+      'Rustic Skillet Lasagna (from a photo)',
+      '',
+      'A bubbling, deeply browned lasagna baked right in the pan.',
+      '',
+      '⏲️ Prep 20 min · 🍳 Cook 45 min · 🍽️ Serves 6',
+      '',
+      'Ingredients',
+      '- 1 lb ground beef',
+      '- 2 cups marinara',
+      '',
+      'Directions',
+      '1. Brown the beef.',
+      '2. Layer and bake.'
+    ].join('\n');
+    expect(stripMarkdownForNoteDraft(draft)).toBe(draft);
   });
 });
 

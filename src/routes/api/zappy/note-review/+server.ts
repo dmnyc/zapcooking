@@ -302,15 +302,16 @@ export const POST: RequestHandler = async ({ request, platform }) => {
     const openaiData = await openaiResponse.json();
     const output: string | undefined = openaiData.choices?.[0]?.message?.content;
 
-    // Both modes publish as a plain-text feed reply, so markdown the
-    // model reached for anyway is stripped here — the prompt asks, this
-    // guarantees. Runs BEFORE the NOT_FOOD check so a bolded sentinel
-    // (`**NOT_FOOD:** …`) is still detected as the dead-end it is, and
-    // before the empty check so a completion that is only the markers
-    // this strip removes (e.g. `## `) is treated as the non-draft it
-    // is. Other markup (backticks, unpaired `**`) is left alone and
-    // would still be a non-empty draft. Scoped to this endpoint: chat
-    // keeps markdown.
+    // Both modes publish as a kind-1 reply, which is plain text in every
+    // client, so markdown the model reached for anyway is stripped here —
+    // the prompt asks, this guarantees. Runs BEFORE the NOT_FOOD check so
+    // a bolded sentinel (`**NOT_FOOD:** …`) is still detected as the
+    // dead-end it is, and before the empty check so a completion that is
+    // only markers this strip removes (e.g. `## `, a bare `---`, a lone
+    // code fence) is treated as the non-draft it is. Markers left alone
+    // by design — `- `/`1. ` list prefixes, unpaired `**`, a lone `*` —
+    // read as ordinary text and still make a non-empty draft. Scoped to
+    // this endpoint: chat keeps markdown.
     let trimmed = output ? stripMarkdownForNoteDraft(output) : '';
     if (!trimmed) {
       return json(
