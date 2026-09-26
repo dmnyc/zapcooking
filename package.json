@@ -1,7 +1,7 @@
 {
   "name": "zap.cooking",
   "license": "MIT",
-  "version": "4.2.785",
+  "version": "4.2.786",
   "private": true,
   "scripts": {
     "dev": "vite dev",
@@ -75,6 +75,7 @@
     "qrcode-generator": "^1.4.4",
     "stripe": "^20.1.0",
     "timeago.js": "^4.0.2",
+    "tlds": "^1.261.0",
     "turndown": "^7.2.2",
     "webln": "^0.3.2"
   },
