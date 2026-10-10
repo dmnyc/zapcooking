@@ -255,3 +255,45 @@ describe('isVideoUrl', () => {
     expect(isVideoUrl('not a url')).toBe(false);
   });
 });
+
+describe('parseImeta poster', () => {
+  it('captures a video poster from the `image` slot', () => {
+    const event = {
+      content: '',
+      tags: [
+        [
+          'imeta',
+          'url https://x/v.mp4',
+          'm video/mp4',
+          'image https://x/v-poster.jpg'
+        ]
+      ]
+    };
+    expect(parseImeta(event)[0].poster).toBe('https://x/v-poster.jpg');
+  });
+
+  it('falls back to the `thumb` slot for the poster when `image` is absent', () => {
+    const event = {
+      content: '',
+      tags: [
+        ['imeta', 'url https://x/v.mp4', 'm video/mp4', 'thumb https://x/v-thumb.jpg']
+      ]
+    };
+    expect(parseImeta(event)[0].poster).toBe('https://x/v-thumb.jpg');
+  });
+
+  it('prefers `image` over `thumb` when both are present', () => {
+    const event = {
+      content: '',
+      tags: [
+        [
+          'imeta',
+          'url https://x/v.mp4',
+          'image https://x/v-image.jpg',
+          'thumb https://x/v-thumb.jpg'
+        ]
+      ]
+    };
+    expect(parseImeta(event)[0].poster).toBe('https://x/v-image.jpg');
+  });
+});

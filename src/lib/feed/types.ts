@@ -23,6 +23,10 @@ export interface MediaItem {
   /** Blurhash placeholder per NIP-92 `blurhash`. Decoded to a data URL
    * lazily by `blurhash.ts`. */
   blurhash?: string;
+  /** Poster image for video items per NIP-92 `image` / `thumb` — gallery
+   * tiles render it as a plain <img>; the <video> only mounts in the
+   * Lightbox. */
+  poster?: string;
   /** Alt text per NIP-92 `alt`. */
   alt?: string;
   /** Additional URLs (per NIP-92 `fallback`) tried if the primary URL
@@ -31,13 +35,6 @@ export interface MediaItem {
   /** Optional `x` (sha256) from imeta — for content addressing /
    * deduplication. Not used today but cheap to carry. */
   hash?: string;
-  /** Poster image URL for video items. Many Nostr clients attach a
-   * still-frame URL via NIP-92's `image` slot or a sibling `thumb`
-   * tag. When present, the gallery thumbnail renders this <img>
-   * instead of the <video> element — far more reliable cross-browser
-   * than depending on the video to render its own first frame, and
-   * cheaper (no metadata fetch per tile). */
-  poster?: string;
 }
 
 /** A repost wrapper (kind 6 / kind 16). The repost's body is the inner
@@ -106,8 +103,8 @@ export interface FeedNoteVM {
 }
 
 /** The feed tab the user is viewing. URL-bookmarkable via the
- * `?tab=` searchParam on `/community`. */
-export type FeedTab = 'global' | 'following' | 'replies' | 'members' | 'garden';
+ * `?tab=` searchParam on `/feed`. */
+export type FeedTab = 'global' | 'following' | 'replies' | 'members';
 
 /** Pagination cursor passed to `FeedSource.loadMore()`. Matches the
  * `since` / `until` convention used by the existing monolith so cursor
