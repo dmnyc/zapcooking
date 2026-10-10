@@ -71,7 +71,7 @@
   } from '$lib/shareNoteImage';
   import { optimizeImageUrl, getOptimalFormat } from '$lib/imageOptimizer';
   import { stripQuotedNoteReferences } from '$lib/feed/noteContent';
-  import { imetaAltByUrl } from '$lib/feed/imeta';
+  import { imetaAltByUrl, parseImeta } from '$lib/feed/imeta';
   import { compressedCacheManager } from '$lib/compressedCache';
   import FeedErrorBoundary from './FeedErrorBoundary.svelte';
   import FeedPostSkeleton from './FeedPostSkeleton.svelte';
@@ -539,6 +539,18 @@
   let selectedEvent: NDKEvent | null = null;
   let imageModalOpen = false;
   let selectedEventImages: (string | { url: string; alt?: string })[] = [];
+
+  // Blurhash placeholder map for the lightbox, parsed from the selected
+  // event's NIP-92 imeta tags (Svelte 4 templates can't hold TS casts,
+  // so the map is built here in the script).
+  function blurhashMapFor(ev: NDKEvent | null): Map<string, string> {
+    if (!ev) return new Map();
+    return new Map(
+      parseImeta(ev)
+        .filter((m) => m.blurhash)
+        .map((m) => [m.url, m.blurhash as string])
+    );
+  }
   let selectedImageIndex = 0;
 
   // Lazy loading for engagement components
@@ -5804,6 +5816,7 @@
   <div use:portal={portalTarget}>
     <MediaLightbox
       images={selectedEventImages}
+      blurhashByUrl={blurhashMapFor(selectedEvent)}
       bind:index={selectedImageIndex}
       onClose={closeImageModal}
     />
