@@ -582,8 +582,8 @@
   .article-embed {
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
-    margin-top: 0.375rem;
+    gap: 0.625rem;
+    margin-top: 0.5rem;
   }
 
   .article-embed-image {
@@ -615,8 +615,8 @@
   .article-embed-summary {
     font-size: 0.8125rem;
     color: var(--color-caption);
-    line-height: 1.4;
-    margin: 0.1875rem 0 0;
+    line-height: 1.5;
+    margin: 0.25rem 0 0;
     display: -webkit-box;
     -webkit-line-clamp: 2;
     line-clamp: 2;

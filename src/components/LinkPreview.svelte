@@ -173,7 +173,7 @@
           />
         </div>
       {/if}
-      <div class="flex min-w-0 flex-1 flex-col justify-center gap-1 p-2.5 sm:p-3">
+      <div class="flex min-w-0 flex-1 flex-col justify-center gap-1.5 p-3 sm:p-4">
         <div class="flex min-w-0 items-center gap-1.5 text-xs" style="color: var(--color-caption)">
           {#if meta.favicon}
             <img src={meta.favicon} alt="" class="w-3.5 h-3.5" on:error={() => meta && (meta.favicon = '')} />
@@ -186,7 +186,7 @@
           </h4>
         {/if}
         {#if meta.description}
-          <p class="text-xs text-caption line-clamp-2 leading-snug">
+          <p class="text-xs text-caption line-clamp-2 leading-snug mt-0.5">
             {meta.description}
           </p>
         {/if}
