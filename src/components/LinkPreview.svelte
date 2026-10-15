@@ -124,11 +124,13 @@
 {#if loading}
   <!-- Loading skeleton -->
   <div class="my-1 border rounded-lg overflow-hidden animate-pulse" style="border-color: var(--color-input-border)">
-    <div class="w-full aspect-[16/10] bg-accent-gray"></div>
-    <div class="p-3 space-y-2">
-      <div class="h-3 bg-accent-gray rounded w-3/4"></div>
-      <div class="h-2 bg-accent-gray rounded w-full"></div>
-      <div class="h-2 bg-accent-gray rounded w-1/2"></div>
+    <div class="flex h-24 sm:h-28 md:h-32">
+      <div class="hidden sm:block sm:aspect-square md:aspect-[1.91/1] h-full bg-accent-gray shrink-0"></div>
+      <div class="flex-1 p-3 space-y-2">
+        <div class="h-3 bg-accent-gray rounded w-3/4"></div>
+        <div class="h-2 bg-accent-gray rounded w-full"></div>
+        <div class="h-2 bg-accent-gray rounded w-1/2"></div>
+      </div>
     </div>
   </div>
 {:else if error || !meta || (!meta.title && !meta.description && !meta.image)}
@@ -150,38 +152,44 @@
     class="my-1 block border rounded-lg overflow-hidden hover:bg-accent-gray/50 transition-colors"
     style="border-color: var(--color-input-border)"
   >
-    <!-- Jumble-style card: the preview image spans the card on top at a
-         wide crop, text below. The old side-thumb (object-contain in a
-         96–128px column) letterboxed wide images down to a sliver. -->
-    <div>
+    <!-- Jumble-style proportions, image still beside the text: a wider
+         image column (160–176px vs the old 96–128) at a square crop with
+         object-cover, so wide images fill edge-to-edge instead of
+         letterboxing inside a short object-contain box. -->
+    <!-- Jumble WebPreview proportions: card height steps 96 -> 112 -> 128px
+         with the viewport, the image fills the left column (square at sm,
+         1.91:1 at md) with object-cover — wide social images crop minimally
+         instead of letterboxing — and the text column centers vertically
+         with the domain on top. -->
+    <div class="flex h-24 sm:h-28 md:h-32">
       {#if meta.image}
-        <div class="w-full bg-accent-gray">
+        <div class="hidden h-full shrink-0 bg-accent-gray sm:block sm:aspect-square md:aspect-[1.91/1]">
           <img
             src={meta.image}
             alt=""
-            class="w-full aspect-[16/10] object-cover"
+            class="h-full w-full object-cover"
             loading="lazy"
             on:error={handleImageError}
           />
         </div>
       {/if}
-      <div class="p-2 sm:p-3 min-w-0 flex flex-col">
+      <div class="flex min-w-0 flex-1 flex-col justify-center gap-1 p-2.5 sm:p-3">
+        <div class="flex min-w-0 items-center gap-1.5 text-xs" style="color: var(--color-caption)">
+          {#if meta.favicon}
+            <img src={meta.favicon} alt="" class="w-3.5 h-3.5" on:error={() => meta && (meta.favicon = '')} />
+          {/if}
+          <span class="truncate">{displayDomain}</span>
+        </div>
         {#if meta.title}
           <h4 class="text-sm font-medium line-clamp-2 leading-tight" style="color: var(--color-text-primary)">
             {meta.title}
           </h4>
         {/if}
         {#if meta.description}
-          <p class="text-xs text-caption line-clamp-2 mt-0.5 leading-snug">
+          <p class="text-xs text-caption line-clamp-2 leading-snug">
             {meta.description}
           </p>
         {/if}
-        <div class="flex items-center gap-1.5 mt-1.5">
-          {#if meta.favicon}
-            <img src={meta.favicon} alt="" class="w-3.5 h-3.5" on:error={() => meta && (meta.favicon = '')} />
-          {/if}
-          <span class="text-xs text-caption truncate">{displayDomain}</span>
-        </div>
       </div>
     </div>
   </a>
