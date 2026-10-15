@@ -575,25 +575,27 @@
   }
 
   /* Long-form card: thumbnail beside title/summary/tags. */
+  /* Jumble-style embed: the cover spans the card on top at a wide crop,
+     title/summary below — the old 5rem side thumbnail letterboxed wide
+     recipe photos down to a sliver. cover at 16:9 keeps edge-to-edge fill
+     at any card width. */
   .article-embed {
     display: flex;
-    gap: 0.625rem;
+    flex-direction: column;
+    gap: 0.5rem;
     margin-top: 0.375rem;
-    align-items: flex-start;
   }
 
   .article-embed-image {
-    flex-shrink: 0;
-    width: 5rem;
-    height: 5rem;
+    width: 100%;
+    aspect-ratio: 16 / 9;
     object-fit: cover;
-    border-radius: 0.375rem;
+    border-radius: 0.5rem;
     background: var(--color-bg-secondary);
   }
 
   .article-embed-body {
     min-width: 0;
-    flex: 1;
   }
 
   .article-embed-title {

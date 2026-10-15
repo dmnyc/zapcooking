@@ -124,13 +124,11 @@
 {#if loading}
   <!-- Loading skeleton -->
   <div class="my-1 border rounded-lg overflow-hidden animate-pulse" style="border-color: var(--color-input-border)">
-    <div class="flex">
-      <div class="w-24 h-20 bg-accent-gray flex-shrink-0"></div>
-      <div class="p-3 flex-1 space-y-2">
-        <div class="h-3 bg-accent-gray rounded w-3/4"></div>
-        <div class="h-2 bg-accent-gray rounded w-full"></div>
-        <div class="h-2 bg-accent-gray rounded w-1/2"></div>
-      </div>
+    <div class="w-full aspect-[16/10] bg-accent-gray"></div>
+    <div class="p-3 space-y-2">
+      <div class="h-3 bg-accent-gray rounded w-3/4"></div>
+      <div class="h-2 bg-accent-gray rounded w-full"></div>
+      <div class="h-2 bg-accent-gray rounded w-1/2"></div>
     </div>
   </div>
 {:else if error || !meta || (!meta.title && !meta.description && !meta.image)}
@@ -152,19 +150,22 @@
     class="my-1 block border rounded-lg overflow-hidden hover:bg-accent-gray/50 transition-colors"
     style="border-color: var(--color-input-border)"
   >
-    <div class="flex">
+    <!-- Jumble-style card: the preview image spans the card on top at a
+         wide crop, text below. The old side-thumb (object-contain in a
+         96–128px column) letterboxed wide images down to a sliver. -->
+    <div>
       {#if meta.image}
-        <div class="w-24 sm:w-32 flex-shrink-0 bg-accent-gray flex items-center">
+        <div class="w-full bg-accent-gray">
           <img
             src={meta.image}
             alt=""
-            class="w-full h-auto object-contain max-h-24"
+            class="w-full aspect-[16/10] object-cover"
             loading="lazy"
             on:error={handleImageError}
           />
         </div>
       {/if}
-      <div class="p-2 sm:p-3 flex-1 min-w-0 flex flex-col justify-center">
+      <div class="p-2 sm:p-3 min-w-0 flex flex-col">
         {#if meta.title}
           <h4 class="text-sm font-medium line-clamp-2 leading-tight" style="color: var(--color-text-primary)">
             {meta.title}
