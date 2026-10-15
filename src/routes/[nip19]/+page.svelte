@@ -15,6 +15,7 @@
   import { ndk, userPublickey } from '$lib/nostr';
   import { mutedPubkeys, muteListStore } from '$lib/muteListStore';
   import { isEventMutedBy } from '$lib/muteFilter';
+  import { replyDraftsStore, replyDraftResumeTarget } from '$lib/replyDraftStore';
   import { onMount, onDestroy } from 'svelte';
   import Avatar from '../../components/Avatar.svelte';
   import CustomName from '../../components/CustomName.svelte';
@@ -659,6 +660,28 @@
   // exactly what read confusingly.
   $: isTopLevelFocus = event ? getReplyParentId(event) === null : false;
 
+  // A tap on a reply-draft pill routed here to continue the draft. The
+  // inline box (top-level notes) restores on its own; a mid-thread note
+  // needs its modal opened.
+  $: if (event && $replyDraftResumeTarget === event.id) {
+    replyDraftResumeTarget.set(null);
+    if (!isTopLevelFocus) {
+      openReplyModal();
+    }
+  }
+
+  // The focused note has a saved draft → the pseudo-input says so. Read
+  // from the store (not a plain get) so saves/deletes re-run this.
+  $: focusedDraftPreview = (() => {
+    $replyDraftsStore.length; // reactive dependency on draft changes
+    if (!event || isTopLevelFocus) return '';
+    return (
+      $replyDraftsStore.find(
+        (d) => d.targetId === event.id && d.pubkey === $userPublickey
+      )?.preview ?? ''
+    );
+  })();
+
   // People in this note: author first, then anyone mentioned (p-tags), then
   // reply authors — deduped, mute-filtered, and capped for the rail.
   $: participants = (() => {
@@ -995,6 +1018,7 @@
           <div class="flex-1 min-w-0 -mt-3">
             <ReplyComposer
               parentEvent={event}
+              draftKey={event.id}
               placeholder="Post your reply..."
               submitLabel="Reply"
               onPosted={handleReplyPosted}
@@ -1076,7 +1100,13 @@
           on:click={() => openReplyModal()}
         >
           <Avatar pubkey={$userPublickey} size={32} />
-          <span class="reply-pseudo-placeholder">Post your reply...</span>
+          <span class="reply-pseudo-placeholder">
+            {#if focusedDraftPreview}
+              Continue your reply — {focusedDraftPreview}
+            {:else}
+              Post your reply...
+            {/if}
+          </span>
         </button>
       {:else if !isTopLevelFocus}
         <div
