@@ -28,7 +28,7 @@
   export let showNostrEmbeds: boolean = true;
   export let embedDepth: number = 0; // Track nesting depth to prevent infinite recursion
   export let collapsible: boolean = true; // Enable collapsible long content
-  export let maxLength: number = 500; // Character limit before collapse
+  export let maxLength: number = 1500; // Character limit before collapse — was 500, which folded notes after ~3 short paragraphs
   export let event: NDKEvent | undefined = undefined;
 
   let isExpanded: boolean = false;
