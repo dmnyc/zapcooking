@@ -57,7 +57,7 @@
   const HEAD =
     'M14 45.3 C14 37.84 20.04 31.8 27.5 31.8 H36.5 C43.96 31.8 50 37.84 50 45.3 V46.3 ' +
     'C50 53.76 43.96 59.8 36.5 59.8 H27.5 C20.04 59.8 14 53.76 14 46.3 Z';
-  // Toque band (brand accent) and three-lobed crown that overhangs it.
+  // All-white toque: a band, and a three-lobed crown that overhangs it.
   const BAND = 'M17 25.8 H47 V32.6 H17 Z';
   const CROWN =
     'M15.63 26.6 A8.4 8.4 0 0 1 22.43 11.29 A10 10 0 0 1 41.57 11.29 ' +
@@ -75,8 +75,10 @@
   const ARM_LEFT = 'M23 40.8 L16.4 50.8';
   const ARM_RIGHT = 'M41 40.8 L47.6 50.8';
 
-  // The Zap Cooking bolt, verbatim from the brand mark (382×382 space),
-  // shown on the toque band at detailed sizes.
+  // The Zap Cooking bolt from the brand mark (382×382 space). It is the
+  // toque's emblem at every size, so it's drawn big: 24 units tall across
+  // crown and band, and 15% wider than the logo so it stays a bold,
+  // readable mark at 16–20px.
   const BRAND_BOLT =
     'M256.47 170.22C255.44 168.04 253.31 166.69 250.9 166.69H208.99L208.79 166.43L225.04 103.91' +
     'C225.78 101.04 224.51 98.2101 221.87 96.8701C219.23 95.5301 216.2 96.1601 214.32 98.4501' +
@@ -84,12 +86,23 @@
     'H172.61L172.81 216.49L156.56 279.01C155.82 281.88 157.09 284.71 159.73 286.05' +
     'C160.65 286.52 161.62 286.75 162.57 286.75C164.34 286.75 166.06 285.96 167.28 284.47' +
     'L255.66 176.76C257.19 174.9 257.5 172.39 256.47 170.22Z';
-  const BOLT_TRANSFORM = 'translate(32 29.2) scale(0.0294) translate(-190.8 -191.4)';
+  const BOLT_TRANSFORM = 'translate(32 18.4) scale(0.1447 0.1258) translate(-190.8 -191.4)';
 
   // Mono glyph — the same build as line art, at a 4-unit stroke (1px at
   // 16px) so it sits with Phosphor's regular-weight icons in menus.
-  const MONO_CROWN =
-    'M16.26 26 A7.5 7.5 0 0 1 23.18 12.71 A9 9 0 0 1 40.82 12.71 A7.5 7.5 0 0 1 47.74 26 Z';
+  // Solid toque (crown + band as one shape) with the brand bolt cut out
+  // of it — a filled hat holds up far better at 16px than an outline
+  // with a small bolt inside. The bolt is the brand path pre-transformed
+  // into this space (19 units tall) so it can share an evenodd fill.
+  const MONO_HAT =
+    'M18 31.5 V26 H16.26 A7.5 7.5 0 0 1 23.18 12.71 A9 9 0 0 1 40.82 12.71 ' +
+    'A7.5 7.5 0 0 1 47.74 26 H46 V31.5 Z';
+  const MONO_BOLT_CUTOUT =
+    'M39.53 16.89C39.41 16.67 39.17 16.54 38.89 16.54H34.09L34.06 16.51L35.93 10.28' +
+    'C36.01 9.99 35.87 9.71 35.56 9.58C35.26 9.44 34.91 9.5 34.7 9.73L24.56 20.47' +
+    'C24.39 20.66 24.35 20.91 24.47 21.12C24.59 21.34 24.83 21.48 25.11 21.48H29.91' +
+    'L29.94 21.5L28.07 27.73C27.99 28.02 28.13 28.3 28.44 28.44C28.54 28.48 28.65 28.51 28.76 28.51' +
+    'C28.97 28.51 29.16 28.43 29.3 28.28L39.44 17.54C39.61 17.35 39.65 17.1 39.53 16.89Z';
   const MONO_HEAD =
     'M18.2 31.5 C16.6 34 15.6 37.4 15.6 41.6 V45 C15.6 52.6 21.4 58.2 28.6 58.2 H35.4 ' +
     'C42.6 58.2 48.4 52.6 48.4 45 V41.6 C48.4 37.4 47.4 34 45.8 31.5';
@@ -104,7 +117,7 @@
   const LINE = 2.2;
   /** Head scale inside the character variant. */
   const CHARACTER_HEAD_SCALE = 0.6;
-  /** Rendered head size (px) from which mouth, brows and bolt appear. */
+  /** Rendered head size (px) from which mouth, brows and catchlights appear. */
   const DETAIL_MIN_PX = 32;
 
   const INK = 'var(--cheffy-ink, #3A2415)';
@@ -118,22 +131,23 @@
    * Cheffy — Zap Cooking's kitchen-companion character.
    *
    * A cartoon, minifig-style chef: a soft wide head under a white
-   * three-lobed toque with a brand-orange band, dot eyes, and a
-   * handlebar mustache. Flat fills inside a single outer outline, so
-   * there are no inner lines to clutter small sizes.
+   * three-lobed toque emblazoned with a big Zap Cooking bolt, dot eyes,
+   * and a handlebar mustache. Flat fills inside a single outer outline,
+   * so there are no inner lines to clutter small sizes.
    *
-   * Optical sizing: below 32px of rendered head the face is just eyes +
-   * mustache (the mood shows in the eye shape and mustache tilt). From
-   * 32px up, the mouth, any mood brows, eye catchlights, and the Zap
-   * bolt on the band are added.
+   * Optical sizing: the toque, bolt, eyes and mustache show at every
+   * size; below 32px of rendered head the mood is carried by eye shape
+   * and mustache tilt alone. From 32px up, the mouth, any mood brows and
+   * eye catchlights are added.
    *
    * Two render modes:
    *  - color (default): colours are CSS custom properties (`--cheffy-*`)
-   *    layered over the app theme; the band and neckerchief follow
+   *    layered over the app theme; the bolt and neckerchief follow
    *    `--color-primary`.
-   *  - mono: single-`currentColor` line glyph at icon-set stroke weight
-   *    for places where the icon should inherit text colour. It's a
-   *    fixed glyph (expression doesn't apply).
+   *  - mono: single-`currentColor` glyph (solid toque with the bolt cut
+   *    out, outlined face, eyes, mustache) at icon-set stroke weight for places
+   *    where the icon should inherit text colour. It's a fixed glyph
+   *    (expression doesn't apply).
    *
    * Accessibility: pass `title` for an accessible name (role="img" +
    * <title>); omit it and the SVG is aria-hidden (decorative).
@@ -194,11 +208,12 @@
       stroke-linejoin="round"
       stroke-linecap="round"
     >
-      <path d={MONO_CROWN} />
-      <path d="M18 26 V31.5 H46 V26" />
+      <path d={MONO_HAT} />
       <path d={MONO_HEAD} />
     </g>
     <g fill="currentColor">
+      <!-- Hat interior minus the bolt (the stroke above rounds its edge) -->
+      <path d={`${MONO_HAT} ${MONO_BOLT_CUTOUT}`} fill-rule="evenodd" />
       <circle cx="25" cy="42.6" r="2.8" />
       <circle cx="39" cy="42.6" r="2.8" />
       <path d={MONO_MUSTACHE} />
@@ -242,10 +257,9 @@
       </g>
       <path d={HEAD} fill={SKIN} />
       <path d={CROWN} fill={HAT} />
-      <path d={BAND} fill={ACCENT} />
-      {#if detailed}
-        <path d={BRAND_BOLT} transform={BOLT_TRANSFORM} fill={HAT} />
-      {/if}
+      <path d={BAND} fill={HAT} />
+      <!-- The Zap bolt — the toque's emblem, at every size -->
+      <path d={BRAND_BOLT} transform={BOLT_TRANSFORM} fill={ACCENT} />
 
       <!-- Eyes -->
       {#if closedEyes}
