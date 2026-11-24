@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount, onDestroy, createEventDispatcher } from 'svelte';
-	import { Editor } from '@tiptap/core';
+	import { Editor, Extension } from '@tiptap/core';
 	import StarterKit from '@tiptap/starter-kit';
 	import Image from '@tiptap/extension-image';
 	import Link from '@tiptap/extension-link';
@@ -8,9 +8,13 @@
 	import CharacterCount from '@tiptap/extension-character-count';
 	import Mention from '@tiptap/extension-mention';
 	import { mentionSuggestion } from './mentionSuggestion';
+	import { TextSelection, AllSelection, NodeSelection } from '@tiptap/pm/state';
 	import { ndk } from '$lib/nostr';
 	import { NDKEvent } from '@nostr-dev-kit/ndk';
 	import { Fetch } from 'hurdak';
+	import { DOMParser as PMDOMParser, DOMSerializer, Fragment as PMFragment, Slice as PMSlice } from '@tiptap/pm/model';
+	import type { Node as PMNode, Schema as PMSchema } from '@tiptap/pm/model';
+	import type { EditorView } from '@tiptap/pm/view';
 	import EditorToolbar from './EditorToolbar.svelte';
 
 	export let content: string = '';
@@ -32,6 +36,77 @@
 	// Word count from character count extension
 	$: wordCount = editor?.storage.characterCount?.words() || 0;
 
+	// ── Clipboard ─────────────────────────────────────────────────
+	// What pasted plain text means in an article: each line is a
+	// paragraph, an empty line is a blank paragraph, and the spaces and
+	// tabs the text carries are kept as written — prosemirror collapses
+	// them when it parses a paragraph.
+	function sliceFromPlainText(text: string, view: EditorView): PMSlice {
+		const normalized = text.replace(/\r\n?/g, '\n');
+		const lines = normalized.split('\n');
+		const el = document.createElement('div');
+		el.innerHTML = lines
+			// A blank line needs the line holder — an empty <p> does not
+			// survive the parse, and the blank line was lost.
+			.map((line) => `<p>${line === '' ? '<br>' : escapeHtml(line)}</p>`)
+			.join('');
+		const parsed = PMDOMParser.fromSchema(view.state.schema).parse(el, {
+			preserveWhitespace: 'full'
+		});
+		// The first block is open, so it joins the line the caret sits on;
+		// the last one merges with what follows. This is the shape
+		// prosemirror's own pastes use — a slice of closed paragraphs
+		// would not merge and would close into a split.
+		return new PMSlice(parsed.content, 1, 1);
+	}
+
+	function escapeHtml(text: string): string {
+		return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+	}
+
+	// Copied HTML loses what the article cannot publish anyway: pictures
+	// nobody uploaded (the toolbar upload is how a picture gets in),
+	// scripts and their handlers, embedded documents.
+	function stripUnpublishable(html: string): string {
+		const parsed = new DOMParser().parseFromString(html, 'text/html');
+		parsed
+			.querySelectorAll('script, style, img, video, iframe, embed, object, source')
+			.forEach((n) => n.remove());
+		return parsed.body.innerHTML;
+	}
+
+	// A copy of this editor pastes back as its text, the way Notes pastes:
+	// copying "hello" and pasting appends "hello", not a new paragraph.
+	// The copied lines flatten to one paragraph of text with line breaks —
+	// unless the copy holds a blank line, which is a paragraph boundary,
+	// and then the copy stays paragraphs.
+	function flattenToInline(slice: PMSlice, schema: PMSchema): PMSlice {
+		if (!slice.content.size) return slice;
+		let flatten = true;
+		let holdsBlankLine = false;
+		slice.content.forEach((node: PMNode) => {
+			if (!node.isTextblock) flatten = false;
+			if (node.isTextblock && node.content.size === 0) holdsBlankLine = true;
+		});
+		if (!flatten || holdsBlankLine) return slice;
+		const parts: PMNode[] = [];
+		let first = true;
+		slice.content.forEach((node: PMNode) => {
+			if (!first) parts.push(schema.nodes.hardBreak.create());
+			first = false;
+			node.content.forEach((child: PMNode) => parts.push(child));
+		});
+		return new PMSlice(PMFragment.fromArray(parts), 1, 1);
+	}
+
+	// Whether the caret sits in an empty paragraph: pasting there replaces
+	// the paragraph, and going through replaceSelection on it leaves one
+	// stray empty line after the pasted ones.
+	function onEmptyLine(view: EditorView): boolean {
+		const { $from, $to } = view.state.selection;
+		return $from.parent.isTextblock && $from.parent.content.size === 0 && $from.sameParent($to);
+	}
+
 	onMount(() => {
 		editor = new Editor({
 			element,
@@ -40,7 +115,11 @@
 					heading: {
 						levels: [1, 2, 3]
 					},
-					link: false // Disable bundled Link to use our custom config below
+					link: false, // Disable bundled Link to use our custom config below
+					// A pasted list is the end of what was pasted: prosemirror's
+					// phantom paragraph after it published a blank line that
+					// nobody typed.
+					trailingNode: false
 				}),
 				Image.configure({
 					HTMLAttributes: {
@@ -78,7 +157,45 @@
 				Placeholder.configure({
 					placeholder
 				}),
-				CharacterCount
+				CharacterCount,
+				// After Cmd-A an arrow key puts the caret at the selection's
+				// edge, as in a plain editor — prosemirror's AllSelection does
+				// not move with the arrow keys on its own, so copy, move, paste
+				// pasted at the wrong end.
+				Extension.create({
+					name: 'selectAllCaret',
+					addKeyboardShortcuts() {
+						const collapse =
+						(dir: 'start' | 'end') =>
+						({ event }: { editor: Editor; event?: KeyboardEvent }) => {
+							// Modified arrows (Shift to shrink the selection, Alt for
+							// word moves) mean something else; only bare arrows
+							// collapse a select-all to its edge.
+							if (event && (event.shiftKey || event.altKey || event.metaKey || event.ctrlKey)) {
+								return false;
+							}
+							const { view } = this.editor;
+							const { selection, doc } = view.state;
+							if (!(selection instanceof AllSelection) && !(selection instanceof NodeSelection)) {
+								return false;
+							}
+							// Near() lands the caret inside the edge textblock — a
+							// bare doc edge position (0 or doc.content.size) sits
+							// outside the paragraph, where the next edit misbehaves.
+							const pos = doc.resolve(dir === 'end' ? doc.content.size : 0);
+							view.dispatch(
+								view.state.tr.setSelection(TextSelection.near(pos, dir === 'end' ? -1 : 1))
+							);
+							return true;
+						};
+						return {
+							ArrowRight: collapse('end'),
+							ArrowLeft: collapse('start'),
+							ArrowUp: collapse('start'),
+							ArrowDown: collapse('end')
+						};
+					}
+				})
 			],
 			content,
 			onUpdate: ({ editor }) => {
@@ -90,6 +207,49 @@
 				attributes: {
 					class: 'prose prose-lg max-w-none focus:outline-none min-h-[400px]'
 				},
+				// A copy of this editor pastes back as its text (see flattenToInline).
+				transformCopied: (slice) => flattenToInline(slice, editor?.state.schema as PMSchema),
+				// The flattened copy is inline content, so prosemirror's clipboard
+				// writer would leave the copy's marker off (it only marks an
+				// element) and the paste would land as a new paragraph. Wrapping
+				// the copy in a span gives the marker an element to sit on, and
+				// the paste merges into the line, the way Notes pastes.
+				clipboardSerializer: {
+					serializeFragment: (fragment: PMFragment, options?: { document?: Document }) =>
+						DOMSerializer.fromSchema((editor as Editor).state.schema).serializeFragment(
+							fragment,
+							options,
+							document.createElement('span')
+						)
+				} as unknown as DOMSerializer,
+				// The plain text of a copy keeps the blank line an empty
+				// paragraph renders — prosemirror's default skips empty blocks,
+				// so a copied blank line was lost on the way back in. A
+				// flattened copy is inline content: its line breaks come from
+				// the hard breaks, not block boundaries.
+				clipboardTextSerializer: (slice) => {
+					const leafText = (leaf: PMNode) =>
+						leaf.type.name === 'hardBreak' ? '\n' : (leaf.text ?? '');
+					const frag = slice.content;
+					if (frag.firstChild && frag.firstChild.isInline) {
+						return frag.textBetween(0, frag.size, '\n\n', leafText);
+					}
+					const parts: string[] = [];
+					frag.forEach((node: PMNode) => {
+						parts.push(node.textBetween(0, node.content.size, '\n', leafText));
+					});
+					// Blocks are one text line each: an empty paragraph is the
+					// blank line it renders, so the copy's lines round-trip.
+					return parts.join('\n');
+				},
+				// Copied or dropped HTML never carries what the article cannot
+				// publish: unuploaded pictures, scripts, embedded documents.
+				transformPastedHTML(html) {
+					return stripUnpublishable(html);
+				},
+				// Pasted plain text keeps its lines, blank lines, spaces and tabs
+				// (see sliceFromPlainText).
+				clipboardTextParser: (text, $context, plain, view) => sliceFromPlainText(text, view),
 				handleDrop: (view, event, slice, moved) => {
 					// Handle image drops
 					if (!moved && event.dataTransfer?.files?.length) {
@@ -120,6 +280,69 @@
 							handleImageFiles(images);
 							return true;
 						}
+					}
+					const html = event.clipboardData?.getData('text/html') || '';
+					const text = event.clipboardData?.getData('text/plain') || '';
+					// A paste carrying this editor's own clipboard markers goes back
+					// through the text it serialized, so a trailing space or a tab
+					// survives the round trip the way Notes keeps them.
+					if (html.includes('data-pm-slice') && text) {
+						event.preventDefault();
+						const slice = sliceFromPlainText(text, view);
+						if (onEmptyLine(view)) {
+							const { $from, $to } = view.state.selection;
+							view.dispatch(view.state.tr.replaceWith($from.before(), $from.after(), slice.content));
+						} else {
+							view.dispatch(view.state.tr.replaceSelection(slice));
+						}
+						return true;
+					}
+					// A table in copied HTML has no markdown: it becomes the text a
+					// reader would select from it — cells across a row with tabs,
+					// rows one below the other.
+					if (/<table[\s>]/i.test(html)) {
+						event.preventDefault();
+						const parsed = new DOMParser().parseFromString(html, 'text/html');
+						const tableText = Array.from(parsed.querySelectorAll('tr'))
+							.map((tr) =>
+								Array.from(tr.querySelectorAll('td, th'))
+									.map((cell) => (cell.textContent || '').trim())
+									.join('\t')
+							)
+							.join('\n');
+						view.dispatch(view.state.tr.replaceSelection(sliceFromPlainText(tableText, view)));
+						return true;
+					}
+					// Copied HTML with real block structure (paragraphs, a list,
+					// a heading, a quote) lands as those blocks. Prosemirror's
+					// default fits it into the paragraph the caret sits in,
+					// which mangles it into stray empty lines.
+					if (html && /<(p|div|h[1-6]|ul|ol|blockquote|pre)[\s>]/i.test(html)) {
+						event.preventDefault();
+						const el = document.createElement('div');
+						el.innerHTML = stripUnpublishable(html);
+						const fragment = PMDOMParser.fromSchema(view.state.schema).parse(el, {
+							preserveWhitespace: 'full'
+						});
+						const { $from, $to } = view.state.selection;
+						if (onEmptyLine(view)) {
+							view.dispatch(
+								view.state.tr.replaceWith($from.before(), $from.after(), fragment.content)
+							);
+						} else {
+							view.dispatch(view.state.tr.replaceSelection(new PMSlice(fragment.content, 0, 0)));
+						}
+						return true;
+					}
+					// Plain text onto an empty line replaces the line with the
+					// pasted lines; replaceSelection on an empty line leaves one
+					// stray empty line after them.
+					if (!html && text && onEmptyLine(view)) {
+						event.preventDefault();
+						const slice = sliceFromPlainText(text, view);
+						const { $from, $to } = view.state.selection;
+						view.dispatch(view.state.tr.replaceWith($from.before(), $from.after(), slice.content));
+						return true;
 					}
 					return false;
 				}
