@@ -99,8 +99,11 @@ describe('htmlToPlainText', () => {
 
 	// Regression: iOS/Capacitor WebViews and pasted rich text use <p> as the
 	// paragraph separator. These were previously concatenated with no break,
-	// producing strings like "🥩🍳#brunchstr".
-	it('treats <p> paragraphs as separate lines', () => {
+	// producing strings like "🥩🍳#brunchstr". Two paragraphs are two
+	// paragraphs: the browser's own plain text keeps the blank line between
+	// them, and what an HTML-only clipboard delivers must read the same
+	// (editor-matrix case rich-html-only-paragraphs).
+	it('treats <p> paragraphs as paragraphs', () => {
 		expect(
 			htmlToPlainText(
 				root([
@@ -109,7 +112,7 @@ describe('htmlToPlainText', () => {
 					el('P', [txt('https://i.nostr.build/x.jpg')])
 				])
 			)
-		).toBe('Champion of breakfasts. 🥩🍳\n#brunchstr #foodstr\nhttps://i.nostr.build/x.jpg');
+		).toBe('Champion of breakfasts. 🥩🍳\n\n#brunchstr #foodstr\n\nhttps://i.nostr.build/x.jpg');
 	});
 
 	// Regression: a block element followed by a bare text/inline node must not

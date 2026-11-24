@@ -12,7 +12,7 @@
 	import { RELAY_SETS } from '$lib/relays/relaySets';
 	import { getOutboxRelays } from '$lib/relayListCache';
 	import { addClientTagToEvent } from '$lib/nip89';
-	import TurndownService from 'turndown';
+	import { htmlToMarkdown } from '$lib/articleMarkdown';
 	import { parseMarkdown, mentionNamesVersion } from '$lib/parser';
 	import XIcon from 'phosphor-svelte/lib/X';
 	import FloppyDiskIcon from 'phosphor-svelte/lib/FloppyDisk';
@@ -81,32 +81,9 @@
 	let saveStatusFaded = false;
 	let saveStatusTimeout: ReturnType<typeof setTimeout> | null = null;
 	
-	// Initialize turndown for HTML to Markdown conversion
-	const turndownService = new TurndownService({
-		headingStyle: 'atx',
-		hr: '---',
-		bulletListMarker: '-',
-		codeBlockStyle: 'fenced'
-	});
-
 	const NPUB_MENTION_RE = /nostr:(npub1[023456789acdefghjklmnpqrstuvwxyz]{58})/g;
 	const ANY_MENTION_RE =
 		/nostr:(npub1[023456789acdefghjklmnpqrstuvwxyz]{58}|nprofile1[023456789acdefghjklmnpqrstuvwxyz]+)/g;
-
-	// Custom rule: convert mention spans to nostr:npub1... format
-	turndownService.addRule('mention', {
-		filter: (node: HTMLElement) => {
-			return node.nodeName === 'SPAN' && node.getAttribute('data-type') === 'mention';
-		},
-		replacement: (_content: string, node: Node) => {
-			const el = node as HTMLElement;
-			const id = el.getAttribute('data-id') || '';
-			if (id.startsWith('npub1')) {
-				return `nostr:${id}`;
-			}
-			return `nostr:${id}`;
-		}
-	});
 
 	// Get editor instance reactively after component mounts
 	$: if (tiptapEditor && !showPreview) {
@@ -254,12 +231,6 @@
 	// Toggle preview mode
 	function togglePreview() {
 		showPreview = !showPreview;
-	}
-
-	// Convert HTML content to Markdown for NIP-23
-	function htmlToMarkdown(html: string): string {
-		if (!html) return '';
-		return turndownService.turndown(html);
 	}
 
 	/**
