@@ -878,10 +878,16 @@
 				aria-multiline="true"
 				aria-label={placeholder}
 				data-placeholder={placeholder}
+				data-empty="true"
 				on:input={() => mentionCtrl.handleInput()}
 				on:keydown={(e) => mentionCtrl.handleKeydown(e)}
 				on:beforeinput={(e) => mentionCtrl.handleBeforeInput(e)}
 				on:paste={handlePaste}
+				on:copy={(e) => mentionCtrl.handleCopy(e)}
+				on:cut={(e) => mentionCtrl.handleCopy(e, true)}
+				on:dragstart={(e) => mentionCtrl.handleDragStart(e)}
+				on:dragend={() => mentionCtrl.handleDragEnd()}
+				on:drop={(e) => mentionCtrl.handleDrop(e)}
 				on:blur={saveDraft}
 			></div>
 
@@ -1409,10 +1415,18 @@
 		box-shadow: 0 0 0 2px var(--color-primary);
 	}
 
-	.reply-composer-input:empty:before {
+	/* data-empty also covers the line holder a browser leaves after
+	   everything is deleted, which :empty misses (isComposerEmpty). */
+	.reply-composer-input:empty:before,
+	.reply-composer-input[data-empty='true']:before {
 		content: attr(data-placeholder);
 		color: var(--color-caption);
 		pointer-events: none;
+		/* Floated with no height, so it takes no room on the line: the caret
+		   stays at the start of the box, not after the placeholder, even when
+		   the browser's leftover line holder (<br>) is still in the editor. */
+		float: left;
+		height: 0;
 	}
 
 	.rc-toolbar {

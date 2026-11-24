@@ -253,6 +253,43 @@ export function htmlToPlainText(element: Node): string {
 	return text;
 }
 
+/**
+ * Whether a composer reads as empty: no text, no mention, and at most the one
+ * line holder a browser leaves behind when everything is deleted (`<br>` or
+ * `<div><br></div>`). The placeholder shows exactly then. CSS `:empty` alone
+ * misses that leftover holder, so the placeholder stayed hidden over a box
+ * that had been cleared with Backspace, Select All + Delete or Cut. A lone
+ * space, or two blank lines, are content.
+ */
+export function isComposerEmpty(element: Element): boolean {
+	if ((element.textContent || '').replace(/​/g, '') !== '') return false;
+	if (element.querySelector('[data-mention], img, video, iframe')) return false;
+	const breaks = element.querySelectorAll('br').length;
+	const blocks = element.querySelectorAll('div, p').length;
+	return breaks <= 1 && blocks <= 1;
+}
+
+/**
+ * The text a paste or drop delivers to a plain-text composer. Plain text
+ * wins; a transfer holding only HTML (some apps put nothing else on the
+ * clipboard) is read as text; HTML carrying this composer's own mention pills
+ * is read through htmlToPlainText so each pill comes back as its
+ * `nostr:npub…` address and is re-pilled. Windows line endings become `\n`,
+ * so no stray `\r` reaches the note. The HTML is parsed with DOMParser, which
+ * builds an inert document: nothing in it loads or runs.
+ */
+export function transferText(data: Pick<DataTransfer, 'getData'> | null | undefined): string {
+	if (!data) return '';
+	const html = data.getData('text/html') || '';
+	let text = data.getData('text/plain') || '';
+	if (html && (html.includes('data-mention') || !text)) {
+		const parsed = new DOMParser().parseFromString(html, 'text/html');
+		parsed.querySelectorAll('script, style, title, meta').forEach((n) => n.remove());
+		text = htmlToPlainText(parsed.body);
+	}
+	return text.replace(/\r\n?/g, '\n');
+}
+
 export function createMentionPill(mention: string, displayName: string): HTMLSpanElement {
 	const pill = document.createElement('span');
 	pill.contentEditable = 'false';

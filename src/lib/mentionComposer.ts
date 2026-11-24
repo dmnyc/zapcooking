@@ -23,7 +23,9 @@ import {
 	renderTextWithMentions,
 	replacePlainMentions as replacePlainMentionsUtil,
 	parseMentions as parseMentionsUtil,
-	escapeRegex
+	escapeRegex,
+	isComposerEmpty,
+	transferText
 } from '$lib/mentionUtils';
 import { seedProfileCache } from '$lib/profileResolver';
 
@@ -102,6 +104,24 @@ function removePillWithZwsps(pill: HTMLElement): void {
 	pill.remove();
 }
 
+// The caret position under a point (a drop's), in either engine's API.
+function caretRangeAt(x: number, y: number): Range | null {
+	const doc = document as Document & {
+		caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+		caretRangeFromPoint?: (x: number, y: number) => Range | null;
+	};
+	if (typeof doc.caretPositionFromPoint === 'function') {
+		const pos = doc.caretPositionFromPoint(x, y);
+		if (!pos) return null;
+		const range = document.createRange();
+		range.setStart(pos.offsetNode, pos.offset);
+		range.collapse(true);
+		return range;
+	}
+	if (typeof doc.caretRangeFromPoint === 'function') return doc.caretRangeFromPoint(x, y);
+	return null;
+}
+
 export class MentionComposerController {
 	private composerEl: HTMLDivElement | null = null;
 	private searchTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -112,6 +132,14 @@ export class MentionComposerController {
 	// async source resolving for a stale query drops its result instead
 	// of painting over the newer one.
 	private searchSeq = 0;
+
+	// A drag that started inside this composer: dropping it is a move the
+	// browser already does well, so handleDrop leaves it alone.
+	private dragFromComposer = false;
+
+	// A line break was just typed: the input that follows it closes the typing
+	// step, so the next line's words are an undo step of their own.
+	private closeTypingAfterInput = false;
 
 	// Internal state
 	mentionQuery = '';
@@ -142,6 +170,7 @@ export class MentionComposerController {
 		if (this.composerEl.innerHTML !== html) {
 			this.composerEl.innerHTML = html;
 		}
+		this.refreshEmptyState();
 	}
 
 	/** Extract plain text from composer DOM */
@@ -162,6 +191,10 @@ export class MentionComposerController {
 
 	/** Handle the input event on the composer — called from on:input */
 	handleInput(): string {
+		if (this.closeTypingAfterInput) {
+			this.closeTypingAfterInput = false;
+			this.closeTypingStep();
+		}
 		const text = this.updateContentFromComposer();
 		if (!this.composerEl) return text;
 
@@ -329,6 +362,13 @@ export class MentionComposerController {
 			return;
 		}
 
+		// A line break is an undo boundary on both sides: Undo never takes the end
+		// of one line together with the start of the next (see closeTypingStep).
+		if (event.inputType === 'insertParagraph' || event.inputType === 'insertLineBreak') {
+			this.closeTypingStep();
+			this.closeTypingAfterInput = true;
+		}
+
 		const selection = window.getSelection();
 		if (!selection || !this.composerEl) return;
 		const range = selection.getRangeAt(0);
@@ -351,64 +391,138 @@ export class MentionComposerController {
 		}
 	}
 
-	/** Handle paste event — strips HTML, inserts plain text with proper line breaks */
+	/**
+	 * Handle paste — the clipboard's text goes in as plain text, through the
+	 * browser's own insertText so the paste is one step on the undo stack
+	 * (Undo takes it back out, Redo puts it back). Building the fragment by
+	 * hand with range.insertNode kept rich text out but bypassed the undo
+	 * stack: Undo after a paste undid the typing before it instead.
+	 * transferText reads HTML-only clipboards, re-reads this composer's own
+	 * pills as their nostr: addresses, and drops `\r`.
+	 */
 	handlePaste(event: ClipboardEvent): void {
 		event.preventDefault();
+		this.insertPlainText(transferText(event.clipboardData));
+	}
 
-		// When the clipboard carries mention pills (e.g. the user cut text
-		// containing a pill from this composer), the text/plain flavor is just
-		// the visible "@DisplayName" — which convertRawMentionsToPills can't
-		// re-pill. Read the text/html flavor instead and run it through
-		// htmlToPlainText, which serializes data-mention pills back to their
-		// `nostr:npub…` form so they get re-pilled by the handleInput() pass
-		// below. Parsed with DOMParser rather than assigning innerHTML on a
-		// detached div: innerHTML on a real document element still fetches
-		// resources and fires handlers on some elements (<img onerror>,
-		// <iframe>), even when the node is never inserted. DOMParser builds
-		// an inert document — nothing loads, nothing executes — and we only
-		// read text/dataset out of it.
-		const html = event.clipboardData?.getData('text/html');
-		let plainText: string | undefined;
-		if (html && html.includes('data-mention')) {
-			const parsed = new DOMParser().parseFromString(html, 'text/html');
-			plainText = htmlToPlainText(parsed.body);
-		} else {
-			plainText = event.clipboardData?.getData('text/plain');
+	/**
+	 * Handle copy and cut — what goes on the clipboard is the note's own text
+	 * (the serializer's, so a mention is its nostr: address and blank lines
+	 * are the `\n`s typed), plus this composer's markup so a paste back here
+	 * restores the pills. Left to the browser, the plain text of a selection
+	 * spanning lines gained a trailing newline and a pill copied as "@name".
+	 * Cut deletes through execCommand, so Undo restores the text.
+	 */
+	handleCopy(event: ClipboardEvent, cut = false): void {
+		const selection = window.getSelection();
+		if (!this.composerEl || !event.clipboardData || !selection || selection.rangeCount === 0) return;
+		const range = selection.getRangeAt(0);
+		if (range.collapsed || !this.composerEl.contains(range.commonAncestorContainer)) return;
+		const box = document.createElement('div');
+		box.appendChild(range.cloneContents());
+		event.preventDefault();
+		event.clipboardData.setData('text/plain', htmlToPlainText(box));
+		event.clipboardData.setData('text/html', box.innerHTML);
+		if (cut) document.execCommand('delete');
+	}
+
+	/** Remember a drag that starts inside this composer (see handleDrop). */
+	handleDragStart(event: DragEvent): void {
+		const target = event.target as Node | null;
+		this.dragFromComposer = !!(target && this.composerEl?.contains(target));
+	}
+
+	handleDragEnd(): void {
+		this.dragFromComposer = false;
+	}
+
+	/**
+	 * Handle text dropped in from another page. A drop never reaches the paste
+	 * handler: left to the browser, a drag from a web page brought its bold,
+	 * colors, links and pictures straight into the editor — shown there, but
+	 * not what the note publishes. The dropped text goes in as plain text at
+	 * the drop point instead, as one undoable step. Files are left alone (the
+	 * composer's own attachment handling owns them), and so is a drag that
+	 * moves text within this composer.
+	 */
+	handleDrop(event: DragEvent): void {
+		const data = event.dataTransfer;
+		if (!data || !this.composerEl) return;
+		if (this.dragFromComposer) {
+			this.dragFromComposer = false;
+			return;
 		}
-		if (!plainText) return;
+		if (Array.from(data.types || []).includes('Files')) return;
+		event.preventDefault();
+		const text = transferText(data);
+		const at = caretRangeAt(event.clientX, event.clientY);
+		this.composerEl.focus();
+		if (at && this.composerEl.contains(at.startContainer)) {
+			const selection = window.getSelection();
+			selection?.removeAllRanges();
+			selection?.addRange(at);
+		}
+		this.insertPlainText(text);
+	}
 
+	/**
+	 * Insert plain text at the caret as typing would: through the browser's
+	 * editing command, so it is undoable and fires the input event that keeps
+	 * `content` and the mention pills in step.
+	 */
+	insertPlainText(text: string): void {
+		if (!text || !this.composerEl) return;
 		const selection = window.getSelection();
 		if (!selection || selection.rangeCount === 0) return;
-		const range = selection.getRangeAt(0);
-
-		range.deleteContents();
-
-		// Insert text with proper <br> elements for newlines instead of raw \n
-		// in text nodes. Raw \n inside contenteditable is handled inconsistently
-		// across browsers and can cause spacing mismatches between editing and posting.
-		const fragment = document.createDocumentFragment();
-		const lines = plainText.split('\n');
-		let lastNode: Node | null = null;
-		for (let i = 0; i < lines.length; i++) {
-			if (i > 0) {
-				lastNode = document.createElement('br');
-				fragment.appendChild(lastNode);
-			}
-			if (lines[i]) {
-				lastNode = document.createTextNode(lines[i]);
-				fragment.appendChild(lastNode);
-			}
-		}
-
-		range.insertNode(fragment);
-		if (lastNode) {
-			range.setStartAfter(lastNode);
+		if (!this.composerEl.contains(selection.getRangeAt(0).startContainer)) return;
+		// Its own undo step: Chrome folds an insertText into the typing just before
+		// it, so Undo after typing "a " and pasting straight away took the typing
+		// too (and only the paste when a pause had closed the step in between).
+		this.closeTypingStep();
+		if (!document.execCommand('insertText', false, text)) {
+			// No editing command (very old engines): insert the text node directly.
+			const range = selection.getRangeAt(0);
+			range.deleteContents();
+			const node = document.createTextNode(text);
+			range.insertNode(node);
+			range.setStartAfter(node);
 			range.collapse(true);
+			selection.removeAllRanges();
+			selection.addRange(range);
+			this.handleInput();
 		}
-		selection.removeAllRanges();
-		selection.addRange(range);
+	}
 
-		this.handleInput();
+	/**
+	 * End the browser's open typing step, so the next edit starts an undo step
+	 * of its own. Chrome keeps adding keystrokes, line breaks and inserted text
+	 * to one typing step until something closes it, and what closed it was a
+	 * pause or a click, so where Undo stopped depended on timing. Setting the
+	 * selection again, unchanged, closes the step.
+	 */
+	closeTypingStep(): void {
+		const selection = window.getSelection();
+		if (!this.composerEl || !selection || selection.rangeCount === 0) return;
+		const at = selection.getRangeAt(0);
+		if (!this.composerEl.contains(at.startContainer)) return;
+		selection.removeAllRanges();
+		selection.addRange(at);
+	}
+
+	/**
+	 * Keep `data-empty` on the composer in step with what it holds, so the
+	 * placeholder shows whenever it reads as empty (isComposerEmpty), including
+	 * the line holder the browser leaves after everything is deleted. The
+	 * holder itself is left in place: clearing the editor's HTML would wipe
+	 * its undo history, and Undo after Select All + Delete must bring the text
+	 * back.
+	 */
+	refreshEmptyState(): void {
+		if (!this.composerEl) return;
+		const empty = isComposerEmpty(this.composerEl);
+		if (this.composerEl.dataset.empty !== String(empty)) {
+			this.composerEl.dataset.empty = String(empty);
+		}
 	}
 
 	/** Insert a selected mention user at the cursor position */
@@ -481,6 +595,7 @@ export class MentionComposerController {
 	private updateContentFromComposer(): string {
 		if (!this.composerEl) return '';
 		const newText = htmlToPlainText(this.composerEl);
+		this.refreshEmptyState();
 		this.onTextChange(newText);
 		return newText;
 	}
