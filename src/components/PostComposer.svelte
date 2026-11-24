@@ -41,7 +41,10 @@
     composeNoteContent,
     imetaTagsForMedia,
     attachableUrlCandidates,
+    quotableNoteCandidates,
+    bareNoteReference,
     removeBareUrlOccurrence,
+    removeNoteRefOccurrence,
     stripAttachmentUrlLines,
     type MediaAttachment
   } from '$lib/composerMedia';
@@ -245,6 +248,66 @@
     // picture ($lib/composerMedia dedupes by URL at publish).
     media = [...media, { url, isVideo: isVideoUrl(url) }];
     scheduleDraftSave();
+  }
+
+  // ── Quote offers ──────────────────────────────────────────────
+  // A pasted `nevent1…`/`note1…` alone on its line is OFFERED as the
+  // quoted note, never auto-converted — same shape rules and same
+  // dismissal-expiry as the attach offers above. Accepting looks the note
+  // up (the quote block shows the note, so it has to exist): a reference
+  // nothing finds stays text and the composer says so.
+  let dismissedQuoteRefs = new Set<string>();
+  let lookingUpQuote = '';
+
+  function pruneDismissedQuoteRefs(text: string) {
+    const live = new Set(quotableNoteCandidates(text));
+    let changed = false;
+    for (const ref of dismissedQuoteRefs) {
+      if (!live.has(ref)) {
+        dismissedQuoteRefs.delete(ref);
+        changed = true;
+      }
+    }
+    if (changed) dismissedQuoteRefs = dismissedQuoteRefs;
+  }
+
+  $: pruneDismissedQuoteRefs(content);
+  $: quoteOffers = quotableNoteCandidates(content).filter((ref) => !dismissedQuoteRefs.has(ref));
+
+  function dismissQuoteOffer(ref: string) {
+    const next = new Set(dismissedQuoteRefs);
+    next.add(ref);
+    dismissedQuoteRefs = next;
+  }
+
+  async function acceptQuoteOffer(ref: string) {
+    if (lookingUpQuote) return;
+    // Consume the occurrence first (stale-offer guard, as the attach
+    // offers do), but restore it if the note cannot be found: a quote
+    // that does not resolve goes back to the text with a reason.
+    const current = composerEl ? mentionCtrl.extractText() : content;
+    const next = removeNoteRefOccurrence(current, ref);
+    if (next === current) return;
+    lookingUpQuote = ref;
+    try {
+      const lookup = ref.startsWith('nostr:') ? ref : `nostr:${ref}`;
+      const event = $ndk ? await $ndk.fetchEvent(lookup) : null;
+      if (!event) {
+        showToast('error', 'Could not find that note — it stayed as text');
+        return;
+      }
+      content = next;
+      if (composerEl) {
+        mentionCtrl.syncContent(content);
+        lastRenderedContent = content;
+      }
+      quotedNote = { nevent: bareNoteReference(ref), event };
+      scheduleDraftSave();
+    } catch {
+      showToast('error', 'Could not find that note — it stayed as text');
+    } finally {
+      lookingUpQuote = '';
+    }
   }
 
   // ── Tracking-tail offers ──────────────────────────────────────
@@ -1318,6 +1381,51 @@
                         title="Keep it as text"
                         aria-label="Keep it as text"
                         on:click={() => dismissAttachOffer(url)}
+                        disabled={posting}
+                      >
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="2"
+                            d="M6 18L18 6M6 6l12 12"
+                          />
+                        </svg>
+                      </button>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+
+              {#if !showPreview && quoteOffers.length > 0}
+                <!-- Quote offers, in the same band as the attach offers: one
+                     pill per pasted note reference (`nevent1…`/`note1…` on
+                     its own line), offered (never auto-converted). Accepting
+                     looks the note up; the reference leaves the text and the
+                     note joins the draft as the quoted note, exactly as the
+                     quote button does. The ✕ is "Keep it as text". -->
+                <div class="attach-offers" data-testid="quote-offers" role="group" aria-label="Quote pasted notes">
+                  {#each quoteOffers as ref, i (i)}
+                    <div class="attach-offer-row">
+                      <button
+                        type="button"
+                        class="attach-offer"
+                        on:click={() => acceptQuoteOffer(ref)}
+                        disabled={posting || lookingUpQuote === ref}
+                      >
+                        {#if lookingUpQuote === ref}
+                          <span>Looking up the note…</span>
+                        {:else}
+                          <PlusIcon size={14} weight="bold" />
+                          <span>Quote this note</span>
+                        {/if}
+                      </button>
+                      <button
+                        type="button"
+                        class="attach-x"
+                        title="Keep it as text"
+                        aria-label="Keep it as text"
+                        on:click={() => dismissQuoteOffer(ref)}
                         disabled={posting}
                       >
                         <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
