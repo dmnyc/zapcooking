@@ -71,6 +71,18 @@ describe('transferText', () => {
 		expect(transferText(transfer({ 'text/html': 'ab<div><br></div><div>cd</div>' }))).toBe('ab\n\ncd');
 	});
 
+	it('keeps the blank line between pasted paragraphs of an HTML-only clipboard', () => {
+		expect(transferText(transfer({ 'text/html': '<p>one</p><p>two</p>' }))).toBe('one\n\ntwo');
+	});
+
+	it('reads a line break inside a pasted paragraph as one line break', () => {
+		expect(transferText(transfer({ 'text/html': '<p>one<br>two</p>' }))).toBe('one\ntwo');
+	});
+
+	it('an empty pasted paragraph is the blank line it renders', () => {
+		expect(transferText(transfer({ 'text/html': '<p>ab</p><p><br></p><p>cd</p>' }))).toBe('ab\n\ncd');
+	});
+
 	it('reads an empty transfer as no text', () => {
 		expect(transferText(null)).toBe('');
 		expect(transferText(transfer({}))).toBe('');

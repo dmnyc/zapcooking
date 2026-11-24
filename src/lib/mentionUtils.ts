@@ -215,8 +215,17 @@ export function htmlToPlainText(element: Node): string {
 				// leaves <br>s that iOS then follows with a block-wrapped line).
 				// The exception is the empty block: its newline IS the blank line
 				// it renders, so the next block keeps its own boundary.
-				if (!isFirstChild && (!text.endsWith('\n') || lastWasEmptyBlock)) {
-					text += '\n';
+				if (!isFirstChild) {
+					if (el.tagName === 'P') {
+						// A <p> is a paragraph, not a line: the browser's own plain
+						// text of `<p>one</p><p>two</p>` keeps the blank line between
+						// them, so an HTML-only clipboard reads the same. This
+						// composer's own DOM is div-per-line, so copy round-trips
+						// never reach this branch.
+						if (!text.endsWith('\n\n')) text += text.endsWith('\n') ? '\n' : '\n\n';
+					} else if (!text.endsWith('\n') || lastWasEmptyBlock) {
+						text += '\n';
+					}
 				}
 
 				const hasOnlyBr = el.childNodes.length === 1 && el.firstChild?.nodeName === 'BR';
