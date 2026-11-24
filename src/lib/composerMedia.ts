@@ -138,9 +138,9 @@ function isMediaUrl(url: string): boolean {
 }
 
 /**
- * A nostr note reference a quote offer can be made of: bech32 `nevent1…` or
- * `note1…`, optionally with the `nostr:` prefix. Same charset as the
- * mention rules — bech32's data alphabet, no `1` inside the data part.
+ * A nostr note reference a paste can carry: bech32 `nevent1…` or `note1…`,
+ * optionally with the `nostr:` prefix. Same charset as the mention rules —
+ * bech32's data alphabet, no `1` inside the data part.
  */
 const NOSTR_NOTE_REF = /^(?:nostr:)?(?:nevent1|note1)[023456789acdefghjklmnpqrstuvwxyz]+$/;
 
@@ -154,27 +154,8 @@ export function bareNoteReference(ref: string): string {
   return ref.replace(/^nostr:/, '');
 }
 
-/**
- * Note references alone on their line, the quote counterpart of
- * [attachableUrlCandidates]: same line shape (a reference inside a sentence
- * is authored prose and gets no offer), same never-auto-converted rule —
- * the offer is the only thing that turns a pasted `nevent1…` into the
- * quoted note.
- */
-export function quotableNoteCandidates(text: string): string[] {
-  if (!text) return [];
-  const out: string[] = [];
-  for (const line of text.split('\n')) {
-    const tokens = line.trim().split(/\s+/).filter(Boolean);
-    if (tokens.length && tokens.every((t) => BARE_URL_TOKEN.test(t) || isNoteReference(t)))
-      out.push(...tokens.filter(isNoteReference));
-  }
-  return out;
-}
-
-/** Shared removal behind [removeBareUrlOccurrence] and
- * [removeNoteRefOccurrence]: first occurrence of [token] as a
- * whitespace-delimited token on a qualifying line. */
+/** Shared removal behind [removeBareUrlOccurrence]: first occurrence of
+ * [token] as a whitespace-delimited token on a qualifying line. */
 function removeTokenOccurrence(
   text: string,
   token: string,
@@ -204,13 +185,4 @@ function removeTokenOccurrence(
  */
 export function removeBareUrlOccurrence(text: string, url: string): string {
   return removeTokenOccurrence(text, url, (t) => BARE_URL_TOKEN.test(t));
-}
-
-/**
- * Remove the FIRST occurrence of [ref] as a whitespace-delimited token on a
- * reference-only line — the counterpart of accepting a quote offer.
- * Same shape rules as [removeBareUrlOccurrence].
- */
-export function removeNoteRefOccurrence(text: string, ref: string): string {
-  return removeTokenOccurrence(text, ref, (t) => BARE_URL_TOKEN.test(t) || isNoteReference(t));
 }

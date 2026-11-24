@@ -4,11 +4,9 @@ import {
   imetaTagsForMedia,
   stripAttachmentUrlLines,
   attachableUrlCandidates,
-  quotableNoteCandidates,
   isNoteReference,
   bareNoteReference,
   removeBareUrlOccurrence,
-  removeNoteRefOccurrence,
   capByCodePoints,
   MAX_ALT_CODEPOINTS,
   type MediaAttachment
@@ -294,44 +292,9 @@ describe('isNoteReference / bareNoteReference', () => {
     expect(bareNoteReference(`nostr:${NEVENT}`)).toBe(NEVENT);
     expect(bareNoteReference(NEVENT)).toBe(NEVENT);
   });
-});
 
-describe('quotableNoteCandidates', () => {
-  it('offers a pasted nevent alone on its line, prefix or not', () => {
-    expect(quotableNoteCandidates(NEVENT)).toEqual([NEVENT]);
-    expect(quotableNoteCandidates(`nostr:${NEVENT}`)).toEqual([`nostr:${NEVENT}`]);
-  });
-
-  it('offers each reference on a reference-only line, and skips prose lines', () => {
-    expect(quotableNoteCandidates(`look at ${NEVENT} here`)).toEqual([]);
-    expect(quotableNoteCandidates(`check this\n${NEVENT}\nmore words`)).toEqual([NEVENT]);
-    expect(
-      quotableNoteCandidates(`https://a/1.png\n${NOTE_REF} nostr:${NEVENT}`)
-    ).toEqual([NOTE_REF, `nostr:${NEVENT}`]);
-  });
-
-  it('offers nothing for npub references — those are mentions', () => {
-    expect(quotableNoteCandidates('npub1qmxzz6hly64')).toEqual([]);
-  });
-});
-
-describe('removeNoteRefOccurrence', () => {
-  it('consumes the offered reference and removes its emptied line', () => {
-    expect(removeNoteRefOccurrence(`before\n${NEVENT}\nafter`, NEVENT)).toBe('before\nafter');
-  });
-
-  it('consumes one of several references on the line, keeping the rest', () => {
-    expect(removeNoteRefOccurrence(`${NOTE_REF} nostr:${NEVENT}`, NOTE_REF)).toBe(
-      `nostr:${NEVENT}`
-    );
-  });
-
-  it('never touches a reference on a prose line', () => {
-    const text = `look at ${NEVENT} here`;
-    expect(removeNoteRefOccurrence(text, NEVENT)).toBe(text);
-  });
-
-  it('returns the original text when there is nothing to consume', () => {
-    expect(removeNoteRefOccurrence('para', NEVENT)).toBe('para');
+  it('reads a multi-line paste as not-a-reference', () => {
+    expect(isNoteReference(`${NEVENT}\n`)).toBe(false);
+    expect(isNoteReference(`look ${NEVENT}`)).toBe(false);
   });
 });

@@ -41,10 +41,9 @@
     composeNoteContent,
     imetaTagsForMedia,
     attachableUrlCandidates,
-    quotableNoteCandidates,
+    isNoteReference,
     bareNoteReference,
     removeBareUrlOccurrence,
-    removeNoteRefOccurrence,
     stripAttachmentUrlLines,
     type MediaAttachment
   } from '$lib/composerMedia';
@@ -250,63 +249,58 @@
     scheduleDraftSave();
   }
 
-  // ── Quote offers ──────────────────────────────────────────────
-  // A pasted `nevent1…`/`note1…` alone on its line is OFFERED as the
-  // quoted note, never auto-converted — same shape rules and same
-  // dismissal-expiry as the attach offers above. Accepting looks the note
-  // up (the quote block shows the note, so it has to exist): a reference
-  // nothing finds stays text and the composer says so.
-  let dismissedQuoteRefs = new Set<string>();
-  let lookingUpQuote = '';
+  // ── Pasted note references ────────────────────────────────────
+  // A pasted `nevent1…`/`note1…` quotes the note immediately — no offer.
+  // The lookup follows the reader's own path (NoteEmbed): a subscription by
+  // id, which reads the local cache first and then the connected relays,
+  // so a note already on the page resolves instantly. A reference nothing
+  // finds goes back to the text with a reason.
+  let lookingUpQuote = false;
 
-  function pruneDismissedQuoteRefs(text: string) {
-    const live = new Set(quotableNoteCandidates(text));
-    let changed = false;
-    for (const ref of dismissedQuoteRefs) {
-      if (!live.has(ref)) {
-        dismissedQuoteRefs.delete(ref);
-        changed = true;
-      }
+  async function quotePastedReference(ref: string) {
+    if (lookingUpQuote || !$ndk) {
+      mentionCtrl.insertPlainText(ref);
+      return;
     }
-    if (changed) dismissedQuoteRefs = dismissedQuoteRefs;
-  }
-
-  $: pruneDismissedQuoteRefs(content);
-  $: quoteOffers = quotableNoteCandidates(content).filter((ref) => !dismissedQuoteRefs.has(ref));
-
-  function dismissQuoteOffer(ref: string) {
-    const next = new Set(dismissedQuoteRefs);
-    next.add(ref);
-    dismissedQuoteRefs = next;
-  }
-
-  async function acceptQuoteOffer(ref: string) {
-    if (lookingUpQuote) return;
-    // Consume the occurrence first (stale-offer guard, as the attach
-    // offers do), but restore it if the note cannot be found: a quote
-    // that does not resolve goes back to the text with a reason.
-    const current = composerEl ? mentionCtrl.extractText() : content;
-    const next = removeNoteRefOccurrence(current, ref);
-    if (next === current) return;
-    lookingUpQuote = ref;
+    lookingUpQuote = true;
     try {
-      const lookup = ref.startsWith('nostr:') ? ref : `nostr:${ref}`;
-      const event = $ndk ? await $ndk.fetchEvent(lookup) : null;
+      const clean = bareNoteReference(ref);
+      const decoded = nip19.decode(clean);
+      const id =
+        decoded.type === 'nevent'
+          ? decoded.data.id
+          : decoded.type === 'note'
+            ? decoded.data
+            : null;
+      if (!id) throw new Error('not a note reference');
+      const event = await new Promise<NDKEventType | null>((resolve) => {
+        let done = false;
+        const finish = (ev: NDKEventType | null) => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          resolve(ev);
+        };
+        const timer = setTimeout(() => finish(null), 5000);
+        const sub = $ndk.subscribe({ ids: [id] }, { closeOnEose: true, groupable: false });
+        sub.on('event', (ev: NDKEventType) => finish(ev));
+        sub.on('eose', () => {
+          finish(null);
+          sub.stop();
+        });
+      });
       if (!event) {
         showToast('error', 'Could not find that note — it stayed as text');
+        mentionCtrl.insertPlainText(ref);
         return;
       }
-      content = next;
-      if (composerEl) {
-        mentionCtrl.syncContent(content);
-        lastRenderedContent = content;
-      }
-      quotedNote = { nevent: bareNoteReference(ref), event };
+      quotedNote = { nevent: clean, event };
       scheduleDraftSave();
     } catch {
       showToast('error', 'Could not find that note — it stayed as text');
+      mentionCtrl.insertPlainText(ref);
     } finally {
-      lookingUpQuote = '';
+      lookingUpQuote = false;
     }
   }
 
@@ -823,9 +817,19 @@
       .map((item) => item.getAsFile())
       .filter((f): f is File => f !== null);
     if (imageFiles.length === 0) {
-      // Paste inserts text, always — conversion to an attachment slot never
-      // happens automatically. Bare URLs on URL-only lines surface as
-      // "Attach this media" offers below the text field instead.
+      // Paste inserts text, always — bare URLs on URL-only lines surface as
+      // "Attach this media" offers below the text field instead. The one
+      // exception is a pasted note reference (nevent1…/note1…): that quotes
+      // the note right away, the way Sidecar pastes a quote. Looked up
+      // through the cache and the reader's relays, consumed from the paste,
+      // and shown in the quote slot; one that nothing finds goes back to
+      // the text with a reason.
+      const pasted = (e.clipboardData?.getData('text/plain') || '').trim();
+      if (isNoteReference(pasted)) {
+        e.preventDefault();
+        void quotePastedReference(pasted);
+        return;
+      }
       mentionCtrl.handlePaste(e);
       return;
     }
@@ -1397,48 +1401,16 @@
                 </div>
               {/if}
 
-              {#if !showPreview && quoteOffers.length > 0}
-                <!-- Quote offers, in the same band as the attach offers: one
-                     pill per pasted note reference (`nevent1…`/`note1…` on
-                     its own line), offered (never auto-converted). Accepting
-                     looks the note up; the reference leaves the text and the
-                     note joins the draft as the quoted note, exactly as the
-                     quote button does. The ✕ is "Keep it as text". -->
-                <div class="attach-offers" data-testid="quote-offers" role="group" aria-label="Quote pasted notes">
-                  {#each quoteOffers as ref, i (i)}
-                    <div class="attach-offer-row">
-                      <button
-                        type="button"
-                        class="attach-offer"
-                        on:click={() => acceptQuoteOffer(ref)}
-                        disabled={posting || lookingUpQuote === ref}
-                      >
-                        {#if lookingUpQuote === ref}
-                          <span>Looking up the note…</span>
-                        {:else}
-                          <PlusIcon size={14} weight="bold" />
-                          <span>Quote this note</span>
-                        {/if}
-                      </button>
-                      <button
-                        type="button"
-                        class="attach-x"
-                        title="Keep it as text"
-                        aria-label="Keep it as text"
-                        on:click={() => dismissQuoteOffer(ref)}
-                        disabled={posting}
-                      >
-                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            stroke-width="2"
-                            d="M6 18L18 6M6 6l12 12"
-                          />
-                        </svg>
-                      </button>
-                    </div>
-                  {/each}
+              {#if !showPreview && lookingUpQuote}
+                <!-- The pasted note reference is being looked up (cache first,
+                     then the reader's relays): the quote slot shows it is on
+                     its way, or the reference goes back to the text. -->
+                <div class="attach-offers" role="status" aria-label="Looking up the quoted note">
+                  <div class="attach-offer-row">
+                    <span class="attach-offer" aria-hidden="true">
+                      <span>Looking up the quoted note…</span>
+                    </span>
+                  </div>
                 </div>
               {/if}
 

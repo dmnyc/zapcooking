@@ -39,7 +39,7 @@ Status: ✅ has it · ◐ partial · ❌ missing · — not this app's shape.
 
 | Feature | Sidecar | Zap Cooking | Gap → slice |
 |---|---|---|---|
-| `quotes` — pasted reference becomes the quoted note | ✅ | ✅ | quote button + paste offer (`941de3ca`); q tags at publish |
+| `quotes` — pasted reference becomes the quoted note | ✅ | ✅ | paste a reference and it quotes — no offer (`941de3ca`, `residue of the pill removed after hand test`); q tags at publish |
 | quote block shows the note rendered | ✅ | ◐ | preview includes the quote; verify rendered body |
 | `linkCards` — previews of pasted links | ✅ | ❌ | optional per spec (off sends nothing) → slice C8, last |
 
