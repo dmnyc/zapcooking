@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { scopeStylesheet, topLevelStatements } from './scopeCss';
+import { isScrollbarStyling, scopeStylesheet, topLevelStatements } from './scopeCss';
 
 const sidecarCss = readFileSync(
   new URL('../vendor/sidecar/sidecar-styles.css', import.meta.url),
@@ -46,5 +46,17 @@ describe('scopeStylesheet', () => {
     // The compose rules the monocomposer depends on survived the move.
     expect(out).toContain('.compose-modes');
     expect(out).toContain('.poll-editor');
+  });
+
+  it('drops Sidecar\'s scrollbar styling and nothing else', () => {
+    const full = scopeStylesheet(sidecarCss, '.mono-root');
+    const out = scopeStylesheet(sidecarCss, '.mono-root', isScrollbarStyling);
+    expect(full).toMatch(/::-webkit-scrollbar/);
+    expect(out).not.toMatch(/::-webkit-scrollbar/);
+    expect(out).not.toMatch(/scrollbar-color/);
+    // Only the scrollbar rules went: everything else survives.
+    const dropped = topLevelStatements(sidecarCss).filter(isScrollbarStyling);
+    expect(dropped.length).toBe(6);
+    expect(out).toContain('.compose-modes');
   });
 });

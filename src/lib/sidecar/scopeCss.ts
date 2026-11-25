@@ -51,10 +51,27 @@ export function topLevelStatements(css: string): string[] {
   return out.filter(Boolean);
 }
 
-export function scopeStylesheet(css: string, scope: string): string {
+/**
+ * Sidecar's own scrollbars: the ::-webkit-scrollbar rules and the Firefox
+ * scrollbar-color block. This app leaves scrollbars to the browser, so
+ * inside the composer they are dropped and its scroll areas match the rest
+ * of the page (two scrollbar styles in one modal looked wrong).
+ */
+export function isScrollbarStyling(stmt: string): boolean {
+  const selector = stmt.slice(0, stmt.indexOf('{') + 1 || stmt.length);
+  if (/::-webkit-scrollbar/.test(selector)) return true;
+  return /^@supports\s*\(-moz-appearance:\s*none\)/.test(stmt) && /scrollbar-(?:color|width)/.test(stmt);
+}
+
+export function scopeStylesheet(
+  css: string,
+  scope: string,
+  omit: (stmt: string) => boolean = () => false
+): string {
   const hoisted: string[] = [];
   const scoped: string[] = [];
   for (const stmt of topLevelStatements(css)) {
+    if (omit(stmt)) continue;
     if (HOISTED.test(stmt)) hoisted.push(stmt);
     else scoped.push(stmt.replace(/:root\b/g, ':scope'));
   }

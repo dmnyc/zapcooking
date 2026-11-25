@@ -1,7 +1,7 @@
 <script lang="ts">
   /**
    * The monocomposer over the page: the app's Modal (the dark, translucent
-   * backdrop and its close button; full screen on phones) with the
+   * backdrop, Escape and backdrop-click to close; full screen on phones) with the
    * composer mounted inside. The modal is the sheet — the composer drops
    * its own card. Drafts save as you type, so closing loses nothing.
    */
@@ -37,6 +37,7 @@
         tab: $monoComposerTab,
         live,
         inModal: true,
+        onClose: closeMonoComposer,
         // Switching tabs inside the composer keeps the store in step, so
         // reopening lands where you left it.
         onTabChange: (tab) => {
@@ -59,7 +60,10 @@
   onDestroy(unmount);
 </script>
 
-<Modal bind:open cleanup={closeMonoComposer} noHeader floatingClose wide fullScreenMobile>
+<!-- No Modal close button: the composer draws its own at the end of its
+     head row, in the content column beside the drafts folder. Escape and
+     the backdrop still close through Modal. -->
+<Modal bind:open cleanup={closeMonoComposer} noHeader wide fullScreenMobile>
   {#if mountError}
     <p class="mount-error" role="alert">The composer failed to load: {mountError}</p>
   {/if}

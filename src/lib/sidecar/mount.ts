@@ -32,7 +32,7 @@ import { timerSettings, loadTimerSettings, saveTimerSettings } from '$lib/timerS
 // dynamic, client-only import: it reads window at its top level, and the
 // route never renders on the server.
 import { applyAvatar, buildSidecarDeps, composerPool } from './host';
-import { scopeStylesheet } from './scopeCss';
+import { isScrollbarStyling, scopeStylesheet } from './scopeCss';
 import type { ComponentType, SvelteComponent } from 'svelte';
 import PencilSimpleIcon from 'phosphor-svelte/lib/PencilSimple';
 import ChartBarHorizontalIcon from 'phosphor-svelte/lib/ChartBarHorizontal';
@@ -45,7 +45,9 @@ import HammerIcon from 'phosphor-svelte/lib/Hammer';
 import GlobeIcon from 'phosphor-svelte/lib/Globe';
 import ClockIcon from 'phosphor-svelte/lib/Clock';
 import CalendarBlankIcon from 'phosphor-svelte/lib/CalendarBlank';
-import CloudCheckIcon from 'phosphor-svelte/lib/CloudCheck';
+import FolderSimpleIcon from 'phosphor-svelte/lib/FolderSimple';
+import XCircleIcon from 'phosphor-svelte/lib/XCircle';
+import CheckIcon from 'phosphor-svelte/lib/Check';
 import XIcon from 'phosphor-svelte/lib/X';
 import PlusIcon from 'phosphor-svelte/lib/Plus';
 import TextBIcon from 'phosphor-svelte/lib/TextB';
@@ -121,6 +123,9 @@ interface MountOptions {
    * card (border, background, padding) and leaves the top-right corner to
    * the modal's close button. */
   inModal?: boolean;
+  /** Draw a close button at the end of the head row (the modal's own X is
+   * off, so there is one close button and it sits in the content column). */
+  onClose?: () => void;
   onTabChange?: (tab: MonoTab) => void;
 }
 
@@ -199,7 +204,8 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
        while the send countdown runs, the bar fills left to right and a
        red Cancel pill sits beside it. */
     .mono-foot { display: flex; flex-direction: column; gap: 8px; }
-    .mono-foot-meta { display: flex; align-items: center; gap: 10px; min-height: 16px; }
+    .mono-foot-meta { display: flex; align-items: center; gap: 10px; }
+    .mono-foot-meta:has(.compose-status:empty) { display: none; }
     .mono-action-row { display: flex; align-items: center; gap: 8px; }
     .mono-cancel { flex-shrink: 0; padding: 10px 18px; border-radius: 9999px; border: none;
       font: inherit; font-size: 14px; font-weight: 500; background: #ef4444; color: #fff; cursor: pointer; }
@@ -215,8 +221,12 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
     .mono-post--counting .mono-post-fill { width: var(--fill, 0%); }
     .mono-post-label { position: relative; }
     .mono-need { font-size: 12px; color: var(--muted, #999); text-align: right; padding: 2px 4px; }
-    .mono-count { font-size: 12px; color: var(--muted, #999); }
+    /* The count sits at the right of the Write / Preview bar, on the tabs'
+       baseline. */
+    .mono-count { margin-inline-start: auto; padding-bottom: 7px; font-size: 12px; color: var(--muted, #999);
+      font-variant-numeric: tabular-nums; white-space: nowrap; }
     .mono-saved { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
+    .mono-saved-check { color: var(--success); }
     .mono-toolbar { display: flex; gap: 4px; border: 1px solid var(--border); border-radius: 10px; padding: 6px; margin-bottom: 6px; }
     .mono-toolbar .tool-btn { padding: 6px 9px; }
     /* Sidecar's compose page owns a whole browser tab and centers the
@@ -228,7 +238,19 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
     /* Sidecar reserves the head's right edge for its full-size and close
        controls; neither exists here. */
     .compose-head { padding-inline-end: 0; }
-    .mono-icon-btn[data-mono="drafts"] { flex: none; padding: 7px 10px; }
+    /* Saved drafts and close: one kind of object (44px, borderless, a 24px
+       outline icon in the text color, the app modals' hover) — Sidecar's
+       folder beside its close box — with the draft count in a capsule on
+       the folder's corner. */
+    .mono-drafts, .mono-close { position: relative; flex: none; width: 44px; height: 44px; padding: 0;
+      display: inline-flex; align-items: center; justify-content: center;
+      background: transparent; border: none; border-radius: 9999px; color: var(--text); cursor: pointer;
+      transition: background-color 0.15s ease-out; }
+    .mono-drafts:hover, .mono-close:hover { background-color: rgba(255, 255, 255, 0.06); }
+    .mono-drafts-count { position: absolute; top: 5px; inset-inline-end: 3px; min-width: 15px; height: 15px; padding: 0 4px;
+      box-sizing: border-box; border-radius: 999px; font-size: 10px; font-weight: 700; line-height: 15px;
+      text-align: center; color: #fff; background: var(--orange); }
+    .mono-drafts-count:empty { display: none; }
     .mono-kinds .compose-mode { min-width: 0; }
     @media (max-width: 520px) {
       .compose-sheet { padding: 14px; border-radius: 14px; }
@@ -238,14 +260,32 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
     /* :scope — inside @scope a selector is matched among the root's
        descendants unless it names the root itself. */
     :scope.mono-in-modal .compose-sheet { padding: 0; border: none; background: none; box-shadow: none; border-radius: 0; max-width: none; }
-    :scope.mono-in-modal .compose-head { padding-inline-end: 44px; }
+    /* The folder and, in the modal, the close button end the head row,
+       inside the content column as in Sidecar: the close button's icon
+       lines up with the content's right edge (the buttons are 44px around
+       24px icons, so the row pulls 10px into the padding), the folder in
+       the slot beside it. The row keeps the avatar's height: the 44px
+       targets overhang it above and below. */
+    .compose-head { margin-block: -9px; }
+    .compose-head > .mono-drafts:last-child, .compose-head > .mono-close { margin-inline-end: -10px; }
+    .mono-drafts + .mono-close { margin-inline-start: -6px; }
+    /* Who is posting: a small avatar and name in the top strip, no caption
+       (Sidecar's "Writing as this account" is for its account switcher). */
+    .compose-head { gap: 10px; }
+    .compose-who { gap: 8px; }
+    .compose-av { width: 26px; height: 26px; }
+    .compose-name { font-size: 13.5px; }
     .compose-editor { min-height: 260px; }
     .compose-sheet:has(.poll-editor:not(.hidden)) .compose-editor { min-height: 120px; }
   `;
   // Sidecar's defaults (its :root, now :scope) land on the root element;
   // the theme on the page element inside it overrides them with this
   // app's palette.
-  styleEl.textContent = scopeStylesheet(styles + '\n' + theme + '\n' + monoStyles, '.mono-root');
+  styleEl.textContent = scopeStylesheet(
+    styles + '\n' + theme + '\n' + monoStyles,
+    '.mono-root',
+    isScrollbarStyling
+  );
   const root = document.createElement('div');
   root.className = 'mono-root' + (opts.inModal ? ' mono-in-modal' : '');
   container.append(styleEl, root);
@@ -263,11 +303,11 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
             <span class="avatar compose-av" data-mono="avatar"></span>
             <span class="compose-who-text">
               <span class="compose-name" data-mono="name">Loading…</span>
-              <span class="compose-sub">Writing as this account</span>
             </span>
           </div>
           <span class="mono-saved compose-saved" role="status" aria-live="polite"></span>
-          <button type="button" class="tool-btn mono-icon-btn" data-mono="drafts" title="Drafts"></button>
+          <button type="button" class="mono-drafts" data-mono="drafts" title="Saved drafts" aria-label="Saved drafts"></button>
+          ${opts.onClose ? '<button type="button" class="mono-close" data-mono="close" title="Close" aria-label="Close"></button>' : ''}
         </header>
 
         <div class="compose-modes mono-kinds" role="tablist" data-mono="kinds"></div>
@@ -277,6 +317,7 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
             <button type="button" class="compose-tab active" data-mono="subtab-write">Write</button>
             <button type="button" class="compose-tab" data-mono="subtab-preview">Preview</button>
           </div>
+          <span class="mono-count" data-mono="count" aria-live="polite"></span>
         </div>
 
         <div data-mono="reply-slot"></div>
@@ -291,8 +332,6 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
         <footer class="mono-foot">
           <div class="mono-foot-meta">
             <span class="compose-status" data-mono="status"></span>
-            <span style="flex:1"></span>
-            <span class="mono-count" data-mono="count"></span>
           </div>
           <div class="mono-action-row">
             <button type="button" class="mono-cancel" data-mono="cancel" hidden>Cancel</button>
@@ -334,8 +373,10 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
     kindsEl.appendChild(b);
   }
 
-  const draftsIcon = ph(CloudCheckIcon);
+  const draftsIcon = ph(FolderSimpleIcon, 24);
   const draftsCountEl = document.createElement('span');
+  draftsCountEl.className = 'mono-drafts-count';
+  draftsCountEl.setAttribute('aria-hidden', 'true');
 
   // ── state ────────────────────────────────────────────────────
   let pollDraft: unknown = null;
@@ -393,7 +434,11 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
         } else {
           localStorage.setItem(DRAFT_KEY, JSON.stringify({ article: articleForm, at: Date.now() }));
         }
-        savedEl.replaceChildren(ph(CloudCheckIcon, 14), document.createTextNode('Saved'));
+        // A green check, not the drafts folder: "saved" is a state, the
+        // folder is the place drafts are kept.
+        const check = ph(CheckIcon, 13);
+        check.classList.add('mono-saved-check');
+        savedEl.replaceChildren(check, document.createTextNode('Saved'));
       } catch (_) {
         /* storage blocked: the note still posts */
       }
@@ -1149,10 +1194,19 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
   const SHEET_MODE: Record<MonoTab, string> = { notes: 'note', polls: 'note', recipes: 'recipe', reads: 'article' };
   const sheetEl = page.querySelector('.compose-sheet') as HTMLElement;
 
+  // The tab change is reported at the END, after the pane is built. A
+  // listener may answer by calling setTab, and building a pane can run
+  // Svelte's flush synchronously (each icon is a component, and creating
+  // one flushes pending updates) — reported first, that answer ran in the
+  // middle of the build and the recipe form was drawn twice.
   function setPane(tab: MonoTab, keepPreview = false) {
+    paintPane(tab, keepPreview);
+    opts.onTabChange?.(tab);
+  }
+
+  function paintPane(tab: MonoTab, keepPreview: boolean) {
     currentTab = tab;
     sheetEl.dataset.mode = SHEET_MODE[tab];
-    opts.onTabChange?.(tab);
     kindsEl.querySelectorAll<HTMLButtonElement>('.compose-mode').forEach((b) => {
       b.classList.toggle('active', b.dataset.tab === tab);
     });
@@ -1221,13 +1275,17 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
   const draftsBtn = el<HTMLButtonElement>('drafts');
   draftsBtn.append(draftsIcon, draftsCountEl);
   draftsBtn.addEventListener('click', () => renderDraftsPane());
+  const closeBtn = page.querySelector<HTMLButtonElement>('[data-mono="close"]');
+  if (closeBtn && opts.onClose) {
+    closeBtn.appendChild(ph(XCircleIcon, 24));
+    closeBtn.addEventListener('click', () => opts.onClose?.());
+  }
 
   // ── who is writing ───────────────────────────────────────────
   (async () => {
     const pubkey = deps.activePubkey() as string;
     if (!pubkey) {
       el('name').textContent = 'Not signed in';
-      (page.querySelector('.compose-sub') as HTMLElement).textContent = 'Sign in to post';
       return;
     }
     const nameEl = el('name');
@@ -1252,6 +1310,9 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
       styleEl.remove();
     },
     setTab(tab: MonoTab) {
+      // Already there: nothing to rebuild (the modal echoes back the tab
+      // the composer just reported).
+      if (tab === currentTab) return;
       setPane(tab);
     }
   };
