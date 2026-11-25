@@ -8,6 +8,7 @@
 		type TrustProvider
 	} from '$lib/marketplace/kitchens';
 	import ShieldCheckIcon from 'phosphor-svelte/lib/ShieldCheck';
+	import CaretDownIcon from 'phosphor-svelte/lib/CaretDown';
 	import ArrowLeftIcon from 'phosphor-svelte/lib/ArrowLeft';
 	import GraphIcon from 'phosphor-svelte/lib/Graph';
 	import GlobeIcon from 'phosphor-svelte/lib/Globe';
@@ -26,6 +27,9 @@
 	let selectedMode: 'global' | 'custom' = 'global';
 	let customPubkey = '';
 	let customRelay = '';
+	// Raw pubkey/relay inputs are advanced territory now that a known provider covers
+	// the common case; they open by default only when the saved provider is unknown.
+	let showCustomFields = false;
 
 	// Known providers users can pick from
 	const KNOWN_PROVIDERS = [
@@ -61,6 +65,11 @@
 				selectedMode = 'custom';
 				customPubkey = currentProvider.servicePubkey;
 				customRelay = currentProvider.relayHint || '';
+				// A saved provider the known list doesn't cover: open the advanced inputs
+				// so what they're using stays visible and editable.
+				showCustomFields = !KNOWN_PROVIDERS.some(
+					(p) => p.pubkey === currentProvider?.servicePubkey
+				);
 			} else {
 				selectedMode = 'global';
 				customPubkey = '';
@@ -379,24 +388,44 @@
 				</div>
 
 				<!-- Custom provider fields -->
-				<div class="custom-fields">
-					<h3 class="text-xs font-semibold mb-2" style="color: var(--color-text-secondary)">
-						Or enter a custom provider
-					</h3>
-					<div class="flex flex-col gap-2">
-						<input
-							type="text"
-							bind:value={customPubkey}
-							placeholder="Provider pubkey (64 hex characters)"
-							class="field-input"
-						/>
-						<input
-							type="text"
-							bind:value={customRelay}
-							placeholder="Relay URL (optional, e.g. wss://...)"
-							class="field-input"
-						/>
-					</div>
+				<!-- Custom pubkey/relay is advanced territory now that a known provider
+				     covers the common case; open by default only for unknown providers. -->
+				<div class="mt-3">
+					<button
+						type="button"
+						class="flex items-center gap-1 text-xs font-semibold"
+						style="color: var(--color-text-secondary)"
+						on:click={() => (showCustomFields = !showCustomFields)}
+					>
+						<span
+							class="inline-flex transition-transform"
+							style={showCustomFields ? 'transform: rotate(180deg);' : ''}
+						>
+							<CaretDownIcon size={12} />
+						</span>
+						Advanced: enter a custom provider
+					</button>
+					{#if showCustomFields}
+						<div class="custom-fields mt-2">
+							<h3 class="text-xs font-semibold mb-2" style="color: var(--color-text-secondary)">
+								Provider details
+							</h3>
+							<div class="flex flex-col gap-2">
+								<input
+									type="text"
+									bind:value={customPubkey}
+									placeholder="Provider pubkey (64 hex characters)"
+									class="field-input"
+								/>
+								<input
+									type="text"
+									bind:value={customRelay}
+									placeholder="Relay URL (optional, e.g. wss://...)"
+									class="field-input"
+								/>
+							</div>
+						</div>
+					{/if}
 				</div>
 			{/if}
 

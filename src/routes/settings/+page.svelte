@@ -4,6 +4,7 @@
   import { standardRelays } from '$lib/consts';
   import TrashIcon from 'phosphor-svelte/lib/Trash';
   import GlobeIcon from 'phosphor-svelte/lib/Globe';
+  import CaretDownIcon from 'phosphor-svelte/lib/CaretDown';
   import FlameIcon from 'phosphor-svelte/lib/Flame';
   import ForkKnifeIcon from 'phosphor-svelte/lib/ForkKnife';
   import CopyIcon from 'phosphor-svelte/lib/Copy';
@@ -93,6 +94,9 @@
   let wotPubkey = '';
   let wotRelay = '';
   let wotHasChanges: boolean = false;
+  // Raw pubkey/relay inputs are advanced territory now that a known provider covers
+  // the common case; they open by default only when the saved provider is unknown.
+  let showCustomProviderFields = false;
 
   const KNOWN_WOT_PROVIDERS = [
     {
@@ -122,6 +126,11 @@
         wotMode = 'custom';
         wotPubkey = wotProvider.servicePubkey;
         wotRelay = wotProvider.relayHint || '';
+        // A saved provider the known list doesn't cover: open the advanced inputs so
+        // what they're using stays visible and editable.
+        showCustomProviderFields = !KNOWN_WOT_PROVIDERS.some(
+          (p) => p.pubkey === wotProvider?.servicePubkey
+        );
       } else {
         wotMode = 'global';
         wotPubkey = '';
@@ -1660,24 +1669,41 @@
                 </button>
               {/each}
 
-              <div class="flex flex-col gap-2 mt-1">
-                <label class="text-xs font-medium" style="color: var(--color-text-secondary)"
-                  >Or enter a custom provider</label
+              <!-- Custom pubkey/relay is advanced territory now that a known provider
+                   covers the common case; open by default only for unknown providers. -->
+              <div class="mt-1">
+                <button
+                  type="button"
+                  class="flex items-center gap-1 text-xs font-medium"
+                  style="color: var(--color-text-secondary)"
+                  on:click={() => (showCustomProviderFields = !showCustomProviderFields)}
                 >
-                <input
-                  type="text"
-                  bind:value={wotPubkey}
-                  placeholder="Provider pubkey (64 hex characters)"
-                  class="w-full px-3 py-2 rounded-lg text-xs"
-                  style="background-color: var(--color-input-bg); color: var(--color-text-primary); border: 1px solid var(--color-input-border); font-family: monospace;"
-                />
-                <input
-                  type="text"
-                  bind:value={wotRelay}
-                  placeholder="Relay URL (optional, e.g. wss://...)"
-                  class="w-full px-3 py-2 rounded-lg text-xs"
-                  style="background-color: var(--color-input-bg); color: var(--color-text-primary); border: 1px solid var(--color-input-border); font-family: monospace;"
-                />
+                  <span
+                    class="inline-flex transition-transform"
+                    style={showCustomProviderFields ? 'transform: rotate(180deg);' : ''}
+                  >
+                    <CaretDownIcon size={12} />
+                  </span>
+                  Advanced: enter a custom provider
+                </button>
+                {#if showCustomProviderFields}
+                  <div class="flex flex-col gap-2 mt-2">
+                    <input
+                      type="text"
+                      bind:value={wotPubkey}
+                      placeholder="Provider pubkey (64 hex characters)"
+                      class="w-full px-3 py-2 rounded-lg text-xs"
+                      style="background-color: var(--color-input-bg); color: var(--color-text-primary); border: 1px solid var(--color-input-border); font-family: monospace;"
+                    />
+                    <input
+                      type="text"
+                      bind:value={wotRelay}
+                      placeholder="Relay URL (optional, e.g. wss://...)"
+                      class="w-full px-3 py-2 rounded-lg text-xs"
+                      style="background-color: var(--color-input-bg); color: var(--color-text-primary); border: 1px solid var(--color-input-border); font-family: monospace;"
+                    />
+                  </div>
+                {/if}
               </div>
             </div>
           {/if}
