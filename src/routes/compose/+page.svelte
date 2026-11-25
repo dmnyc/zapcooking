@@ -9,6 +9,7 @@
   const TABS: MonoTab[] = ['notes', 'polls', 'recipes', 'reads'];
 
   let container: HTMLDivElement;
+  let mountError = '';
   let handle: { destroy(): void; setTab(tab: MonoTab): void } | null = null;
 
   // Publishing is live here — this is the composer. `?dry=1` is for the
@@ -19,7 +20,14 @@
   $: tab = (TABS.includes(tabParam as MonoTab) ? tabParam : 'notes') as MonoTab;
 
   onMount(async () => {
-    handle = await mountMonoComposer(container, { tab, live });
+    try {
+      handle = await mountMonoComposer(container, { tab, live });
+    } catch (e) {
+      // Shown beside the mount, not in it: the mount is a shadow host, and
+      // its light DOM never renders — a failure there looks like a blank page.
+      mountError = String((e as Error)?.message || e);
+      console.error('[compose] mount failed', e);
+    }
   });
 
   $: if (handle && tab) handle.setTab(tab);
@@ -39,6 +47,9 @@
     the monocomposer — one composer for notes, polls, recipes and reads.
     Add <code>?dry=1</code> to the address to keep a post off the relays.
   </div>
+  {#if mountError}
+    <p class="mount-error" role="alert">The composer failed to load: {mountError}</p>
+  {/if}
   <div bind:this={container} class="composer-mount"></div>
 </div>
 
@@ -57,10 +68,14 @@
     font-family: var(--font-mono, monospace);
     color: var(--color-primary);
   }
+  /* One sheet: Sidecar's compose-sheet draws the border, so the mount
+     draws none of its own. */
   .composer-mount {
-    background: var(--color-bg-primary);
-    border: 1px solid var(--color-input-border);
-    border-radius: 12px;
     min-height: 420px;
+  }
+  .mount-error {
+    color: var(--color-danger, #f66);
+    font-size: 13px;
+    padding: 8px 4px;
   }
 </style>

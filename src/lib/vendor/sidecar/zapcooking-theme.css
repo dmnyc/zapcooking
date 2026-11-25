@@ -31,4 +31,30 @@
   --text: var(--color-text-primary, #f4f4f5);
   --text-2: var(--color-text-secondary, #c9c9cd);
   --muted: var(--color-text-muted, #8a8c92);
+  --faint: var(--color-text-muted, #6b6d73);
+
+  /* accents — Sidecar's lavender and gold are this app's orange. The
+     stylesheet's :root defaults are rewritten to :host when it is adopted
+     into the shadow root, so anything not named here falls back to
+     Sidecar's Speakeasy values; every accent a user can see is named. */
+  --lav: var(--color-primary, #ec4700);
+  --purple: var(--color-primary, #ec4700);
+  --gold: var(--color-primary, #ec4700);
+  --gold-soft: color-mix(in srgb, var(--color-primary, #ec4700) 50%, transparent);
+  --accent-rgb: 236, 71, 0;
+  --news: var(--color-primary, #ec4700);
+  --border-rgb: 255, 255, 255;
+  --hover-soft: rgba(255, 255, 255, 0.06);
+  --hover-medium: rgba(255, 255, 255, 0.08);
+  --hover-faint: rgba(255, 255, 255, 0.04);
+  --mention-bg: color-mix(in srgb, var(--color-primary, #ec4700) 18%, transparent);
+  --velvet-1: var(--color-bg-secondary, #191a1c);
+  --velvet-1-rgb: 25, 26, 28;
+  --velvet-2: var(--color-input-bg, rgba(255, 255, 255, 0.08));
+  --input-bg: var(--color-input-bg, rgba(0, 0, 0, 0.15));
+  --av-from: var(--color-bg-secondary, #191a1c);
+  --av-to: var(--color-bg-primary, #111214);
+  --banner-accent: var(--color-bg-secondary, #191a1c);
+  --scroll-thumb: var(--color-input-border, #33353a);
+  --scroll-thumb-hover: var(--color-text-muted, #8a8c92);
 }
