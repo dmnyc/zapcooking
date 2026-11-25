@@ -24,6 +24,7 @@
   import PasskeyVaultSection from '../../components/PasskeyVaultSection.svelte';
   import AccountNudgeItem from '../../components/AccountNudgeItem.svelte';
   import { markBackupSaved } from '$lib/accountNudge';
+  import { buildWot, wotSet, wotState } from '$lib/wot/wotStore';
   import { resolveSecuritySections, resolveDisplayPubkey } from '$lib/securitySections';
   import { nip19 } from 'nostr-tools';
   import { theme, type Theme } from '$lib/themeStore';
@@ -1700,6 +1701,38 @@
               {wotMessage.text}
             </p>
           {/if}
+
+          <!-- Local web of trust — the spam filter's allowlist (you, your follows,
+               and everyone ten of your follows follow). Separate from the provider
+               above: this is built locally, not fetched from a service. -->
+          <div
+            class="flex items-center gap-3 px-3 py-2 rounded-lg"
+            style="border: 1px solid var(--color-input-border);"
+          >
+            <div class="flex-1 min-w-0">
+              <p class="text-sm" style="color: var(--color-text-primary)">
+                Web of trust (spam filter)
+              </p>
+              <p class="text-xs" style="color: var(--color-text-secondary)">
+                {#if $wotState === 'building'}
+                  Building…
+                {:else if $wotState === 'ready'}
+                  Ready · {$wotSet.size.toLocaleString()} accounts in your network
+                {:else}
+                  Not built yet — builds in the background after you sign in
+                {/if}
+              </p>
+            </div>
+            <button
+              type="button"
+              class="px-3 py-1.5 bg-secondary hover:bg-accent-gray rounded-lg text-xs font-medium transition-colors whitespace-nowrap"
+              style="color: var(--color-text-primary)"
+              disabled={$wotState === 'building'}
+              on:click={() => buildWot($ndk, $userPublickey, { force: true }).catch(() => {})}
+            >
+              {$wotState === 'building' ? 'Building…' : 'Rebuild'}
+            </button>
+          </div>
         {/if}
       </div>
     </Accordion>

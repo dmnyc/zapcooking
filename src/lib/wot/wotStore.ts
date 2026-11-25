@@ -42,10 +42,23 @@ let inflight: Promise<WotResult | null> | null = null;
  * partial build still publishes what it gathered — the set narrows rather than
  * vanishing, and `inNetwork`'s fail-open reads a vanished set as "everyone".
  */
-export async function buildWot(ndk: NDK, pubkey: string): Promise<WotResult | null> {
+export async function buildWot(
+  ndk: NDK,
+  pubkey: string,
+  opts: { force?: boolean } = {}
+): Promise<WotResult | null> {
   const current = get(state);
+  if (opts.force && inflight) {
+    // A rebuild asked for while a build runs: let it finish, then go again.
+    try {
+      await inflight;
+    } catch {
+      /* the retry below starts clean */
+    }
+    return buildWot(ndk, pubkey);
+  }
   if (inflight && current.pubkey === pubkey) return inflight;
-  if (current.status === 'ready' && current.pubkey === pubkey && current.result) {
+  if (!opts.force && current.status === 'ready' && current.pubkey === pubkey && current.result) {
     return current.result;
   }
   // Hop one rides on the app's kind:3 cache; loading it is idempotent and shared.
