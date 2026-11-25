@@ -4,9 +4,7 @@
   import { page } from '$app/stores';
   import { requireAuth } from '$lib/auth/requireAuth';
   import { clickOutside } from '$lib/clickOutside';
-  import { postComposerOpen } from '$lib/postComposerStore';
   import { miningOp } from '$lib/stores/miningOp';
-  import { openNewDraft } from './reads/articleDraftStore';
   import AddIcon from 'phosphor-svelte/lib/Plus';
   import ForkKnifeIcon from 'phosphor-svelte/lib/ForkKnife';
   import PencilSimpleIcon from 'phosphor-svelte/lib/PencilSimple';
@@ -57,19 +55,19 @@
   async function openRecipe() {
     closeMenu();
     if (!(await requireAuth({ kind: 'post', reason: 'Sign in to share a recipe' }))) return;
-    goto('/create');
+    goto('/compose?tab=recipes');
   }
 
   async function openPost() {
     closeMenu();
     if (!(await requireAuth({ kind: 'post', reason: 'Sign in to post' }))) return;
-    postComposerOpen.set(true);
+    goto('/compose?tab=notes');
   }
 
   async function openRead() {
     closeMenu();
     if (!(await requireAuth({ kind: 'post', reason: 'Sign in to write an article' }))) return;
-    openNewDraft();
+    goto('/compose?tab=reads');
   }
 
   async function openLive() {

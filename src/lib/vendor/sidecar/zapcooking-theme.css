@@ -1,0 +1,34 @@
+/* ============================================================
+   Zap Cooking theme for the Sidecar composer core.
+   The palette stays Zap Cooking's: every value here resolves to
+   the app's own CSS variables (src/lib/themes/palettes.css), so
+   palette changes flow through without touching this file. The
+   VAR NAMES are Sidecar's — composer-core and sidecar-styles.css
+   read these.
+   ============================================================ */
+
+[data-theme='zapcooking'] {
+  color-scheme: dark;
+
+  --font-display: 'Albert Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-ui: 'Albert Sans', ui-sans-serif, system-ui, sans-serif;
+  --display-ink-nudge: 0em;
+
+  /* surfaces — the app's own backgrounds and inputs */
+  --bg: var(--color-bg-primary, #111214);
+  --bg-2: var(--color-bg-secondary, #191a1c);
+  --border: var(--color-input-border, #33353a);
+  --border-strong: var(--color-input-border, #45474d);
+  --warn: #ffb38a;
+  --success: #6ee7a8;
+
+  /* brand — the Zap Cooking orange */
+  --orange: var(--color-primary, #ec4700);
+  --amber: var(--color-primary, #ec4700);
+  --badge-ink: #1c0c00;
+
+  /* ink */
+  --text: var(--color-text-primary, #f4f4f5);
+  --text-2: var(--color-text-secondary, #c9c9cd);
+  --muted: var(--color-text-muted, #8a8c92);
+}
