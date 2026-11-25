@@ -33,6 +33,7 @@ import { timerSettings, loadTimerSettings, saveTimerSettings } from '$lib/timerS
 // route never renders on the server.
 import { applyAvatar, buildSidecarDeps, composerPool } from './host';
 import { isScrollbarStyling, scopeStylesheet } from './scopeCss';
+import { MONO_DRAFTS_LIST_KEY } from '$lib/monoComposerStore';
 import type { ComponentType, SvelteComponent } from 'svelte';
 import PencilSimpleIcon from 'phosphor-svelte/lib/PencilSimple';
 import ChartBarHorizontalIcon from 'phosphor-svelte/lib/ChartBarHorizontal';
@@ -393,7 +394,7 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
 
   // ── drafts ───────────────────────────────────────────────────
   const DRAFT_KEY = 'zapcooking_mono_draft';
-  const DRAFTS_LIST_KEY = 'zapcooking_mono_drafts_v1';
+  const DRAFTS_LIST_KEY = MONO_DRAFTS_LIST_KEY;
   type DraftEntry = { text: string; at: number };
 
   function readDraftList(): Record<string, DraftEntry> {
@@ -1308,6 +1309,10 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
       mountedIcons.splice(0).forEach((c) => c.$destroy());
       root.remove();
       styleEl.remove();
+    },
+    /** Open the saved drafts list (opens, never toggles it shut). */
+    showDrafts() {
+      if (!page.querySelector('.compose-drafts-pane')) renderDraftsPane();
     },
     setTab(tab: MonoTab) {
       // Already there: nothing to rebuild (the modal echoes back the tab

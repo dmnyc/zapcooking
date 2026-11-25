@@ -8,10 +8,10 @@
   import Modal from './Modal.svelte';
   import { onDestroy } from 'svelte';
   import { page } from '$app/stores';
-  import { monoComposerTab, closeMonoComposer } from '$lib/monoComposerStore';
+  import { monoComposerTab, closeMonoComposer, monoComposerDraftsRequest } from '$lib/monoComposerStore';
   import type { MonoTab } from '$lib/sidecar/mount';
 
-  type Handle = { destroy(): void; setTab(tab: MonoTab): void };
+  type Handle = { destroy(): void; setTab(tab: MonoTab): void; showDrafts(): void };
 
   let open = false;
   let container: HTMLDivElement | null = null;
@@ -26,6 +26,14 @@
   $: if (open && container && !handle && !mounting) void mount();
   $: if (!open) unmount();
   $: if (handle && $monoComposerTab) handle.setTab($monoComposerTab);
+
+  // "Open on drafts" (the + menu's Drafts): answered once the composer is
+  // up, and again for each new ask while it stays open.
+  let draftsAnswered = $monoComposerDraftsRequest;
+  $: if (handle && $monoComposerDraftsRequest !== draftsAnswered) {
+    draftsAnswered = $monoComposerDraftsRequest;
+    handle.showDrafts();
+  }
 
   async function mount() {
     mounting = true;

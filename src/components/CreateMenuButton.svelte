@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { openMonoComposer } from '$lib/monoComposerStore';
+  import { openMonoComposer, openMonoComposerDrafts, monoDraftCount } from '$lib/monoComposerStore';
   import { page } from '$app/stores';
   import { requireAuth } from '$lib/auth/requireAuth';
   import { clickOutside } from '$lib/clickOutside';
@@ -11,6 +11,7 @@
   import PencilSimpleIcon from 'phosphor-svelte/lib/PencilSimple';
   import NewspaperIcon from 'phosphor-svelte/lib/Newspaper';
   import BroadcastIcon from 'phosphor-svelte/lib/Broadcast';
+  import FolderSimpleIcon from 'phosphor-svelte/lib/FolderSimple';
   import { userPublickey } from '$lib/nostr';
   import { goLiveAccess, LIVE_MEMBERSHIP_PATH } from '$lib/live/config';
   import { membershipStatusMap, queueMembershipLookup } from '$lib/stores/membershipStatus';
@@ -44,6 +45,11 @@
   $: if (livePk) queueMembershipLookup(livePk);
   $: liveAccess = goLiveAccess(livePk ? $membershipStatusMap[livePk] : undefined);
 
+  // Read each time the menu opens: drafts are saved as you type, so a count
+  // taken once at load would be stale by the next visit.
+  let draftCount = 0;
+  $: if (showMenu) draftCount = monoDraftCount();
+
   $: if (isMining) closeMenu();
 
   $: if (isCancelMode) {
@@ -69,6 +75,12 @@
     closeMenu();
     if (!(await requireAuth({ kind: 'post', reason: 'Sign in to write an article' }))) return;
     openMonoComposer('reads');
+  }
+
+  async function openDrafts() {
+    closeMenu();
+    if (!(await requireAuth({ kind: 'post', reason: 'Sign in to see your drafts' }))) return;
+    openMonoComposerDrafts();
   }
 
   async function openLive() {
@@ -239,7 +251,7 @@
 <div
   class={`create-menu ${variant === 'floating' ? 'create-menu-floating' : 'create-menu-header'} ${className}`}
   class:create-menu-open={showMenu && !isCancelMode}
-  class:create-menu-four={true}
+  class:create-menu-five={true}
   role="presentation"
   on:mouseenter={handleMouseEnter}
   on:mouseleave={handleMouseLeave}
@@ -329,6 +341,16 @@
       type="button"
       class="create-menu-item"
       tabindex={showMenu && !isCancelMode ? 0 : -1}
+      on:click={openDrafts}
+    >
+      <span class="create-menu-item-icon"><FolderSimpleIcon size={20} /></span>
+      <span>Drafts</span>
+      {#if draftCount > 0}<span class="create-menu-count" aria-label="{draftCount} saved">{draftCount}</span>{/if}
+    </button>
+    <button
+      type="button"
+      class="create-menu-item"
+      tabindex={showMenu && !isCancelMode ? 0 : -1}
       on:click={openLive}
     >
       <span class="create-menu-item-icon"><BroadcastIcon size={20} /></span>
@@ -368,9 +390,22 @@
     pointer-events: none;
   }
 
-  /* A fourth item (Go live, allowlisted hosts only) needs one more row. */
-  .create-menu-floating.create-menu-four {
-    height: 296px;
+  /* Five rows (New post, New recipe, New read, Drafts, Go live), 52px
+     each above the button. */
+  .create-menu-floating.create-menu-five {
+    height: 348px;
+  }
+  /* The saved-draft count: the composer folder's capsule, in the row. */
+  .create-menu-count {
+    margin-left: auto;
+    min-width: 1.25rem;
+    padding: 0.05rem 0.4rem;
+    border-radius: 9999px;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    text-align: center;
+    color: var(--color-on-action);
+    background: var(--color-action);
   }
   /* Go live for a confirmed non-member: it leads to the membership page. */
   .create-menu-cookplus {
