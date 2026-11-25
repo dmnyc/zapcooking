@@ -1642,7 +1642,13 @@
                     : 'transparent'};"
                   on:click={() => selectWotProvider(provider)}
                 >
-                  <ShieldCheckIcon size={16} weight="fill" class="text-green-500 flex-shrink-0" />
+                  <!-- Green shield is the active-provider badge (same as the status
+                       row above); an option that merely lists a provider reads neutral. -->
+                  {#if wotProvider?.servicePubkey === provider.pubkey}
+                    <ShieldCheckIcon size={16} weight="fill" class="text-green-500 flex-shrink-0" />
+                  {:else}
+                    <GlobeIcon size={16} class="text-[var(--color-caption)] flex-shrink-0" />
+                  {/if}
                   <div>
                     <span class="block text-sm font-medium" style="color: var(--color-text-primary)"
                       >{provider.name}</span

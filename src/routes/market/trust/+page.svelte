@@ -360,7 +360,13 @@
 							on:click={() => selectKnownProvider(provider)}
 						>
 							<div class="flex items-center gap-2">
-								<ShieldCheckIcon size={16} weight="fill" class="text-[var(--color-success)]" />
+								<!-- Green shield is the active-provider badge (same as the status
+								     row above); an option that merely lists a provider reads neutral. -->
+								{#if currentProvider?.servicePubkey === provider.pubkey}
+									<ShieldCheckIcon size={16} weight="fill" class="text-[var(--color-success)]" />
+								{:else}
+									<GlobeIcon size={16} class="text-[var(--color-caption)]" />
+								{/if}
 								<span class="font-semibold text-sm" style="color: var(--color-text-primary)">
 									{provider.name}
 								</span>
