@@ -34,6 +34,22 @@ import { timerSettings, loadTimerSettings, saveTimerSettings } from '$lib/timerS
 import { applyAvatar, buildSidecarDeps, composerPool } from './host';
 import { isScrollbarStyling, scopeStylesheet } from './scopeCss';
 import { MONO_DRAFTS_LIST_KEY } from '$lib/monoComposerStore';
+import {
+  contentSum,
+  listDrafts,
+  loadBlanks,
+  loadDrafts,
+  removeDraft,
+  storeDrafts,
+  useDraftScope,
+  writeDraft,
+  type ComposerDraft,
+  type CoreHelpers,
+  type DraftFields,
+  type DraftMedia,
+  type PollDraft
+} from '$lib/composerDrafts';
+import { composerDraftSync } from '$lib/composerDraftsIO';
 import type { ComponentType, SvelteComponent } from 'svelte';
 import PencilSimpleIcon from 'phosphor-svelte/lib/PencilSimple';
 import ChartBarHorizontalIcon from 'phosphor-svelte/lib/ChartBarHorizontal';
@@ -47,6 +63,11 @@ import GlobeIcon from 'phosphor-svelte/lib/Globe';
 import ClockIcon from 'phosphor-svelte/lib/Clock';
 import CalendarBlankIcon from 'phosphor-svelte/lib/CalendarBlank';
 import FolderSimpleIcon from 'phosphor-svelte/lib/FolderSimple';
+import CloudCheckIcon from 'phosphor-svelte/lib/CloudCheck';
+import CloudArrowUpIcon from 'phosphor-svelte/lib/CloudArrowUp';
+import DeviceMobileIcon from 'phosphor-svelte/lib/DeviceMobile';
+import ArrowsClockwiseIcon from 'phosphor-svelte/lib/ArrowsClockwise';
+import TrashIcon from 'phosphor-svelte/lib/Trash';
 import XCircleIcon from 'phosphor-svelte/lib/XCircle';
 import CheckIcon from 'phosphor-svelte/lib/Check';
 import XIcon from 'phosphor-svelte/lib/X';
@@ -108,7 +129,7 @@ interface ComposerController {
   checkPastedQuote(q: unknown, revert: () => void): void;
   showPostCountdown(o: Record<string, unknown>): { stop(): void };
   renderNotePreview(el: HTMLElement, content: string): void;
-  buildPollEditor(o: Record<string, unknown>): { wrap: HTMLElement; addBtn: HTMLButtonElement };
+  buildPollEditor(o: Record<string, unknown>): { wrap: HTMLElement; addBtn: HTMLButtonElement; paint(): void };
   buildEmojiPicker(o: Record<string, unknown>): { wrap: HTMLElement; addBtn: HTMLElement; close(): void };
   buildGifPicker(o: Record<string, unknown>): { wrap: HTMLElement; addBtn: HTMLElement };
   newPollDraft(): unknown;
@@ -156,7 +177,7 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
       // On the core itself, not the installed controller: it takes its pool
       // as an argument rather than reading deps.
       publishToRelays(o: Record<string, unknown>): Promise<PublishReport>;
-      buildPollEditor(o: Record<string, unknown>): { wrap: HTMLElement; addBtn: HTMLButtonElement };
+      buildPollEditor(o: Record<string, unknown>): { wrap: HTMLElement; addBtn: HTMLButtonElement; paint(): void };
       buildEmojiPicker(o: Record<string, unknown>): { wrap: HTMLElement; addBtn: HTMLButtonElement; close(): void };
       buildGifPicker(o: Record<string, unknown>): { wrap: HTMLElement; addBtn: HTMLButtonElement };
       newPollDraft(): unknown;
@@ -228,6 +249,33 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
       font-variant-numeric: tabular-nums; white-space: nowrap; }
     .mono-saved { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
     .mono-saved-check { color: var(--success); }
+    /* Saved drafts: Sidecar's list — a row is the draft (opens it), with a
+       trash icon beside it; the time and the relay state on one line. */
+    .mono-drafts-pane { display: flex; flex-direction: column; gap: 8px; }
+    /* While the list is open it is the sheet: everything below the tabs that
+       belongs to writing steps aside, untouched. */
+    .compose-sheet.mono-drafts-open > :not(.compose-head):not(.mono-kinds):not(.compose-drafts-pane) { display: none !important; }
+    .mono-drafts-back { width: 100%; justify-content: center; margin-top: 4px; color: var(--text); }
+    .mono-drafts-head { display: flex; align-items: center; gap: 8px; }
+    .mono-drafts-title { flex: 1; font-weight: 600; font-size: 14px; }
+    .mono-drafts-head .tool-btn { padding: 6px 10px; font-size: 12.5px; }
+    .mono-drafts-status { margin: 0; font-size: 12px; color: var(--muted); min-height: 0; }
+    .mono-drafts-status:empty { display: none; }
+    .mono-drafts-empty { margin: 4px 0; font-size: 13px; color: var(--muted); }
+    .mono-drafts-list { display: flex; flex-direction: column; gap: 8px; }
+    .mono-draft { display: flex; align-items: stretch; min-width: 0; border-radius: 10px;
+      background: var(--hover-soft); border: 1px solid var(--border); }
+    .mono-draft:hover, .mono-draft.is-current { border-color: var(--gold-soft); }
+    .mono-draft-open { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; text-align: start;
+      padding: 10px 12px; background: none; border: none; cursor: pointer; color: var(--text); font: inherit; }
+    .mono-draft-top { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .mono-draft-kind { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .mono-draft-meta { margin-inline-start: auto; flex-shrink: 0; display: inline-flex; align-items: center; gap: 5px;
+      font-size: 12px; color: var(--muted); }
+    .mono-draft-cloud.is-synced { color: var(--success); }
+    .mono-draft-snip { font-size: 13px; color: var(--text-2); line-height: 1.45;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .mono-draft-del { border: none; background: none; flex-shrink: 0; padding: 0 12px; }
     .mono-toolbar { display: flex; gap: 4px; border: 1px solid var(--border); border-radius: 10px; padding: 6px; margin-bottom: 6px; }
     .mono-toolbar .tool-btn { padding: 6px 9px; }
     /* Sidecar's compose page owns a whole browser tab and centers the
@@ -393,142 +441,335 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
   };
 
   // ── drafts ───────────────────────────────────────────────────
-  const DRAFT_KEY = 'zapcooking_mono_draft';
-  const DRAFTS_LIST_KEY = MONO_DRAFTS_LIST_KEY;
-  type DraftEntry = { text: string; at: number };
+  // Notes and polls: composerDrafts.ts — one id per draft for its whole
+  // life, kept on the device as you type, pushed to the account's draft
+  // relays when the composer closes (only what changed), caught up when it
+  // opens, and on Sync now. Recipes and reads keep one draft each on the
+  // device until those tabs publish; they move to the recipe and article
+  // draft stores then.
+  const RECIPE_DRAFT_KEY = 'zapcooking_mono_recipe_draft';
+  const ARTICLE_DRAFT_KEY = 'zapcooking_mono_article_draft';
+  const LEGACY_DRAFT_KEY = 'zapcooking_mono_draft';
+  // The note or poll being written: its draft id, or null before it has
+  // content. Kept while the editor is emptied, so typing again continues the
+  // same draft rather than starting another.
+  let activeId: string | null = null;
+  const me = () => (deps.activePubkey() as string) || '';
+  useDraftScope(me());
+  const draftSync = composerDraftSync(SidecarCore as unknown as CoreHelpers, deps.NT);
 
-  function readDraftList(): Record<string, DraftEntry> {
+  function noteFields(): DraftFields {
+    return {
+      kind: pollDraft ? 'poll' : 'note',
+      text: editorApi.getText(),
+      media: media.slice() as DraftMedia[],
+      poll: (pollDraft as PollDraft | null) || null
+    };
+  }
+
+  const recipeHasContent = () =>
+    !!(recipeForm.name.trim() || recipeForm.summary.trim() || recipeForm.ingredients.length ||
+      recipeForm.directions.length || recipeForm.notes.trim());
+  const articleHasContent = () =>
+    !!(articleForm.title.trim() || articleForm.body.trim() || articleForm.summary.trim());
+
+  function writeLocal(key: string, value: unknown) {
     try {
-      return JSON.parse(localStorage.getItem(DRAFTS_LIST_KEY) || '{}') as Record<string, DraftEntry>;
+      if (value) localStorage.setItem(key, JSON.stringify({ ...(value as object), at: Date.now() }));
+      else localStorage.removeItem(key);
     } catch (_) {
-      return {};
+      /* storage blocked: the draft is still on screen */
+    }
+  }
+  function readLocal<T>(key: string): (T & { at: number }) | null {
+    try {
+      return JSON.parse(localStorage.getItem(key) || 'null');
+    } catch (_) {
+      return null;
     }
   }
 
-  function writeDraftList(list: Record<string, DraftEntry>) {
-    try {
-      localStorage.setItem(DRAFTS_LIST_KEY, JSON.stringify(list));
-    } catch (_) {
-      /* storage blocked: the draft still exists in the editor */
+  /** Write what is on screen to the device, now. */
+  function saveNow() {
+    if (draftTimer) {
+      clearTimeout(draftTimer);
+      draftTimer = null;
     }
-  }
-
-  function draftHasContent(): boolean {
-    if (currentTab === 'notes' || currentTab === 'polls')
-      return !!editorApi.getText().trim() || media.length > 0 || !!pollDraft;
-    if (currentTab === 'recipes')
-      return !!(recipeForm.name || recipeForm.summary || recipeForm.ingredients.length || recipeForm.directions.length);
-    return !!(articleForm.title || articleForm.body || articleForm.summary);
+    if (currentTab === 'recipes') writeLocal(RECIPE_DRAFT_KEY, recipeHasContent() ? recipeForm : null);
+    else if (currentTab === 'reads') writeLocal(ARTICLE_DRAFT_KEY, articleHasContent() ? articleForm : null);
+    else {
+      const r = writeDraft(loadDrafts(), loadBlanks(), activeId, noteFields(), Date.now());
+      activeId = r.id;
+      storeDrafts(r.all, r.blanks);
+    }
+    // A green check, not the drafts folder: "saved" is a state, the folder
+    // is the place drafts are kept.
+    const check = ph(CheckIcon, 13);
+    check.classList.add('mono-saved-check');
+    savedEl.replaceChildren(check, document.createTextNode('Saved'));
+    paintDraftsCount();
+    if (page.querySelector('.compose-drafts-pane')) paintDraftsPane();
   }
 
   function draftSaveSoon() {
     if (draftTimer) clearTimeout(draftTimer);
-    draftTimer = setTimeout(() => {
-      try {
-        if (currentTab === 'notes' || currentTab === 'polls') {
-          localStorage.setItem(
-            DRAFT_KEY,
-            JSON.stringify({ text: editorApi.getText(), media, poll: pollDraft, at: Date.now() })
-          );
-        } else if (currentTab === 'recipes') {
-          localStorage.setItem(DRAFT_KEY, JSON.stringify({ recipe: recipeForm, at: Date.now() }));
-        } else {
-          localStorage.setItem(DRAFT_KEY, JSON.stringify({ article: articleForm, at: Date.now() }));
-        }
-        // A green check, not the drafts folder: "saved" is a state, the
-        // folder is the place drafts are kept.
-        const check = ph(CheckIcon, 13);
-        check.classList.add('mono-saved-check');
-        savedEl.replaceChildren(check, document.createTextNode('Saved'));
-      } catch (_) {
-        /* storage blocked: the note still posts */
-      }
-      const list = readDraftList();
-      if (draftHasContent()) list[currentTab] = { text: draftSummary(), at: Date.now() };
-      else delete list[currentTab];
-      writeDraftList(list);
-      paintDraftsCount();
-    }, 600);
+    draftTimer = setTimeout(saveNow, 600);
   }
 
-  function draftSummary(): string {
-    if (currentTab === 'notes' || currentTab === 'polls') return editorApi.getText();
-    if (currentTab === 'recipes') return recipeForm.name || recipeForm.summary;
-    return articleForm.title || articleForm.summary || articleForm.body.slice(0, 60);
+  /** Drafts pushed and pulled: blanks first, then what changed, then a read. */
+  function syncDrafts() {
+    return draftSync.sync().then((report) => {
+      paintDraftsCount();
+      if (page.querySelector('.compose-drafts-pane')) paintDraftsPane();
+      return report;
+    });
+  }
+
+  function localRows(): { tab: MonoTab; label: string; snippet: string; at: number }[] {
+    const rows: { tab: MonoTab; label: string; snippet: string; at: number }[] = [];
+    const recipe = readLocal<typeof recipeForm>(RECIPE_DRAFT_KEY);
+    if (recipe) rows.push({ tab: 'recipes', label: 'Recipe', snippet: recipe.name || recipe.summary || '', at: recipe.at });
+    const article = readLocal<typeof articleForm>(ARTICLE_DRAFT_KEY);
+    if (article)
+      rows.push({ tab: 'reads', label: 'Article', snippet: article.title || article.summary || article.body.slice(0, 60), at: article.at });
+    return rows;
   }
 
   function paintDraftsCount() {
-    const list = readDraftList();
-    const count = Object.values(list).filter((d) => d.text && d.text.trim()).length;
+    const count = listDrafts(loadDrafts()).length + localRows().length;
     draftsCountEl.textContent = count ? String(count) : '';
   }
 
-  function renderDraftsPane() {
-    const existing = page.querySelector('.compose-drafts-pane');
-    if (existing) {
-      existing.remove();
-      return;
-    }
-    const pane = document.createElement('div');
-    pane.className = 'compose-drafts-pane';
-    pane.style.cssText = 'padding:8px 4px';
-    const list = readDraftList();
-    const entries = MONO_TABS.filter((t) => list[t.id]?.text?.trim());
-    if (!entries.length) {
-      const empty = document.createElement('p');
-      empty.style.cssText = 'color:var(--muted,#999);font-size:12px;padding:6px 2px';
-      empty.textContent = 'No saved drafts yet — what you type is saved here as you go.';
-      pane.appendChild(empty);
-    }
-    for (const tab of entries) {
-      const d = list[tab.id];
-      const row = document.createElement('div');
-      row.style.cssText =
-        'display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--border,#333);padding:6px 2px;font-size:12px';
-      const label = document.createElement('span');
-      label.style.cssText = 'font-weight:600;min-width:52px';
-      label.textContent = tab.label;
-      const preview = document.createElement('span');
-      preview.style.cssText =
-        'flex:1;color:var(--muted,#999);overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
-      preview.textContent = d.text.trim().slice(0, 60);
-      const restoreBtn = document.createElement('button');
-      restoreBtn.type = 'button';
-      restoreBtn.className = 'tool-btn';
-      restoreBtn.textContent = 'Restore';
-      restoreBtn.addEventListener('click', () => {
-        setPane(tab.id);
-        restoreSavedDraft();
-        pane.remove();
-      });
-      const discardBtn = iconButton(XIcon, 'Discard this draft');
-      discardBtn.addEventListener('click', () => {
-        const next = readDraftList();
-        delete next[tab.id];
-        writeDraftList(next);
-        paintDraftsCount();
-        renderDraftsPane();
-      });
-      row.append(label, preview, restoreBtn, discardBtn);
-      pane.appendChild(row);
-    }
-    kindsEl.after(pane);
+  /** Put a saved note or poll in the editor, as the draft being written. */
+  function openDraft(d: ComposerDraft) {
+    saveNow(); // the one on screen stays saved, as its own draft
+    activeId = d.id;
+    editorApi.setText(d.text);
+    media.length = 0;
+    media.push(...(d.media as { url: string; isVideo?: boolean }[]));
+    pollDraft = d.poll ? JSON.parse(JSON.stringify(d.poll)) : null;
+    renderThumbs();
+    setPane(d.kind === 'poll' ? 'polls' : 'notes');
+    if (d.kind === 'poll') pollEditor.paint();
+    refreshPostState();
   }
 
-  function restoreSavedDraft() {
-    try {
-      const saved = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null');
-      if (!saved) return;
-      if (saved.text) editorApi.setText(saved.text);
-      if (Array.isArray(saved.media)) media.push(...saved.media);
-      if (saved.poll) pollDraft = saved.poll;
-      if (saved.recipe) Object.assign(recipeForm, saved.recipe);
-      if (saved.article) Object.assign(articleForm, saved.article);
-      renderThumbs();
-      refreshPostState();
-    } catch (_) {
-      /* unreadable draft: start clean */
+  /** A fresh note: the one on screen is kept as a draft. */
+  function startNewDraft() {
+    saveNow();
+    activeId = null;
+    editorApi.setText('');
+    media.length = 0;
+    pollDraft = null;
+    renderThumbs();
+    setPane('notes');
+    savedEl.replaceChildren();
+  }
+
+  function relTime(ms: number) {
+    const s = Math.max(0, (Date.now() - ms) / 1000);
+    if (s < 60) return 'just now';
+    if (s < 3600) return `${Math.round(s / 60)}m ago`;
+    if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+    return new Date(ms).toLocaleDateString();
+  }
+
+  // The list takes the writing area's place while it is open, as in
+  // Sidecar: the folder toggles it, and opening a draft, New note or Back
+  // to writing return to the editor.
+  function closeDraftsPane() {
+    page.querySelector('.compose-drafts-pane')?.remove();
+    page.querySelector('.compose-sheet')?.classList.remove('mono-drafts-open');
+  }
+
+  function renderDraftsPane() {
+    if (page.querySelector('.compose-drafts-pane')) {
+      closeDraftsPane();
+      return;
     }
+    paintDraftsPane();
+  }
+
+  function paintDraftsPane() {
+    let pane = page.querySelector('.compose-drafts-pane') as HTMLElement | null;
+    if (!pane) {
+      pane = document.createElement('div');
+      pane.className = 'compose-drafts-pane mono-drafts-pane';
+      kindsEl.after(pane);
+    }
+    page.querySelector('.compose-sheet')?.classList.add('mono-drafts-open');
+    pane.replaceChildren();
+
+    const head = document.createElement('div');
+    head.className = 'mono-drafts-head';
+    const title = document.createElement('span');
+    title.className = 'mono-drafts-title';
+    title.textContent = 'Saved drafts';
+    const newBtn = document.createElement('button');
+    newBtn.type = 'button';
+    newBtn.className = 'tool-btn mono-icon-btn';
+    newBtn.append(ph(PlusIcon, 16), document.createTextNode('New note'));
+    newBtn.addEventListener('click', () => {
+      startNewDraft();
+      closeDraftsPane();
+    });
+    const syncBtn = document.createElement('button');
+    syncBtn.type = 'button';
+    syncBtn.className = 'tool-btn mono-icon-btn';
+    syncBtn.append(ph(ArrowsClockwiseIcon, 16), document.createTextNode('Sync now'));
+    syncBtn.disabled = !me();
+    syncBtn.title = me() ? 'Send changed drafts to your relays and read theirs' : 'Sign in to sync drafts';
+    syncBtn.addEventListener('click', async () => {
+      saveNow();
+      syncBtn.disabled = true;
+      syncStatus.textContent = 'Syncing…';
+      const report = await syncDrafts();
+      syncStatus.textContent = report.failed
+        ? 'Some drafts could not reach your relays.'
+        : 'Up to date with your relays.';
+      syncBtn.disabled = false;
+    });
+    head.append(title, newBtn, syncBtn);
+    const syncStatus = document.createElement('p');
+    syncStatus.className = 'mono-drafts-status';
+    syncStatus.setAttribute('role', 'status');
+    pane.append(head, syncStatus);
+
+    const notes = listDrafts(loadDrafts());
+    const locals = localRows();
+    if (!notes.length && !locals.length) {
+      const empty = document.createElement('p');
+      empty.className = 'mono-drafts-empty';
+      empty.textContent = 'No saved drafts yet. What you write is saved as you go.';
+      pane.append(empty, backButton());
+      return;
+    }
+
+    const list = document.createElement('div');
+    list.className = 'mono-drafts-list';
+    const row = (
+      label: string, snippet: string, at: number, state: 'synced' | 'pending' | 'device',
+      onOpen: () => void, onDelete: () => void, current: boolean
+    ) => {
+      const item = document.createElement('div');
+      item.className = 'mono-draft' + (current ? ' is-current' : '');
+      const open = document.createElement('button');
+      open.type = 'button';
+      open.className = 'mono-draft-open';
+      const top = document.createElement('span');
+      top.className = 'mono-draft-top';
+      const kind = document.createElement('span');
+      kind.className = 'mono-draft-kind';
+      kind.textContent = current ? `${label} · writing now` : label;
+      const meta = document.createElement('span');
+      meta.className = 'mono-draft-meta';
+      const cloud =
+        state === 'synced' ? ph(CloudCheckIcon, 14) : state === 'pending' ? ph(CloudArrowUpIcon, 14) : ph(DeviceMobileIcon, 14);
+      cloud.classList.add('mono-draft-cloud', `is-${state}`);
+      cloud.title =
+        state === 'synced' ? 'On your relays' : state === 'pending' ? 'Goes to your relays when the composer closes' : 'On this device only';
+      meta.append(document.createTextNode(relTime(at)), cloud);
+      top.append(kind, meta);
+      const snip = document.createElement('span');
+      snip.className = 'mono-draft-snip';
+      snip.textContent = snippet.trim() || 'Pictures only';
+      open.append(top, snip);
+      open.addEventListener('click', onOpen);
+      const del = iconButton(TrashIcon, 'Delete this draft');
+      del.classList.add('mono-draft-del');
+      del.addEventListener('click', onDelete);
+      item.append(open, del);
+      list.appendChild(item);
+    };
+
+    for (const d of notes) {
+      const state = !me() ? 'device' : d.relay && d.relay.sum === contentSum(d) ? 'synced' : 'pending';
+      row(
+        d.kind === 'poll' ? 'Poll' : 'Note', d.text || (d.poll ? d.poll.options.filter(Boolean).join(' / ') : ''),
+        d.updatedAt, state,
+        () => { openDraft(d); closeDraftsPane(); },
+        () => {
+          const r = removeDraft(loadDrafts(), loadBlanks(), d.id);
+          storeDrafts(r.all, r.blanks);
+          if (activeId === d.id) {
+            activeId = null;
+            editorApi.setText('');
+            media.length = 0;
+            pollDraft = null;
+            renderThumbs();
+            refreshPostState();
+          }
+          paintDraftsCount();
+          paintDraftsPane();
+          if (me()) void syncDrafts(); // the relay copy goes now, not at close
+        },
+        d.id === activeId
+      );
+    }
+    for (const l of locals) {
+      row(l.label, l.snippet, l.at, 'device',
+        () => { setPane(l.tab); closeDraftsPane(); },
+        () => {
+          writeLocal(l.tab === 'recipes' ? RECIPE_DRAFT_KEY : ARTICLE_DRAFT_KEY, null);
+          paintDraftsCount();
+          paintDraftsPane();
+        },
+        false
+      );
+    }
+    pane.append(list, backButton());
+  }
+
+  function backButton() {
+    const back = document.createElement('button');
+    back.type = 'button';
+    back.className = 'tool-btn mono-icon-btn mono-drafts-back';
+    back.append(ph(PencilSimpleIcon, 16), document.createTextNode('Back to writing'));
+    back.addEventListener('click', () => {
+      closeDraftsPane();
+      editorApi.focus();
+    });
+    return back;
+  }
+
+  /** The note and poll draft from before drafts had ids, and the recipe or
+   *  article that shared its one slot, moved to where they live now. */
+  function migrateLegacyDraft() {
+    const old = readLocal<{ text?: string; media?: DraftMedia[]; poll?: PollDraft; recipe?: unknown; article?: unknown }>(
+      LEGACY_DRAFT_KEY
+    );
+    if (!old) return;
+    if (old.recipe) writeLocal(RECIPE_DRAFT_KEY, old.recipe);
+    else if (old.article) writeLocal(ARTICLE_DRAFT_KEY, old.article);
+    else {
+      const r = writeDraft(loadDrafts(), loadBlanks(), null, {
+        kind: old.poll ? 'poll' : 'note', text: old.text || '', media: old.media || [], poll: old.poll || null
+      }, old.at || Date.now());
+      storeDrafts(r.all, r.blanks);
+    }
+    try {
+      localStorage.removeItem(LEGACY_DRAFT_KEY);
+      localStorage.removeItem(MONO_DRAFTS_LIST_KEY);
+    } catch (_) {}
+  }
+
+  /** On open: the most recent note or poll draft back in the editor, and
+   *  the recipe and article drafts back in their forms. */
+  function restoreSavedDraft() {
+    migrateLegacyDraft();
+    const recipe = readLocal<typeof recipeForm>(RECIPE_DRAFT_KEY);
+    if (recipe) Object.assign(recipeForm, recipe);
+    const article = readLocal<typeof articleForm>(ARTICLE_DRAFT_KEY);
+    if (article) Object.assign(articleForm, article);
+    const latest = listDrafts(loadDrafts())[0];
+    if (latest) {
+      activeId = latest.id;
+      editorApi.setText(latest.text);
+      media.push(...(latest.media as { url: string; isVideo?: boolean }[]));
+      pollDraft = latest.poll ? JSON.parse(JSON.stringify(latest.poll)) : null;
+    }
+    renderThumbs();
+    refreshPostState();
   }
 
   // ── media strip ──────────────────────────────────────────────
@@ -716,17 +957,22 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
         errEl.textContent = 'No relay accepted it. It is still saved as a draft.';
         return;
       }
+      // Posted: the draft is done. Removed here and its relay copy blanked
+      // now, before the editor is cleared, so the clearing writes nothing.
+      if (draftTimer) {
+        clearTimeout(draftTimer);
+        draftTimer = null;
+      }
+      if (activeId) {
+        const r = removeDraft(loadDrafts(), loadBlanks(), activeId);
+        storeDrafts(r.all, r.blanks);
+        activeId = null;
+        if (me()) void syncDrafts();
+      }
       editorApi.setText('');
       media.length = 0;
       renderThumbs();
-      try {
-        localStorage.removeItem(DRAFT_KEY);
-        const list = readDraftList();
-        delete list.notes;
-        delete list.polls;
-        writeDraftList(list);
-        paintDraftsCount();
-      } catch (_) {}
+      paintDraftsCount();
       savedEl.textContent = '';
       if (pollDraft) {
         pollDraft = null;
@@ -1201,6 +1447,8 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
   // one flushes pending updates) — reported first, that answer ran in the
   // middle of the build and the recipe form was drawn twice.
   function setPane(tab: MonoTab, keepPreview = false) {
+    // A save still waiting belongs to the tab being left: write it first.
+    if (draftTimer) saveNow();
     paintPane(tab, keepPreview);
     opts.onTabChange?.(tab);
   }
@@ -1300,10 +1548,17 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
   // ── boot ─────────────────────────────────────────────────────
   restoreSavedDraft();
   setPane(currentTab);
+  // Catch-up: a draft changed since its last push (the tab was killed, the
+  // phone backgrounded it) goes up now, and the relays' drafts come in.
+  if (me()) void syncDrafts();
   paintDraftsCount();
 
   return {
     destroy() {
+      // Closing is the push: what is on screen is saved, then what changed
+      // goes to the relays (the sync outlives the composer).
+      saveNow();
+      if (me()) void draftSync.sync();
       if (countdownRaf !== null) cancelAnimationFrame(countdownRaf);
       unsubTimer();
       mountedIcons.splice(0).forEach((c) => c.$destroy());

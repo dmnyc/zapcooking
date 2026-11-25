@@ -110,6 +110,33 @@ let cachedPrivateRelays: PrivateRelayList | null = null;
  * Fetch and decrypt the user's private relay list (kind 10013)
  * Falls back to NIP-65 write relays, then default relays
  */
+/**
+ * The private relay list's decrypted content, read leniently. NIP-37 writes
+ * a tag list, [["relay", "wss://…"], …] (Sidecar writes that); this app has
+ * written a plain array of URLs or { relays: [...] }. All three are read, so
+ * a list made in another client is used instead of falling back to the
+ * defaults and sending drafts somewhere the account never named.
+ */
+export function parsePrivateRelayContent(data: unknown): string[] {
+  let list: unknown = data;
+  if (list && !Array.isArray(list) && Array.isArray((list as { relays?: unknown }).relays)) {
+    list = (list as { relays: unknown[] }).relays;
+  }
+  if (!Array.isArray(list)) return [];
+  const out: string[] = [];
+  for (const entry of list) {
+    const raw =
+      typeof entry === 'string'
+        ? entry
+        : Array.isArray(entry) && entry[0] === 'relay' && typeof entry[1] === 'string'
+          ? entry[1]
+          : null;
+    const url = raw?.trim();
+    if (url && /^wss?:\/\/\S+$/i.test(url) && !out.includes(url)) out.push(url);
+  }
+  return out;
+}
+
 export async function getPrivateRelays(pubkey: string): Promise<string[]> {
   if (!browser) return DEFAULT_PRIVATE_RELAYS;
 
@@ -152,12 +179,7 @@ export async function getPrivateRelays(pubkey: string): Promise<string[]> {
 
           // Extract relay URLs from decrypted content
           // Format: array of relay URLs or object with 'relays' key
-          let relays: string[] = [];
-          if (Array.isArray(relayData)) {
-            relays = relayData.filter((r: unknown) => typeof r === 'string');
-          } else if (relayData.relays && Array.isArray(relayData.relays)) {
-            relays = relayData.relays.filter((r: unknown) => typeof r === 'string');
-          }
+          const relays = parsePrivateRelayContent(relayData);
 
           if (relays.length > 0) {
             cachedPrivateRelays = { relays, updatedAt: Date.now() };

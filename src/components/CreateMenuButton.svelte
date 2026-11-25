@@ -48,7 +48,7 @@
   // Read each time the menu opens: drafts are saved as you type, so a count
   // taken once at load would be stale by the next visit.
   let draftCount = 0;
-  $: if (showMenu) draftCount = monoDraftCount();
+  $: if (showMenu) draftCount = monoDraftCount(($userPublickey as unknown as string) || '');
 
   $: if (isMining) closeMenu();
 
