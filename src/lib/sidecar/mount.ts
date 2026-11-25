@@ -11,24 +11,28 @@
  * summary, topics and a markdown toolbar.
  *
  * Sidecar's composer core (vendor/sidecar/composer-core.js) is mounted
- * inside a shadow root: sidecar-styles.css is 7.5k lines with global
- * selectors (:root, html, body, *), so it is adopted into the shadow and
- * cannot leak into the app, while CSS variables — the palette — still
- * inherit from the page. zapcooking-theme.css maps the app's palette onto
- * Sidecar's var names, which is how the palette stays Zap Cooking's.
+ * in a plain element, with sidecar-styles.css (7.5k lines written for a
+ * page of its own: :root, *, element rules) fenced to it by CSS @scope —
+ * see scopeCss.ts. It is not a shadow root: Chrome hides a shadow root's
+ * caret from window.getSelection(), which the core reads for mentions,
+ * emoji and pill navigation. zapcooking-theme.css maps the app's palette
+ * onto Sidecar's var names, which is how the palette stays Zap Cooking's.
  *
- * Spike v1: Notes and Polls publish (sign → countdown → the chosen
+ * Spike v1: Notes and Polls publish (countdown → sign → the chosen
  * relays, dry-run on ?dry=1). Recipes and Reads are laid out with their
  * forms and drafts; their publish lands with the longform port.
  */
 import styles from '$lib/vendor/sidecar/sidecar-styles.css?raw';
 import theme from '$lib/vendor/sidecar/zapcooking-theme.css?raw';
 import { getCurrentRelays } from '$lib/nostr';
+import { get } from 'svelte/store';
+import { timerSettings, loadTimerSettings, saveTimerSettings } from '$lib/timerSettings';
 // Host services first (they set window.SidecarI18n and window.NostrTools),
 // then the core — the same order compose.html loads them in. The core is a
 // dynamic, client-only import: it reads window at its top level, and the
 // route never renders on the server.
-import { buildSidecarDeps, composerPool } from './host';
+import { applyAvatar, buildSidecarDeps, composerPool } from './host';
+import { scopeStylesheet } from './scopeCss';
 import type { ComponentType, SvelteComponent } from 'svelte';
 import PencilSimpleIcon from 'phosphor-svelte/lib/PencilSimple';
 import ChartBarHorizontalIcon from 'phosphor-svelte/lib/ChartBarHorizontal';
@@ -40,6 +44,7 @@ import SmileyIcon from 'phosphor-svelte/lib/Smiley';
 import HammerIcon from 'phosphor-svelte/lib/Hammer';
 import GlobeIcon from 'phosphor-svelte/lib/Globe';
 import ClockIcon from 'phosphor-svelte/lib/Clock';
+import CalendarBlankIcon from 'phosphor-svelte/lib/CalendarBlank';
 import CloudCheckIcon from 'phosphor-svelte/lib/CloudCheck';
 import XIcon from 'phosphor-svelte/lib/X';
 import PlusIcon from 'phosphor-svelte/lib/Plus';
@@ -60,7 +65,7 @@ export const MONO_TABS = [
 
 export type MonoTab = (typeof MONO_TABS)[number]['id'];
 
-// Every icon is a phosphor component rendered into the shadow root, so the
+// Every icon is a phosphor component rendered into the composer, so the
 // composer wears the same single-color set as the rest of the app. Kept for
 // destroy().
 const mountedIcons: SvelteComponent[] = [];
@@ -99,7 +104,6 @@ interface ComposerController {
   uploadMedia(file: File, pubkey: string): Promise<string>;
   checkPastedQuote(q: unknown, revert: () => void): void;
   showPostCountdown(o: Record<string, unknown>): { stop(): void };
-  publishToRelays(o: Record<string, unknown>): Promise<PublishReport>;
   renderNotePreview(el: HTMLElement, content: string): void;
   buildPollEditor(o: Record<string, unknown>): { wrap: HTMLElement; addBtn: HTMLButtonElement };
   buildEmojiPicker(o: Record<string, unknown>): { wrap: HTMLElement; addBtn: HTMLElement; close(): void };
@@ -113,21 +117,26 @@ interface ComposerController {
 interface MountOptions {
   tab?: MonoTab;
   live?: boolean;
+  /** Inside a modal: the modal is the sheet, so the composer drops its own
+   * card (border, background, padding) and leaves the top-right corner to
+   * the modal's close button. */
+  inModal?: boolean;
   onTabChange?: (tab: MonoTab) => void;
 }
 
 const RECIPE_CATEGORY_CHIPS = ['Turkey', 'Roast', 'Pie', 'Squash', 'Potato', 'Bread', 'Soup'];
 
-const COUNTDOWN_SECS = 5;
 
 export async function mountMonoComposer(container: HTMLElement, opts: MountOptions = {}) {
   const live = !!opts.live;
   // The core reads window at its own top level, so it loads here, in the
   // browser, after its globals shim has run.
+  // The Emoji button's table (self.SidecarEmoji) first: the core reads it
+  // when the picker is built, and without it the picker never opens.
+  await import('$lib/vendor/sidecar/emoji-data.js');
   await import('$lib/vendor/sidecar/composer-core.js');
   let currentTab: MonoTab = opts.tab || 'notes';
   let posting = false;
-  let countdown: { stop(): void } | null = null;
   const allRelays = getCurrentRelays();
   const chosenRelays = new Set<string>(allRelays);
 
@@ -138,6 +147,9 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
       removeUrlFromEditor: (el: HTMLElement, url: string) => void;
       quoteEntriesFromPaste: (plain: string, media: unknown[]) => unknown[];
       composeNoteContent: (text: string, media: unknown[]) => string;
+      // On the core itself, not the installed controller: it takes its pool
+      // as an argument rather than reading deps.
+      publishToRelays(o: Record<string, unknown>): Promise<PublishReport>;
       buildPollEditor(o: Record<string, unknown>): { wrap: HTMLElement; addBtn: HTMLButtonElement };
       buildEmojiPicker(o: Record<string, unknown>): { wrap: HTMLElement; addBtn: HTMLButtonElement; close(): void };
       buildGifPicker(o: Record<string, unknown>): { wrap: HTMLElement; addBtn: HTMLButtonElement };
@@ -150,7 +162,6 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
   const composer = SidecarCore.installComposer(deps) as ComposerController;
 
   // ── skeleton ─────────────────────────────────────────────────
-  const shadow = container.attachShadow({ mode: 'open' });
   const styleEl = document.createElement('style');
   // The mono layer styles only what this shell adds on top of Sidecar's
   // own classes: the segment row, the Write/Preview subtabs, the drafts
@@ -173,8 +184,36 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
     .compose-modes.mono-kinds { display: flex; align-self: stretch; }
     .mono-kinds .compose-mode { flex: 1 1 0; justify-content: center; }
     .compose-mode .mono-ico { color: inherit; }
-    .mono-subrow { display: flex; align-items: center; gap: 10px; }
-    .mono-subrow .compose-mode { padding: 5px 12px; font-size: 12.5px; }
+    /* Write / Preview: underline tabs, Sidecar's own .compose-tabs. */
+    .mono-subrow { display: flex; align-items: flex-end; gap: 10px; border-bottom: 1px solid var(--border); }
+    .mono-subrow .compose-tabs { border-bottom: none; margin: 0 0 -1px; }
+    .mono-timer-pop { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px;
+      border: 1px solid var(--border); border-radius: 10px; background: var(--bg-2); font-size: 13px; }
+    .mono-timer-pop[hidden] { display: none; }
+    .mono-timer-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; }
+    .mono-timer-row input { accent-color: var(--orange); width: 16px; height: 16px; }
+    .mono-timer-secs { display: flex; gap: 6px; }
+    .mono-timer-secs .tool-btn { flex: 1; }
+    .mono-timer-secs .tool-btn.on { border-color: var(--orange); color: var(--orange); }
+    /* The footer and the old composer's wide Post bar: Post fills the row;
+       while the send countdown runs, the bar fills left to right and a
+       red Cancel pill sits beside it. */
+    .mono-foot { display: flex; flex-direction: column; gap: 8px; }
+    .mono-foot-meta { display: flex; align-items: center; gap: 10px; min-height: 16px; }
+    .mono-action-row { display: flex; align-items: center; gap: 8px; }
+    .mono-cancel { flex-shrink: 0; padding: 10px 18px; border-radius: 9999px; border: none;
+      font: inherit; font-size: 14px; font-weight: 500; background: #ef4444; color: #fff; cursor: pointer; }
+    .mono-cancel[hidden] { display: none; }
+    .mono-post { flex: 1; position: relative; overflow: hidden; border: none; border-radius: 9999px;
+      padding: 11px 20px; font: inherit; font-size: 15px; font-weight: 600; color: #fff; white-space: nowrap;
+      background: var(--color-action, var(--orange)); cursor: pointer; transition: opacity 0.15s; }
+    .mono-post:not(:disabled):not(.mono-post--counting):hover { background: var(--color-action-hover, var(--orange)); }
+    .mono-post:disabled { opacity: 0.5; cursor: not-allowed; }
+    .mono-post-fill { position: absolute; inset: 0; width: 0; border-radius: inherit; pointer-events: none;
+      background: var(--color-action, var(--orange)); }
+    .mono-post--counting { background: var(--color-action-hover, var(--orange)); }
+    .mono-post--counting .mono-post-fill { width: var(--fill, 0%); }
+    .mono-post-label { position: relative; }
     .mono-need { font-size: 12px; color: var(--muted, #999); text-align: right; padding: 2px 4px; }
     .mono-count { font-size: 12px; color: var(--muted, #999); }
     .mono-saved { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
@@ -195,19 +234,26 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
       .compose-sheet { padding: 14px; border-radius: 14px; }
       .mono-kinds .compose-mode { padding: 7px 4px; gap: 5px; font-size: 12.5px; }
     }
+    /* In the modal, the modal is the sheet. */
+    /* :scope — inside @scope a selector is matched among the root's
+       descendants unless it names the root itself. */
+    :scope.mono-in-modal .compose-sheet { padding: 0; border: none; background: none; box-shadow: none; border-radius: 0; max-width: none; }
+    :scope.mono-in-modal .compose-head { padding-inline-end: 44px; }
     .compose-editor { min-height: 260px; }
     .compose-sheet:has(.poll-editor:not(.hidden)) .compose-editor { min-height: 120px; }
   `;
-  // Sidecar keeps its defaults on :root, which matches nothing inside a
-  // shadow root — rewritten to :host so they land, then the theme (on the
-  // page element below) overrides them with this app's palette.
-  styleEl.textContent = styles.replace(/:root\b/g, ':host') + '\n' + theme + '\n' + monoStyles;
-  shadow.appendChild(styleEl);
+  // Sidecar's defaults (its :root, now :scope) land on the root element;
+  // the theme on the page element inside it overrides them with this
+  // app's palette.
+  styleEl.textContent = scopeStylesheet(styles + '\n' + theme + '\n' + monoStyles, '.mono-root');
+  const root = document.createElement('div');
+  root.className = 'mono-root' + (opts.inModal ? ' mono-in-modal' : '');
+  container.append(styleEl, root);
 
   const page = document.createElement('div');
   page.className = 'compose-page';
   page.setAttribute('data-theme', 'zapcooking');
-  shadow.appendChild(page);
+  root.appendChild(page);
 
   page.innerHTML = `
     <div class="compose-body">
@@ -227,15 +273,14 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
         <div class="compose-modes mono-kinds" role="tablist" data-mono="kinds"></div>
 
         <div class="mono-subrow">
-          <div class="compose-modes" role="tablist">
-            <button type="button" class="compose-mode active" data-mono="subtab-write">Write</button>
-            <button type="button" class="compose-mode" data-mono="subtab-preview">Preview</button>
+          <div class="compose-tabs" role="tablist">
+            <button type="button" class="compose-tab active" data-mono="subtab-write">Write</button>
+            <button type="button" class="compose-tab" data-mono="subtab-preview">Preview</button>
           </div>
         </div>
 
         <div data-mono="reply-slot"></div>
         <div data-mono="slot"></div>
-        <div class="compose-countdown hidden" data-mono="countdown"></div>
         <div class="compose-thumbs" data-mono="thumbs"></div>
 
         <div class="compose-actions" data-mono="actions"></div>
@@ -243,10 +288,19 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
         <p class="error" data-mono="err"></p>
         <div class="mono-need" data-mono="need" hidden></div>
 
-        <footer class="compose-foot">
-          <span class="compose-status" data-mono="status"></span>
-          <span class="mono-count" data-mono="count"></span>
-          <button type="button" class="primary compose-post" data-mono="post" disabled>Post</button>
+        <footer class="mono-foot">
+          <div class="mono-foot-meta">
+            <span class="compose-status" data-mono="status"></span>
+            <span style="flex:1"></span>
+            <span class="mono-count" data-mono="count"></span>
+          </div>
+          <div class="mono-action-row">
+            <button type="button" class="mono-cancel" data-mono="cancel" hidden>Cancel</button>
+            <button type="button" class="mono-post" data-mono="post" disabled>
+              <span class="mono-post-fill" aria-hidden="true"></span>
+              <span class="mono-post-label" data-mono="post-label">Post</span>
+            </button>
+          </div>
         </footer>
       </main>
     </div>`;
@@ -258,7 +312,9 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
   const statusEl = el('status');
   const postBtn = el<HTMLButtonElement>('post');
   const savedEl = page.querySelector('.compose-saved') as HTMLElement;
-  const countdownEl = el('countdown');
+  const cancelBtn = el<HTMLButtonElement>('cancel');
+  const postLabel = el('post-label');
+  const postLabelText = () => (currentTab === 'recipes' || currentTab === 'reads' ? 'Review' : 'Post');
   const thumbsEl = el('thumbs');
   const relayPopover = el('relay-popover');
   const actionsEl = el('actions');
@@ -485,7 +541,7 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
     }
   }
 
-  // ── publish: sign → countdown bar → relays ───────────────────
+  // ── publish: countdown bar → sign → relays ───────────────────
   const signAuth = (template: Record<string, unknown>) =>
     deps.call({
       type: 'SIDECAR_OWNER_SIGN',
@@ -496,7 +552,7 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
   function doPublish(signed: SidecarEvent) {
     const NT = deps.NT as { utils: { normalizeURL: (u: string) => string } };
     const relays = chosenRelays.size ? [...chosenRelays] : allRelays;
-    return composer.publishToRelays({
+    return SidecarCore.publishToRelays({
       pool: composerPool(live),
       relays,
       signed,
@@ -505,71 +561,103 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
     });
   }
 
-  async function onPost() {
+  // The send countdown is the old composer's: the Post button becomes a
+  // wide bar that fills as it counts ("Post now (Ns)" — press it to skip
+  // the wait), a Cancel pill beside it. Its on/off and length are the same
+  // timerSettings the old composer kept, so the choice carries over.
+  // Nothing is signed until the count runs out: a canceled post never
+  // reaches the signer.
+  let countdownRaf: number | null = null;
+
+  function postValidation(): string | null {
+    if (currentTab !== 'notes' && currentTab !== 'polls')
+      return 'Recipes and Reads go out through Review — that lands with the longform port.';
+    if (currentTab === 'polls' && pollDraft && !SidecarCore.pollDraftIsPostable(pollDraft))
+      return 'A poll needs its question and two filled options.';
+    return null;
+  }
+
+  function onPost() {
     if (posting) return;
-    if (currentTab !== 'notes' && currentTab !== 'polls') {
-      showToast('error', 'Recipes and Reads go out through Review — that lands with the longform port.');
+    if (countdownRaf !== null) {
+      // Pressing the filling bar is "Post now".
+      stopCountdown();
+      void publishNow();
+      return;
+    }
+    const problem = postValidation();
+    if (problem) {
+      errEl.textContent = problem;
+      return;
+    }
+    errEl.textContent = '';
+    const settings = get(timerSettings);
+    if (settings.postCountdownEnabled && settings.postCountdownSecs > 0) startCountdown(settings.postCountdownSecs);
+    else void publishNow();
+  }
+
+  function startCountdown(secs: number) {
+    const started = performance.now();
+    cancelBtn.hidden = false;
+    postBtn.classList.add('mono-post--counting');
+    const tick = () => {
+      const remaining = Math.max(0, secs - (performance.now() - started) / 1000);
+      postBtn.style.setProperty('--fill', `${(1 - remaining / secs) * 100}%`);
+      postLabel.textContent = `Post now (${Math.ceil(remaining)}s)`;
+      if (remaining <= 0) {
+        stopCountdown();
+        void publishNow();
+        return;
+      }
+      countdownRaf = requestAnimationFrame(tick);
+    };
+    countdownRaf = requestAnimationFrame(tick);
+    refreshPostState();
+  }
+
+  function stopCountdown() {
+    if (countdownRaf !== null) cancelAnimationFrame(countdownRaf);
+    countdownRaf = null;
+    cancelBtn.hidden = true;
+    postBtn.classList.remove('mono-post--counting');
+    postBtn.style.removeProperty('--fill');
+    postLabel.textContent = postLabelText();
+    refreshPostState();
+  }
+
+  async function publishNow() {
+    const problem = postValidation();
+    if (problem) {
+      errEl.textContent = problem;
       return;
     }
     const asPoll = currentTab === 'polls' && !!pollDraft;
-    if (asPoll && !SidecarCore.pollDraftIsPostable(pollDraft)) {
-      errEl.textContent = 'A poll needs its question and two filled options.';
-      return;
-    }
     posting = true;
+    postLabel.textContent = 'Posting…';
     refreshPostState();
     errEl.textContent = '';
+    const nowSecs = Math.floor(Date.now() / 1000);
     const text = composer.serializeEditor(editorApi.editor);
     const template = {
       kind: asPoll ? SidecarCore.POLL_KIND : 1,
-      content: text,
-      created_at: Math.floor(Date.now() / 1000),
+      // A poll carries no attachments (the core keeps the two apart); a
+      // note's pictures ride in its content, as the preview shows them.
+      content: asPoll ? text : SidecarCore.composeNoteContent(text, media),
+      created_at: nowSecs,
       tags: [
         ['client', 'zapcooking'],
-        ...(asPoll
-          ? SidecarCore.buildPollTags(pollDraft, Math.floor(Date.now() / 1000), [
-              ...chosenRelays
-            ])
-          : [])
+        ...(asPoll ? SidecarCore.buildPollTags(pollDraft, nowSecs, [...chosenRelays]) : [])
       ]
     };
     try {
       statusEl.textContent = 'Signing…';
       const signed = (await signAuth(template)) as SidecarEvent;
-
-      // The kept countdown bar: review with the ring, then it goes.
-      const preview = document.createElement('div');
-      preview.className = 'countdown-preview';
-      const body = document.createElement('div');
-      body.className = 'preview-body';
-      composer.renderNotePreview(body, SidecarCore.composeNoteContent(text, media));
-      preview.appendChild(body);
-
-      const restore = () => {
-        countdownEl.innerHTML = '';
-        countdownEl.classList.add('hidden');
-        slotEl.classList.remove('hidden');
-        statusEl.textContent = '';
-        posting = false;
-        refreshPostState();
-      };
-      slotEl.classList.add('hidden');
-      countdownEl.classList.remove('hidden');
-      countdown = composer.showPostCountdown({
-        modal: countdownEl,
-        secs: COUNTDOWN_SECS,
-        title: asPoll ? 'Posting your poll' : 'Posting your note',
-        preview,
-        confirmLabel: 'Post now',
-        onFire: () => {
-          restore();
-          void actuallyPublish(signed);
-        },
-        onCancel: restore
-      });
+      await actuallyPublish(signed);
     } catch (e) {
       errEl.textContent = String((e as Error).message || e);
+      statusEl.textContent = '';
       posting = false;
+      postLabel.textContent = postLabelText();
       refreshPostState();
     }
   }
@@ -594,12 +682,17 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
         paintDraftsCount();
       } catch (_) {}
       savedEl.textContent = '';
+      if (pollDraft) {
+        pollDraft = null;
+        if (currentTab === 'polls') setPane('polls');
+      }
       errEl.textContent = `Sent to ${report.accepted.length}/${report.total} relays.`;
     } catch (e) {
       errEl.textContent = String((e as Error).message || e);
     } finally {
       statusEl.textContent = '';
       posting = false;
+      postLabel.textContent = postLabelText();
       refreshPostState();
     }
   }
@@ -614,6 +707,7 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
     onChange: () => {
       draftSaveSoon();
       refreshPostState();
+      paintCount();
     },
     onAttachUrl: (url: string) => {
       SidecarCore.removeUrlFromEditor(editorApi.editor, url);
@@ -682,15 +776,61 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
     }),
     pow: segment(HammerIcon, 'Proof of work lands next', () => {}, true),
     relays: segment(GlobeIcon, 'Where this posts', toggleRelays),
-    schedule: segment(ClockIcon, 'Schedule lands with the scheduler port', () => {}, true)
+    timer: segment(ClockIcon, 'Send countdown', () => toggleTimerPopover()),
+    schedule: segment(CalendarBlankIcon, 'Schedule lands with the scheduler port', () => {}, true)
   };
   const SEGS_BY_TAB: Record<MonoTab, (keyof typeof segs)[]> = {
-    notes: ['camera', 'gif', 'emoji', 'pow', 'relays', 'schedule'],
-    polls: ['emoji', 'pow', 'relays', 'schedule'],
+    notes: ['camera', 'gif', 'emoji', 'pow', 'relays', 'timer', 'schedule'],
+    polls: ['emoji', 'pow', 'relays', 'timer', 'schedule'],
     recipes: [],
     reads: []
   };
   actionsEl.append(fileInput, ...Object.values(segs));
+
+  // The send countdown's settings, as the old composer's clock button had
+  // them: on/off and 5/10/15/30 seconds, saved to the same timerSettings.
+  void loadTimerSettings();
+  const timerPopover = document.createElement('div');
+  timerPopover.className = 'mono-timer-pop';
+  timerPopover.hidden = true;
+  actionsEl.after(timerPopover);
+  function paintTimerPopover() {
+    const settings = get(timerSettings);
+    timerPopover.replaceChildren();
+    const row = document.createElement('label');
+    row.className = 'mono-timer-row';
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = settings.postCountdownEnabled;
+    box.addEventListener('change', () => {
+      void saveTimerSettings({ ...get(timerSettings), postCountdownEnabled: box.checked });
+      paintTimerPopover();
+    });
+    row.append(document.createTextNode('Send countdown'), box);
+    timerPopover.appendChild(row);
+    if (settings.postCountdownEnabled) {
+      const secsRow = document.createElement('div');
+      secsRow.className = 'mono-timer-secs';
+      for (const secs of [5, 10, 15, 30]) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'tool-btn' + (settings.postCountdownSecs === secs ? ' on' : '');
+        b.textContent = `${secs}s`;
+        b.addEventListener('click', () => {
+          void saveTimerSettings({ ...get(timerSettings), postCountdownSecs: secs });
+          paintTimerPopover();
+        });
+        secsRow.appendChild(b);
+      }
+      timerPopover.appendChild(secsRow);
+    }
+    segs.timer.classList.toggle('on', settings.postCountdownEnabled);
+  }
+  function toggleTimerPopover() {
+    timerPopover.hidden = !timerPopover.hidden;
+    if (!timerPopover.hidden) paintTimerPopover();
+  }
+  const unsubTimer = timerSettings.subscribe((t) => segs.timer.classList.toggle('on', t.postCountdownEnabled));
 
   function paintSegments() {
     const shown = SEGS_BY_TAB[currentTab];
@@ -698,6 +838,7 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
       b.style.display = shown.includes(name as keyof typeof segs) ? '' : 'none';
     }
     actionsEl.style.display = shown.length ? '' : 'none';
+    timerPopover.hidden = true;
   }
 
   // ── polls: the same draft, raised on the Polls tab ──────────
@@ -1015,10 +1156,10 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
     kindsEl.querySelectorAll<HTMLButtonElement>('.compose-mode').forEach((b) => {
       b.classList.toggle('active', b.dataset.tab === tab);
     });
-    countdownEl.classList.add('hidden');
+    if (countdownRaf !== null) stopCountdown();
     relayPopover.hidden = true;
     errEl.textContent = '';
-    postBtn.textContent = currentTab === 'recipes' || currentTab === 'reads' ? 'Review' : 'Post';
+    postLabel.textContent = postLabelText();
     paintSegments();
     paintNeed();
     paintCount();
@@ -1073,7 +1214,8 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
     postBtn.disabled = posting || !hasBody || !pollOk;
   }
 
-  postBtn.addEventListener('click', () => void onPost());
+  postBtn.addEventListener('click', () => onPost());
+  cancelBtn.addEventListener('click', () => stopCountdown());
 
   // ── drafts button + pane ─────────────────────────────────────
   const draftsBtn = el<HTMLButtonElement>('drafts');
@@ -1088,10 +1230,12 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
       (page.querySelector('.compose-sub') as HTMLElement).textContent = 'Sign in to post';
       return;
     }
-    const av = el('avatar');
-    av.textContent = pubkey.slice(0, 4);
     const nameEl = el('name');
     nameEl.textContent = pubkey.slice(0, 10) + '…';
+    const profile = (await (deps.fetchPreviewProfile as (pk: string) => Promise<{ name: string; picture?: string } | null>)(pubkey));
+    if (!profile) return;
+    nameEl.textContent = profile.name;
+    applyAvatar(el('avatar'), profile);
   })();
 
   // ── boot ─────────────────────────────────────────────────────
@@ -1101,11 +1245,11 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
 
   return {
     destroy() {
-      countdown?.stop();
+      if (countdownRaf !== null) cancelAnimationFrame(countdownRaf);
+      unsubTimer();
       mountedIcons.splice(0).forEach((c) => c.$destroy());
-      page.remove();
+      root.remove();
       styleEl.remove();
-      shadow.innerHTML = '';
     },
     setTab(tab: MonoTab) {
       setPane(tab);

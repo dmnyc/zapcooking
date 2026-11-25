@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { goto } from '$app/navigation';
+  import { openMonoComposer } from '$lib/monoComposerStore';
   import { page } from '$app/stores';
   import { requireAuth } from '$lib/auth/requireAuth';
   import { clickOutside } from '$lib/clickOutside';
@@ -55,19 +56,19 @@
   async function openRecipe() {
     closeMenu();
     if (!(await requireAuth({ kind: 'post', reason: 'Sign in to share a recipe' }))) return;
-    goto('/compose?tab=recipes');
+    openMonoComposer('recipes');
   }
 
   async function openPost() {
     closeMenu();
     if (!(await requireAuth({ kind: 'post', reason: 'Sign in to post' }))) return;
-    goto('/compose?tab=notes');
+    openMonoComposer('notes');
   }
 
   async function openRead() {
     closeMenu();
     if (!(await requireAuth({ kind: 'post', reason: 'Sign in to write an article' }))) return;
-    goto('/compose?tab=reads');
+    openMonoComposer('reads');
   }
 
   async function openLive() {
