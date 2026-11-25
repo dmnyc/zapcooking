@@ -251,7 +251,7 @@
 <div
   class={`create-menu ${variant === 'floating' ? 'create-menu-floating' : 'create-menu-header'} ${className}`}
   class:create-menu-open={showMenu && !isCancelMode}
-  class:create-menu-five={true}
+  class:create-menu-full={true}
   role="presentation"
   on:mouseenter={handleMouseEnter}
   on:mouseleave={handleMouseLeave}
@@ -298,10 +298,6 @@
     {/if}
   </button>
 
-  {#if variant === 'floating'}
-    <span class="create-surface-label" aria-hidden="true">Create</span>
-  {/if}
-
   <div
     class={`create-menu-panel ${
       variant === 'floating' ? 'create-menu-panel-floating' : 'create-menu-panel-header'
@@ -310,6 +306,12 @@
     aria-label="Create options"
     aria-hidden={!showMenu || isCancelMode}
   >
+    <!-- What the menu is, said once at its head (the floating button has no
+         label of its own), so each item can be just the thing: Post, not
+         "New post". The header button already says Create. -->
+    {#if variant === 'floating'}
+      <span class="create-menu-heading" aria-hidden="true">Create</span>
+    {/if}
     <button
       type="button"
       class="create-menu-item"
@@ -317,7 +319,7 @@
       on:click={openPost}
     >
       <span class="create-menu-item-icon"><PencilSimpleIcon size={20} /></span>
-      <span>New post</span>
+      <span>Post</span>
     </button>
     <button
       type="button"
@@ -326,7 +328,7 @@
       on:click={openRecipe}
     >
       <span class="create-menu-item-icon"><ForkKnifeIcon size={20} /></span>
-      <span>New recipe</span>
+      <span>Recipe</span>
     </button>
     <button
       type="button"
@@ -335,17 +337,7 @@
       on:click={openRead}
     >
       <span class="create-menu-item-icon"><NewspaperIcon size={20} /></span>
-      <span>New read</span>
-    </button>
-    <button
-      type="button"
-      class="create-menu-item"
-      tabindex={showMenu && !isCancelMode ? 0 : -1}
-      on:click={openDrafts}
-    >
-      <span class="create-menu-item-icon"><FolderSimpleIcon size={20} /></span>
-      <span>Drafts</span>
-      {#if draftCount > 0}<span class="create-menu-count" aria-label="{draftCount} saved">{draftCount}</span>{/if}
+      <span>Article</span>
     </button>
     <button
       type="button"
@@ -356,6 +348,18 @@
       <span class="create-menu-item-icon"><BroadcastIcon size={20} /></span>
       <span>Go live</span>
       {#if liveAccess === 'non_member'}<span class="create-menu-cookplus">Cook+</span>{/if}
+    </button>
+    <!-- Drafts is where you go back to, not a new thing: set apart. -->
+    <hr class="create-menu-divider" aria-hidden="true" />
+    <button
+      type="button"
+      class="create-menu-item"
+      tabindex={showMenu && !isCancelMode ? 0 : -1}
+      on:click={openDrafts}
+    >
+      <span class="create-menu-item-icon"><FolderSimpleIcon size={20} /></span>
+      <span>Drafts</span>
+      {#if draftCount > 0}<span class="create-menu-count" aria-label="{draftCount} saved">{draftCount}</span>{/if}
     </button>
   </div>
 </div>
@@ -390,10 +394,11 @@
     pointer-events: none;
   }
 
-  /* Five rows (New post, New recipe, New read, Drafts, Go live), 52px
-     each above the button. */
-  .create-menu-floating.create-menu-five {
-    height: 348px;
+  /* The Create heading (28px), five 52px rows (Post, Recipe, Article, Go
+     live, Drafts) and the divider before Drafts (9px), ending 8px above
+     the button. */
+  .create-menu-floating.create-menu-full {
+    height: 385px;
   }
   /* The saved-draft count: the composer folder's capsule, in the row. */
   .create-menu-count {
@@ -654,14 +659,15 @@
     transition-delay: 135ms;
   }
 
-  .create-surface-label {
-    position: absolute;
-    left: 20px;
-    bottom: 31px;
-    z-index: 1;
+  /* The menu's name at its head, faded: it says what the list is without
+     competing with the items. Fades up with the panel. */
+  .create-menu-heading {
+    padding: 0.4rem 0.75rem 0.2rem;
     color: var(--color-caption);
-    font-size: 0.875rem;
-    font-weight: 500;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
     opacity: 0;
     transform: translateY(4px);
     transition:
@@ -669,10 +675,16 @@
       transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
   }
 
-  .create-menu-open .create-surface-label {
-    opacity: 1;
+  .create-menu-open .create-menu-heading {
+    opacity: 0.7;
     transform: translateY(0);
     transition-delay: 100ms;
+  }
+
+  .create-menu-divider {
+    margin: 0.25rem 0.75rem;
+    border: none;
+    border-top: 1px solid var(--color-input-border);
   }
 
   .create-trigger-icon {
@@ -724,7 +736,7 @@
     .create-menu-floating::before,
     .create-trigger-floating,
     .create-menu-panel-floating .create-menu-item,
-    .create-surface-label,
+    .create-menu-heading,
     .create-trigger-icon {
       transition-duration: 0.01ms;
       transition-delay: 0s;
