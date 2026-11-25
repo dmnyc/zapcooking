@@ -102,9 +102,6 @@ const lastDraftWriteAt = new Map<string, number>();
 // In-memory cache of private relay list
 let cachedPrivateRelays: PrivateRelayList | null = null;
 
-// Track in-flight fetches
-let fetchInProgress: Promise<RemoteDraft[]> | null = null;
-
 // ═══════════════════════════════════════════════════════════════
 // PRIVATE RELAY LIST (KIND 10013)
 // ═══════════════════════════════════════════════════════════════
@@ -333,20 +330,26 @@ async function decryptDraftContent(
   content: string,
   pubkey: string,
   draftType: 'recipe' | 'article' = 'recipe'
-): Promise<{ draft: RecipeDraft | ArticleDraft; plaintext: string; source: DecryptSource } | null> {
+): Promise<{
+  draft: RecipeDraft | ArticleDraft;
+  plaintext: string;
+  source: DecryptSource;
+  innerKind: number | null;
+} | null> {
   try {
     const method = detectEncryptionMethod(content);
     const { plaintext, source } = await decryptWithSource(pubkey, content, method, {
       legacy: 'prompt'
     });
     const eventData = JSON.parse(plaintext);
+    const innerKind = typeof eventData?.kind === 'number' ? eventData.kind : null;
 
     // Parse based on draft type
     const draft =
       draftType === 'article'
         ? await parseArticleToDraft(eventData)
         : parseRecipeToDraft(eventData);
-    return { draft, plaintext, source };
+    return { draft, plaintext, source, innerKind };
   } catch (e) {
     console.error('[NIP-37] Failed to decrypt draft:', e);
     return null;
@@ -648,18 +651,46 @@ function parseRecipeContent(content: string): {
  * Fetch all drafts from remote relays
  * Uses deduplication and returns the newest version of each draft
  */
+/**
+ * Is this wrap a draft of something other than a recipe or an article?
+ * Kind 31234 is shared: other clients keep their own drafts under it (Sidecar
+ * keeps notes, k=1, and comments, k=1111). Zap Cooking writes k=30023 on
+ * every wrap, so a k naming any other kind is another app's draft. A wrap
+ * with no k is judged by the event inside once it is decrypted.
+ */
+export function isForeignDraftKind(kTag: string | undefined, innerKind: number | null): boolean {
+  if (kTag !== undefined) return kTag.trim() !== String(KIND_RECIPE);
+  return innerKind !== null && innerKind !== KIND_RECIPE;
+}
+
+/** The drafts this app can open, and the d-tags of the ones it cannot. */
+export interface RemoteDraftSet {
+  drafts: RemoteDraft[];
+  /** d-tags of other apps' drafts (see isForeignDraftKind). Never parse,
+   * republish or tombstone these: they are not ours to touch. */
+  foreignIds: string[];
+}
+
 export async function fetchRemoteDrafts(): Promise<RemoteDraft[]> {
-  if (!browser) return [];
+  return (await fetchRemoteDraftSet()).drafts;
+}
+
+// One fetch in flight at a time; callers that arrive meanwhile share it.
+let fetchInProgress: Promise<RemoteDraftSet> | null = null;
+
+export async function fetchRemoteDraftSet(): Promise<RemoteDraftSet> {
+  const none: RemoteDraftSet = { drafts: [], foreignIds: [] };
+  if (!browser) return none;
 
   const pubkey = get(userPublickey);
   if (!pubkey) {
     console.log('[NIP-37] Cannot fetch drafts: not logged in');
-    return [];
+    return none;
   }
 
   if (!hasEncryptionSupport()) {
     console.log('[NIP-37] Cannot fetch drafts: encryption not supported');
-    return [];
+    return none;
   }
 
   // Dedupe in-flight fetches
@@ -667,7 +698,7 @@ export async function fetchRemoteDrafts(): Promise<RemoteDraft[]> {
     return fetchInProgress;
   }
 
-  fetchInProgress = (async () => {
+  fetchInProgress = (async (): Promise<RemoteDraftSet> => {
     const fetchedAt = Date.now();
     try {
       await ndkReady;
@@ -699,6 +730,7 @@ export async function fetchRemoteDrafts(): Promise<RemoteDraft[]> {
 
       // Process and deduplicate drafts
       const draftsMap = new Map<string, RemoteDraft>();
+      const foreignIds = new Set<string>();
       const legacyByEventId = new Map<string, { event: NDKEvent; plaintext: string; source: DecryptSource }>();
       const now = Date.now();
       let skippedExpired = 0;
@@ -708,6 +740,16 @@ export async function fetchRemoteDrafts(): Promise<RemoteDraft[]> {
         // Get d-tag (draft identifier)
         const dTag = event.tags.find(t => t[0] === 'd')?.[1];
         if (!dTag) continue;
+
+        // Another app's draft: noted, never parsed (a Sidecar note read as a
+        // recipe was an "Untitled Draft" card under the note's own d-tag).
+        // Checked before the blank and expiry checks, so a deleted one is
+        // still known as not ours and a stale local copy of it is dropped.
+        const kTag = event.tags.find(t => t[0] === 'k')?.[1];
+        if (isForeignDraftKind(kTag, null)) {
+          foreignIds.add(dTag);
+          continue;
+        }
 
         // Check expiration
         const expirationTag = event.tags.find(t => t[0] === 'expiration');
@@ -731,6 +773,10 @@ export async function fetchRemoteDrafts(): Promise<RemoteDraft[]> {
         // Decrypt content
         const decrypted = await decryptDraftContent(event.content, pubkey, draftType);
         if (!decrypted) continue;
+        if (isForeignDraftKind(kTag, decrypted.innerKind)) {
+          foreignIds.add(dTag);
+          continue;
+        }
         const { draft } = decrypted;
         if (decrypted.source !== 'session') {
           legacyByEventId.set(event.id, { event, ...decrypted });
@@ -755,6 +801,9 @@ export async function fetchRemoteDrafts(): Promise<RemoteDraft[]> {
         }
       }
 
+      // A d-tag is ours or not as a whole: one foreign copy keeps every copy
+      // of it out of the recipe and article stores.
+      for (const id of foreignIds) draftsMap.delete(id);
       const drafts = [...draftsMap.values()];
 
       // Newest versions encrypted under a legacy key (#897): republish them
@@ -765,12 +814,15 @@ export async function fetchRemoteDrafts(): Promise<RemoteDraft[]> {
       if (skippedDeleted > 0 || skippedExpired > 0) {
         console.log(`[NIP-37] Skipped ${skippedDeleted} deleted, ${skippedExpired} expired drafts`);
       }
+      if (foreignIds.size > 0) {
+        console.log(`[NIP-37] Left ${foreignIds.size} other app draft(s) alone`);
+      }
       console.log(`[NIP-37] Processed ${drafts.length} unique drafts`);
 
-      return drafts;
+      return { drafts, foreignIds: [...foreignIds] };
     } catch (e) {
       console.error('[NIP-37] Failed to fetch drafts:', e);
-      return [];
+      return none;
     } finally {
       fetchInProgress = null;
     }

@@ -12,6 +12,7 @@ import { browser } from '$app/environment';
 import { writable, derived, get, type Readable } from 'svelte/store';
 import {
   fetchRemoteDrafts,
+  fetchRemoteDraftSet,
   publishDraftDebounced,
   publishDraft,
   deleteDraftRemote,
@@ -395,7 +396,7 @@ export async function syncDrafts(): Promise<void> {
   try {
     // Fetch remote drafts. Relays hold recipe AND article drafts under the
     // same kind; only recipe drafts belong in this store.
-    const allRemote = await fetchRemoteDrafts();
+    const { drafts: allRemote, foreignIds } = await fetchRemoteDraftSet();
     const remoteDrafts = allRemote.filter((d) => d.draftType === 'recipe');
     const remoteIds = new Set(remoteDrafts.map((d) => d.id));
 
@@ -404,7 +405,12 @@ export async function syncDrafts(): Promise<void> {
     // recipes (same d-tag would replace the article on the relay), so drop
     // them here instead of treating them as local-only.
     const articleIds = new Set(allRemote.filter((d) => d.draftType === 'article').map((d) => d.id));
-    const localDrafts = loadLocalDrafts().filter((d) => !articleIds.has(d.id));
+    // Likewise local copies of OTHER APPS' drafts (Sidecar's notes, under the
+    // same kind): an earlier build read them as untitled recipes. Republished
+    // as a recipe under the same d-tag, the copy would replace that app's
+    // draft on the relays, so it is dropped, and never tombstoned either.
+    const notOurs = new Set(foreignIds);
+    const localDrafts = loadLocalDrafts().filter((d) => !articleIds.has(d.id) && !notOurs.has(d.id));
 
     // Merge, then sweep anything content-less on either side
     const merged = sweepEmptyDrafts(mergeDrafts(localDrafts, remoteDrafts), remoteIds);
@@ -412,8 +418,13 @@ export async function syncDrafts(): Promise<void> {
     // Save merged drafts locally
     saveLocalDrafts(merged);
 
-    // Publish any local-only drafts to remote
-    const localOnlyDrafts = merged.filter((d) => d.syncStatus === 'local');
+    // Publish any local-only drafts to remote. Not a copy the relays did not
+    // return whose id this app did not make: that is another app's draft
+    // read in by an earlier build, and a failed or partial fetch must not
+    // turn it into a recipe under that app's d-tag.
+    const localOnlyDrafts = merged.filter(
+      (d) => d.syncStatus === 'local' && (remoteIds.has(d.id) || isOwnDraftId(d.id))
+    );
     for (const draft of localOnlyDrafts) {
       try {
         await publishDraft(draft);
@@ -504,6 +515,15 @@ export function loadDrafts(): RecipeDraft[] {
 /**
  * Generate a unique ID for a draft
  */
+/**
+ * Every recipe draft this app creates is named draft_<ms>_<random>. A copy
+ * named any other way came from a relay, written by another app.
+ */
+const OWN_DRAFT_ID = /^draft_\d+_[a-z0-9]+$/;
+export function isOwnDraftId(id: string): boolean {
+  return OWN_DRAFT_ID.test(id);
+}
+
 function generateDraftId(): string {
   return `draft_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
 }

@@ -1,6 +1,7 @@
 /**
  * Recipe draft store: the empty-draft guard, the recipe/article type
- * filter on sync, and the sweep of content-less drafts.
+ * filter on sync, the sweep of content-less drafts, and other apps' drafts
+ * (same kind 31234) left alone.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { get } from 'svelte/store';
@@ -9,6 +10,10 @@ vi.mock('$app/environment', () => ({ browser: true }));
 
 const nip37 = vi.hoisted(() => ({
   fetchRemoteDrafts: vi.fn(async (): Promise<any[]> => []),
+  // The store reads the set; it hands back whatever fetchRemoteDrafts is
+  // mocked to, plus the d-tags of other apps' drafts set per test.
+  fetchRemoteDraftSet: vi.fn(),
+  foreignIds: [] as string[],
   publishDraftDebounced: vi.fn(),
   publishDraft: vi.fn(async () => true),
   deleteDraftRemote: vi.fn(async () => true),
@@ -70,6 +75,11 @@ describe('recipe draftStore', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
     nip37.fetchRemoteDrafts.mockReset().mockResolvedValue([]);
+    nip37.foreignIds = [];
+    nip37.fetchRemoteDraftSet.mockReset().mockImplementation(async () => ({
+      drafts: await nip37.fetchRemoteDrafts(),
+      foreignIds: nip37.foreignIds
+    }));
     nip37.publishDraft.mockReset().mockResolvedValue(true);
     nip37.publishDraftDebounced.mockReset();
     nip37.deleteDraftRemote.mockReset().mockResolvedValue(true);
@@ -236,7 +246,8 @@ describe('recipe draftStore', () => {
     });
 
     it('sweeps content-less drafts on both sides and tombstones the remote ones', async () => {
-      storage.set(STORAGE_KEY, JSON.stringify([makeDraft('local_empty'), makeDraft('local_ok', { title: 'Cake' })]));
+      // Local drafts carry the ids this app makes (draft_<ms>_<random>).
+      storage.set(STORAGE_KEY, JSON.stringify([makeDraft('draft_1_localempty'), makeDraft('draft_2_localok', { title: 'Cake' })]));
       nip37.fetchRemoteDrafts.mockResolvedValue([
         remote(makeDraft('remote_empty_1'), 'recipe'),
         remote(makeDraft('remote_empty_2'), 'recipe'),
@@ -246,17 +257,51 @@ describe('recipe draftStore', () => {
       await runSync();
 
       const ids = get(draftsStore).map((d) => d.id).sort();
-      expect(ids).toEqual(['local_ok', 'remote_ok']);
-      expect(storedDrafts(storage).map((d) => d.id).sort()).toEqual(['local_ok', 'remote_ok']);
+      expect(ids).toEqual(['draft_2_localok', 'remote_ok']);
+      expect(storedDrafts(storage).map((d) => d.id).sort()).toEqual(['draft_2_localok', 'remote_ok']);
 
       const deleted = nip37.deleteDraftRemote.mock.calls.map((c: unknown[]) => c[0]).sort();
       expect(deleted).toEqual(['remote_empty_1', 'remote_empty_2']);
       expect(nip37.deleteDraftRemote).toHaveBeenCalledWith('remote_empty_1', 'recipe');
       // Local-only empties are dropped without a relay write
-      expect(deleted).not.toContain('local_empty');
+      expect(deleted).not.toContain('draft_1_localempty');
 
       // Only the local-only draft with content is pushed
-      expect(nip37.publishDraft.mock.calls.map((c: { id: string }[]) => c[0].id)).toEqual(['local_ok']);
+      expect(nip37.publishDraft.mock.calls.map((c: { id: string }[]) => c[0].id)).toEqual(['draft_2_localok']);
+    });
+
+    // Another app's draft (a Sidecar note, k=1) that an earlier build read in
+    // as an untitled recipe, saved locally under the note's own d-tag.
+    const SIDECAR_D = 'sidecar-1792000000-a1b2c3';
+    const leakedNote = () =>
+      makeDraft(SIDECAR_D, { summary: 'Soup weather at last', updatedAt: Date.now() + 5000 });
+
+    it("drops a local copy of another app's draft instead of republishing it as a recipe", async () => {
+      storage.set(STORAGE_KEY, JSON.stringify([leakedNote(), makeDraft('draft_3_mine', { title: 'Stew' })]));
+      nip37.fetchRemoteDrafts.mockResolvedValue([remote(makeDraft('draft_3_mine', { title: 'Stew' }), 'recipe')]);
+      nip37.foreignIds = [SIDECAR_D];
+
+      await runSync();
+
+      expect(get(draftsStore).map((d) => d.id)).toEqual(['draft_3_mine']);
+      expect(storedDrafts(storage).map((d) => d.id)).toEqual(['draft_3_mine']);
+      // Not ours: never written over, never tombstoned.
+      expect(nip37.publishDraft.mock.calls.map((c: { id: string }[]) => c[0].id)).not.toContain(SIDECAR_D);
+      expect(nip37.deleteDraftRemote).not.toHaveBeenCalled();
+    });
+
+    it("does not republish another app's draft when the relays did not return it", async () => {
+      // A failed or partial fetch: the note is not reported as foreign, and
+      // is not on the relays as far as this sync knows.
+      storage.set(STORAGE_KEY, JSON.stringify([leakedNote(), makeDraft('draft_4_new', { title: 'Pie' })]));
+      nip37.fetchRemoteDrafts.mockResolvedValue([]);
+
+      await runSync();
+
+      // Kept locally (phase 2's cleanup decides), but nothing writes over the note.
+      const published = nip37.publishDraft.mock.calls.map((c: { id: string }[]) => c[0].id);
+      expect(published).toEqual(['draft_4_new']);
+      expect(nip37.deleteDraftRemote).not.toHaveBeenCalled();
     });
   });
 });
