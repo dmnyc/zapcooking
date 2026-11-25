@@ -93,10 +93,10 @@ export type MonoTab = (typeof MONO_TABS)[number]['id'];
 // composer wears the same single-color set as the rest of the app. Kept for
 // destroy().
 const mountedIcons: SvelteComponent[] = [];
-function ph(Icon: ComponentType, size = 18): HTMLElement {
+function ph(Icon: ComponentType, size = 18, weight?: 'regular' | 'fill'): HTMLElement {
   const span = document.createElement('span');
   span.className = 'mono-ico';
-  mountedIcons.push(new Icon({ target: span, props: { size } }));
+  mountedIcons.push(new Icon({ target: span, props: weight ? { size, weight } : { size } }));
   return span;
 }
 function iconButton(Icon: ComponentType, title: string, cls = 'tool-btn mono-icon-btn'): HTMLButtonElement {
@@ -664,7 +664,13 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
       const meta = document.createElement('span');
       meta.className = 'mono-draft-meta';
       const cloud =
-        state === 'synced' ? ph(CloudCheckIcon, 14) : state === 'pending' ? ph(CloudArrowUpIcon, 14) : ph(DeviceMobileIcon, 14);
+        // Clouds are drawn filled app-wide: the outline cloud's check is
+        // too small to read at this size.
+        state === 'synced'
+          ? ph(CloudCheckIcon, 14, 'fill')
+          : state === 'pending'
+            ? ph(CloudArrowUpIcon, 14, 'fill')
+            : ph(DeviceMobileIcon, 14);
       cloud.classList.add('mono-draft-cloud', `is-${state}`);
       cloud.title =
         state === 'synced' ? 'On your relays' : state === 'pending' ? 'Goes to your relays when the composer closes' : 'On this device only';
