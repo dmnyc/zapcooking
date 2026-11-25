@@ -5,8 +5,7 @@ import { get } from 'svelte/store';
 
 // Shared state for the module mocks, which are hoisted above these imports.
 const h = vi.hoisted(() => ({
-  me: '11'.repeat(32),
-  follows: new Set<string>()
+  me: '11'.repeat(32)
 }));
 
 vi.mock('$app/environment', () => ({ browser: true }));
@@ -14,14 +13,14 @@ vi.mock('$lib/nostr', async () => {
   const { writable } = await import('svelte/store');
   return { ndk: writable({}), userPublickey: writable(h.me) };
 });
-vi.mock('$lib/followListCache', async () => {
+vi.mock('$lib/wot/wotStore', async () => {
   const { writable } = await import('svelte/store');
+  const { inNetwork } = await import('$lib/wot/wot');
   return {
-    followListReady: writable(false),
-    followPubkeysReady: writable(false),
-    followListSize: writable(0),
-    getFollowedPubkeys: () => h.follows,
-    loadFollowListProfiles: async () => new Map()
+    inNetwork,
+    wotSet: writable<ReadonlySet<string>>(new Set()),
+    wotState: writable<'idle' | 'building' | 'ready'>('idle'),
+    buildWot: vi.fn(async () => null)
   };
 });
 vi.mock('$lib/muteListStore', async () => {
@@ -34,7 +33,8 @@ vi.mock('$lib/muteListStore', async () => {
 });
 
 import { userPublickey } from '$lib/nostr';
-import { followPubkeysReady } from '$lib/followListCache';
+import { wotSet, wotState } from '$lib/wot/wotStore';
+import { short } from '$lib/wot/wot';
 import { load, score } from './nspam';
 import { judgeReplies, nspamHiddenAuthors, nspamSpammers, spamVerdict } from './spamFilter';
 import { createCommentSubscription } from '$lib/comments/subscription';
@@ -72,8 +72,10 @@ function serveModel() {
 }
 
 beforeEach(() => {
-  h.follows.clear();
-  followPubkeysReady.set(true);
+  // A built set that contains only the account: strangers are strangers, and the
+  // per-test mutations below layer on top of it.
+  wotState.set('ready');
+  wotSet.set(new Set([short(h.me)]));
 });
 
 afterEach(() => {
@@ -110,13 +112,28 @@ describe('the nspam judge', () => {
     expect(get(nspamSpammers).has(person.pubkey)).toBe(false);
   });
 
-  it('verdicts hide strangers but never anyone you follow', () => {
-    followPubkeysReady.set(true);
-    h.follows.add(person.pubkey);
+  it('verdicts hide out-of-network authors but never anyone your network vouches for', () => {
+    // Both fixtures condemned, regardless of what the model scored them: the gate
+    // under test is the subtraction, not the scoring.
+    (nspamSpammers as unknown as { set: (s: Set<string>) => void }).set(
+      new Set([bot.pubkey, person.pubkey])
+    );
+    // With a set that holds only the account, both are strangers and both hide.
+    wotState.set('ready');
+    wotSet.set(new Set([short(h.me)]));
     expect(get(nspamHiddenAuthors).has(bot.pubkey)).toBe(true);
+    expect(get(nspamHiddenAuthors).has(person.pubkey)).toBe(true);
+    // The set is you, your follows, and everyone ten of your follows follow: inside it
+    // nothing is ever hidden, whatever the model said.
+    wotSet.set(new Set([short(h.me), short(person.pubkey)]));
     expect(get(nspamHiddenAuthors).has(person.pubkey)).toBe(false);
-    // Before the follow list has been read, no one is a stranger yet.
-    followPubkeysReady.set(false);
+    expect(get(nspamHiddenAuthors).has(bot.pubkey)).toBe(true);
+    // Fail open while the set is unbuilt — unknown means in-network.
+    wotState.set('building');
+    expect(get(nspamHiddenAuthors).size).toBe(0);
+    // And a built-but-empty set filters nobody either (the fresh-account shape).
+    wotState.set('ready');
+    wotSet.set(new Set());
     expect(get(nspamHiddenAuthors).size).toBe(0);
   });
 
