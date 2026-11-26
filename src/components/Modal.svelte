@@ -82,6 +82,9 @@
   function handleKeydown(e: KeyboardEvent) {
     if (!open || suspended) return;
     if (e.key === 'Escape') {
+      // Something inside the dialog took this Escape (a dropdown or picker
+      // closing itself): it closes that, not the whole dialog.
+      if (e.defaultPrevented) return;
       close();
       return;
     }

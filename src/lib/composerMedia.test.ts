@@ -4,6 +4,8 @@ import {
   imetaTagsForMedia,
   stripAttachmentUrlLines,
   attachableUrlCandidates,
+  isNoteReference,
+  bareNoteReference,
   removeBareUrlOccurrence,
   capByCodePoints,
   MAX_ALT_CODEPOINTS,
@@ -265,5 +267,34 @@ describe('removeBareUrlOccurrence', () => {
   it('returns the original text when there is nothing to consume', () => {
     expect(removeBareUrlOccurrence('para', 'https://a/1.png')).toBe('para');
     expect(removeBareUrlOccurrence('', 'https://a/1.png')).toBe('');
+  });
+});
+
+const NEVENT = 'nevent1qqsdyzw5kmp7zm0hcwtq5qlvxwf2pvc4p37ezv6qvmsr3zxpdr4wdhqqpp4mgh';
+const NOTE_REF = 'note1dwuasr5dmpq32jvzf9v6k9c4ztdpm3nncvdqyfk2v5me93f4pwqzzlqzw2';
+
+describe('isNoteReference / bareNoteReference', () => {
+  it('reads nevent and note references, with or without the nostr: prefix', () => {
+    expect(isNoteReference(NEVENT)).toBe(true);
+    expect(isNoteReference(`nostr:${NEVENT}`)).toBe(true);
+    expect(isNoteReference(NOTE_REF)).toBe(true);
+    expect(isNoteReference(`nostr:${NOTE_REF}`)).toBe(true);
+  });
+
+  it('reads nothing for other bech32 kinds and plain words', () => {
+    expect(isNoteReference('npub1qmxzz6hly64')).toBe(false);
+    expect(isNoteReference('nostr:npub1qmxzz6hly64')).toBe(false);
+    expect(isNoteReference('nevent1notreal')).toBe(false);
+    expect(isNoteReference('hello')).toBe(false);
+  });
+
+  it('strips the nostr: prefix for the publish path', () => {
+    expect(bareNoteReference(`nostr:${NEVENT}`)).toBe(NEVENT);
+    expect(bareNoteReference(NEVENT)).toBe(NEVENT);
+  });
+
+  it('reads a multi-line paste as not-a-reference', () => {
+    expect(isNoteReference(`${NEVENT}\n`)).toBe(false);
+    expect(isNoteReference(`look ${NEVENT}`)).toBe(false);
   });
 });

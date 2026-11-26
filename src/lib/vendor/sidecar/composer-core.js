@@ -1,0 +1,6640 @@
+// @ts-nocheck — vendored from dmnyc/sidecar main; do not type-check the upstream copy.
+// See README.md in this directory for the sync rules.
+'use strict';
+
+// ---- the panel's DOM toolkit, shared with any other page that needs one ----
+//
+// Sidecar has no build step, so "shared" means a second <script> both pages load rather
+// than an import. Everything here was lifted out of sidepanel.js unchanged and still runs
+// there: the panel destructures it back into its own scope, so its several thousand calls
+// to h() and icon() did not have to move.
+//
+// The rule for what belongs here: it is used by a composer, and it has no idea which page
+// it is drawing into. Anything that reaches for the panel's own state stays in the panel
+// and is handed in instead.
+window.SidecarCore = (function () {
+  // i18n.js loads before this file on every page that uses it.
+  const I18N = window.SidecarI18n;
+  const { t, tn } = I18N;
+  const show = (el) => el.classList.remove('hidden');
+  const hide = (el) => el.classList.add('hidden');
+  // nostr.build's plans page, through a referral link: subscribing through it credits
+  // Sidecar's creator, and everywhere it appears it is labeled as a referral link. The same address is
+  // in help.html and welcome.js (a test keeps the three in step).
+  const NB_PLANS_URL = 'https://getnb.me/4851-DF1E-A47B';
+  // What an upload error says, as nodes for the composer's error line: the message, and for a
+  // file over nostr.build's free limit, a link to its plans, labeled as the referral link it is.
+  function uploadErrorParts(e) {
+    const msg = (e && e.message) || t('Upload failed');
+    if (!e || !e.nbPlans) return [msg];
+    const link = h('a', { href: NB_PLANS_URL, target: '_blank', rel: 'noopener noreferrer', textContent: t('nostr.build plans (referral link)') });
+    return [msg + ' ', link];
+  }
+
+
+  // ---- flat (line) icons — inherit currentColor ----
+  const ICONS = {
+    // Feather's folder, for the composer's saved drafts.
+    folder: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>',
+    // Feather's video: a camera body with the lens flare cut out of its side. Used as
+    // the placeholder on a video attachment's thumbnail, where a decoded frame is both
+    // expensive and, in a 72px square, not actually informative.
+    video: '<polygon points="23 7 16 12 23 17 23 7"></polygon><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>',
+    plus: '<line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line>',
+    // A painter's palette, for the per-account theme override. Not `flower`, which is
+    // already Blossom's own mark (see KIND_ICONS 10063/24242) and would read as a
+    // media-server action sitting in the account menu. The wells are filled rather than
+    // stroked, the same as `grip` below: at r=1.5 an unfilled circle is a ring with a
+    // hole in it, not a dot of paint.
+    palette: '<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10c.93 0 1.68-.75 1.68-1.68 0-.44-.17-.83-.44-1.13a1.66 1.66 0 0 1 1.24-2.77h1.98A5.54 5.54 0 0 0 22 10.88C22 5.98 17.52 2 12 2z"></path><circle cx="6.5" cy="11.5" r="1.5" fill="currentColor"></circle><circle cx="9.5" cy="7.5" r="1.5" fill="currentColor"></circle><circle cx="14.5" cy="7.5" r="1.5" fill="currentColor"></circle><circle cx="17.5" cy="11.5" r="1.5" fill="currentColor"></circle>',
+    // Feather's list, for the links behind the pictures beside a quote.
+    list: '<line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line>',
+    copy: '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>',
+    users: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path>',
+    edit: '<path d="M12 20h9"></path><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"></path>',
+    trash: '<polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line>',
+    key: '<path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"></path>',
+    feather: '<path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"></path><line x1="16" y1="8" x2="2" y2="22"></line><line x1="17.5" y1="15" x2="9" y2="15"></line>',
+    lock: '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path>',
+    unlock: '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 9.9-1"></path>',
+    wifi: '<path d="M5 12.55a11 11 0 0 1 14.08 0"></path><path d="M1.42 9a16 16 0 0 1 21.16 0"></path><path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path><line x1="12" y1="20" x2="12.01" y2="20"></line>',
+    more: '<circle cx="5" cy="12" r="1.6" fill="currentColor"></circle><circle cx="12" cy="12" r="1.6" fill="currentColor"></circle><circle cx="19" cy="12" r="1.6" fill="currentColor"></circle>',
+    'more-v': '<circle cx="12" cy="5" r="1.6" fill="currentColor"></circle><circle cx="12" cy="12" r="1.6" fill="currentColor"></circle><circle cx="12" cy="19" r="1.6" fill="currentColor"></circle>',
+    'user-plus': '<path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="8.5" cy="7" r="4"></circle><line x1="20" y1="8" x2="20" y2="14"></line><line x1="23" y1="11" x2="17" y2="11"></line>',
+    download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line>',
+    check: '<polyline points="20 6 9 17 4 12"></polyline>',
+    camera: '<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle>',
+    alert: '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line>',
+    help: '<circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line>',
+    // Fine dots (r=1): beside a line of text, heavier ones read as a smudge.
+    grip: '<circle cx="9" cy="7" r="1" fill="currentColor"></circle><circle cx="15" cy="7" r="1" fill="currentColor"></circle><circle cx="9" cy="12" r="1" fill="currentColor"></circle><circle cx="15" cy="12" r="1" fill="currentColor"></circle><circle cx="9" cy="17" r="1" fill="currentColor"></circle><circle cx="15" cy="17" r="1" fill="currentColor"></circle>',
+    external: '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line>',
+    x: '<line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line>',
+    'arrow-down': '<line x1="12" y1="5" x2="12" y2="19"></line><polyline points="19 12 12 19 5 12"></polyline>',
+    'arrow-left': '<line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline>',
+    'arrow-up': '<line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline>',
+    // arrow-left's mirror, for the thumbnail reorder steppers. Rotating one icon
+    // for the other reads fine at 24px and wrong at 14px, where the join shows.
+    'arrow-right': '<line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline>',
+    'chevron-down': '<polyline points="6 9 12 15 18 9"></polyline>',
+    'arrow-up-right': '<line x1="7" y1="17" x2="17" y2="7"></line><polyline points="7 7 17 7 17 17"></polyline>',
+    'arrow-down-left': '<line x1="17" y1="7" x2="7" y2="17"></line><polyline points="17 17 7 17 7 7"></polyline>',
+    // A four-pointed star, for the card shown once after an update. Drawn rather than
+    // borrowed: the nearest existing glyphs are the pickaxe and the feather, and both
+    // already mean something specific in this panel.
+    sparkle: '<path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4L12 3z"></path>',
+    refresh: '<polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>',
+    // A single clockwise arrow: the profile screen's refresh mark (sidepanel.js). The
+    // two-arrow `refresh` above reads as "sync"; this one reads as "try again".
+    reload: '<path d="M20 12a8 8 0 1 1-2.34-5.66"></path><polyline points="20 4.5 20 9 15.5 9"></polyline>',
+    // Feather's cloud and upload-cloud, for drafts kept on relays (NIP-37): the mark on a
+    // row that has a copy there, and the button that puts one there.
+    cloud: '<path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"></path>',
+    // Feather's download-cloud, for reading drafts back from relays (the pair of upload-cloud).
+    'download-cloud': '<polyline points="8 17 12 21 16 17"></polyline><line x1="12" y1="12" x2="12" y2="21"></line><path d="M20.88 18.09A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.29"></path>',
+    'upload-cloud': '<polyline points="16 16 12 12 8 16"></polyline><line x1="12" y1="12" x2="12" y2="21"></line><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"></path>',
+    'rotate-ccw': '<polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>',
+    eye: '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle>',
+    'eye-off': '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line>',
+    // Mute: the speaker, and the speaker with a cross when it is muted. An eye says
+    // hide, and these are not hidden, only silenced.
+    'volume-2': '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>',
+    'volume-x': '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line>',
+    pin: '<path d="M12 17v5"></path><path d="M9 10.76V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v6.76a2 2 0 0 0 .59 1.42l1.12 1.12A2 2 0 0 1 18 14.59V16a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1v-1.41a2 2 0 0 1 .29-1.29l1.12-1.12A2 2 0 0 0 9 10.76Z"></path>',
+    // Bare price line for the chart toggle on the wallet balance card — no axes (the
+    // right angle read as boxy at 15px) and no arrowhead, which would imply a rising
+    // price on a day the chart may well show falling.
+    chart: '<polyline points="3 16 8 10 12 13 16 7 21 11"></polyline>',
+    bell: '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path>',
+    qr: '<rect x="3" y="3" width="7" height="7" rx="1"></rect><rect x="14" y="3" width="7" height="7" rx="1"></rect><rect x="3" y="14" width="7" height="7" rx="1"></rect><path d="M14 14h3v3M21 14v7h-7v-3"></path>',
+    share: '<path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path><polyline points="16 6 12 2 8 6"></polyline><line x1="12" y1="2" x2="12" y2="15"></line>',
+    bug: '<path d="m8 2 1.88 1.88"></path><path d="M14.12 3.88 16 2"></path><path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1"></path><path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6"></path><path d="M12 20v-9"></path><path d="M6.53 9C4.6 8.8 3 7.1 3 5"></path><path d="M6 13H2"></path><path d="M3 21c0-2.1 1.7-3.9 3.8-4"></path><path d="M20.97 5c0 2.1-1.6 3.8-3.5 4"></path><path d="M22 13h-4"></path><path d="M17.2 17c2.1.1 3.8 1.9 3.8 4"></path>',
+    // ---- activity-log kinds ----
+    // Broadcast tower for relay auth. Drawn as stroke center-lines on the 24x24 grid
+    // rather than imported as filled art: icon() forces viewBox="0 0 24 24" with
+    // fill:none and stroke=currentColor, so a filled path renders as a hollow outline
+    // of itself, in the wrong box. Apex emitter, A-frame mast with a cross-brace, and
+    // two pairs of arcs for near/far signal.
+    tower: '<circle cx="12" cy="6" r="1.6"></circle><path d="M10.6 9.4 7 22"></path><path d="M13.4 9.4 17 22"></path><path d="M9.2 15h5.6"></path><path d="M8.1 4a6 6 0 0 0 0 8"></path><path d="M15.9 4a6 6 0 0 1 0 8"></path><path d="M5.2 1.6a9.6 9.6 0 0 0 0 12.8"></path><path d="M18.8 1.6a9.6 9.6 0 0 1 0 12.8"></path>',
+    // A vector resembling the cherry-blossom emoji the Blossom repo uses in its README
+    // title (github.com/hzrd149/blossom — the protocol has no official vector mark).
+    // Supplied by Daniel; a better read than the circles I first approximated it with.
+    // FILLED art on a 58.48x63.59 viewBox, so
+    // unlike every stroke icon here it needs two things icon() doesn't give it:
+    //   fill="currentColor" stroke="none"  — icon() sets fill:none, which would
+    //     render a filled path invisible (and stroking it draws a doubled outline)
+    //   a transform into the 24x24 box   — scale 63.59 -> 21 and center
+    // Result spans x 2.34..21.66, y 1.5..22.5, matching `tower` (1.6..22) so the two
+    // carry the same weight side by side in the log. Same fill="currentColor" trick
+    // the `more` and `grip` dot glyphs use, so it still follows the theme color.
+    flower: '<g transform="translate(2.34 1.5) scale(0.3302)" fill="currentColor" stroke="none"><path d="M56.88,15.79c-3.15-5.5-10.05-7.56-15.71-4.71C40.66,4.48,34.9-.47,28.29.04c-5.9.45-10.6,5.14-11.05,11.05-5.96-2.89-13.14-.41-16.03,5.56-2.6,5.35-.88,11.8,4.03,15.15-5.42,3.82-6.72,11.3-2.9,16.72,3.33,4.73,9.57,6.41,14.83,3.99.51,6.61,6.27,11.55,12.88,11.05,5.9-.45,10.6-5.14,11.05-11.05,5.96,2.89,13.14.41,16.03-5.56,2.6-5.35.88-11.8-4.03-15.15,5.29-3.5,6.95-10.51,3.78-16ZM37.28,24.68c.91-3.41,3.14-6.32,6.2-8.08.91-.53,1.95-.81,3-.81,3.31,0,6,2.68,6.01,5.99,0,2.15-1.14,4.13-3.01,5.21-3.06,1.77-6.69,2.24-10.1,1.33l-2.87-.77.77-2.87ZM21.05,38.9c-.91,3.41-3.14,6.32-6.2,8.08-.91.53-1.95.81-3,.81-3.31,0-6-2.68-6.01-5.99,0-2.15,1.14-4.13,3.01-5.21,3.06-1.77,6.69-2.24,10.1-1.33l2.87.77-.77,2.87ZM18.95,28.31c-3.41.91-7.04.44-10.1-1.33-2.87-1.65-3.86-5.32-2.2-8.19,0,0,0,0,0,0,1.07-1.86,3.06-3,5.21-3,1.05,0,2.09.28,3,.81,3.06,1.76,5.29,4.67,6.2,8.08l.77,2.87-2.88.77ZM29.17,57.79c-3.31,0-6-2.69-6-6,0-3.53,1.4-6.92,3.9-9.41l2.1-2.1,2.1,2.1c2.5,2.49,3.91,5.88,3.9,9.41,0,3.31-2.69,6-6,6ZM25.17,31.79c0-2.21,1.79-4,4-4s4,1.79,4,4-1.79,4-4,4-4-1.79-4-4ZM31.27,21.2l-2.1,2.1-2.1-2.1c-2.5-2.49-3.91-5.88-3.9-9.41,0-3.31,2.69-6,6-6s6,2.69,6,6c0,3.53-1.4,6.92-3.9,9.41ZM51.69,44.79c-1.07,1.86-3.06,3-5.21,3-1.05,0-2.09-.28-3-.81-3.06-1.76-5.29-4.67-6.2-8.08l-.77-2.87,2.87-.77c3.41-.91,7.04-.44,10.1,1.33,2.87,1.65,3.86,5.32,2.2,8.19,0,0,0,0,0,0h.01Z"></path></g>',
+    // Stock Feather at 24x24, stroke-width 2 (see icon()). Added so the Recent
+    // activity list can distinguish what was signed instead of showing one quill
+    // for everything — a column of identical feathers is unreadable when a client
+    // fires a dozen relay auths.
+    repeat: '<polyline points="17 1 21 5 17 9"></polyline><path d="M3 11V9a4 4 0 0 1 4-4h14"></path><polyline points="7 23 3 19 7 15"></polyline><path d="M21 13v2a4 4 0 0 1-4 4H3"></path>',
+    heart: '<path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path>',
+    zap: '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>',
+    wallet: '<path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"></path><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"></path><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"></path>',
+    'help-circle': '<circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line>',
+    // Proof of work. A pickaxe rather than the hash it computes: the hash is the subject
+    // of the work, and a button needs the verb. A # also reads as a tag everywhere else on
+    // nostr, which is the one thing it must not be mistaken for here.
+    //
+    // Curved head top right, handle running down to the bottom left on the 45. The angle
+    // is what keeps it from reading as an umbrella, which is where a level head over a
+    // vertical handle lands. Arc and handle meet at the arc's own apex, computed rather
+    // than eyeballed, so the two strokes join cleanly instead of crossing.
+    pickaxe: '<path d="M12.5 3.2a9 9 0 0 1 8.3 8.3"></path><line x1="18.2" y1="5.8" x2="3.5" y2="20.5"></line>',
+    'badge-check': '<path d="M18.9 14.9Q22 12 18.9 9.1Q19.1 4.9 14.9 5.1Q12 2 9.1 5.1Q4.9 4.9 5.1 9.1Q2 12 5.1 14.9Q4.9 19.1 9.1 18.9Q12 22 14.9 18.9Q19.1 19.1 18.9 14.9Z"></path><polyline points="9 12 11 14 15.5 9"></polyline>',
+    'user-check': '<path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="8.5" cy="7" r="4"></circle><polyline points="17 11 19 13 23 9"></polyline>',
+    'user-x': '<path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="8.5" cy="7" r="4"></circle><line x1="18" y1="8" x2="23" y2="13"></line><line x1="23" y1="8" x2="18" y2="13"></line>',
+    'file-text': '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline>',
+    mail: '<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline>',
+    // Solid twin of message-circle. At 14px the stroked balloon reads thin and washes
+    // out; filled, it carries the same weight as the zap bolt beside it.
+    'message-filled': '<path d="M12 3C6.5 3 2 6.75 2 11.25c0 2.3 1.18 4.38 3.07 5.86L4 21.5l4.66-2.06c1.05.27 2.17.41 3.34.41 5.5 0 10-3.75 10-8.6S17.5 3 12 3z"></path>',
+    'message-circle': '<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path>',
+    bookmark: '<path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path>',
+    award: '<circle cx="12" cy="8" r="7"></circle><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"></polyline>',
+    // The letters G I F, drawn as strokes rather than set in a font: the button has no
+    // label to say what it is, and the old frame-with-a-play-mark read as video. Paths, so
+    // the mark is the same in every theme's typeface and in every language, and narrow
+    // letters so the word fills the 24px grid instead of needing a wider cell.
+    gif: '<path d="M8.2 8C7.6 6.6 6.5 6 5 6 3 6 1.9 7.8 1.9 12s1.1 6 3.1 6c2.1 0 3.4-1.4 3.4-4v-1.3H5.2"></path><path d="M12 6v12"></path><path d="M22.1 6h-5.7v12M16.4 12h4.4"></path>',
+    // Feather's smile: a face, for the Emoji button.
+    smile: '<circle cx="12" cy="12" r="10"></circle><path d="M8 14s1.5 2 4 2 4-2 4-2"></path><line x1="9" y1="9" x2="9.01" y2="9"></line><line x1="15" y1="9" x2="15.01" y2="9"></line>',
+    // Four corner brackets, for the panel's Expand button: the frame growing, with no arrow
+    // in it. An arrow reads here as leaving the browser, and the tab it opens is the same
+    // draft with more room.
+    maximize: '<path d="M8 3H5a2 2 0 0 0-2 2v3"></path><path d="M21 8V5a2 2 0 0 0-2-2h-3"></path><path d="M16 21h3a2 2 0 0 0 2-2v-3"></path><path d="M3 16v3a2 2 0 0 0 2 2h3"></path>',
+    // Feather's check-square: a ballot box with its tick, for the Poll button. The bar-chart
+    // below still stands for a poll's results and for votes in the activity list.
+    'check-square': '<polyline points="9 11 12 14 22 4"></polyline><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>',
+    'bar-chart': '<line x1="12" y1="20" x2="12" y2="10"></line><line x1="18" y1="20" x2="18" y2="4"></line><line x1="6" y1="20" x2="6" y2="16"></line>',
+    globe: '<circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>',
+    // The Yours sheet's four tabs — bookmark, highlighter, bubble, heart — are named from
+    // this map. Bookmark, message-circle and heart already lived here (the note actions,
+    // the page-comment button and the reactions carry them), so a tab wears the same mark
+    // as the thing it lists; the highlighter is highlight.svg from Tabler Icons (MIT —
+    // attribution in NOTICE), chosen over a filled glyph so it matches this map's stroke
+    // vocabulary, and it is what Recent activity draws for a highlight too.
+    highlighter: '<path d="M3 19h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4"></path><path d="M12.5 5.5l4 4"></path><path d="M4.5 13.5l4 4"></path><path d="M21 15v4h-8l4 -4l4 0"></path>',
+  };
+
+  // Icons that are SOLID shapes rather than strokes.
+  //
+  // Filling a stroked path does not work: Feather's outlines have the stroke width baked
+  // into their proportions, so turning fill on gives a muddy blob with a hairline hole.
+  // A solid glyph needs its own path, and then it must render with fill and no stroke —
+  // which is what this set is for. The zap already lives outside ICONS for the same
+  // reason (boltIcon).
+  const FILLED_ICONS = new Set(['message-filled']);
+
+  function icon(name) {
+    const solid = FILLED_ICONS.has(name);
+    const wrap = document.createElement('span');
+    wrap.innerHTML =
+      '<svg viewBox="0 0 24 24" fill="' + (solid ? 'currentColor' : 'none') +
+      '" stroke="' + (solid ? 'none' : 'currentColor') +
+      '" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+      (ICONS[name] || '') +
+      '</svg>';
+    const svg = wrap.firstElementChild;
+    // Named so a right-to-left page can mirror the ones that point somewhere (styles.css).
+    svg.setAttribute('data-icon', name);
+    return svg;
+  }
+  // The composers' saved indicator: a check and "Saved" once a write lands, a warning and
+  // "Not saved" when one fails, nothing before the first write. One painter, so the panel and
+  // the full-size composer cannot drift apart.
+  function paintSavedState(el, state, locked) {
+    if (!el) return;
+    el.replaceChildren();
+    el.classList.toggle('is-failed', state === 'failed');
+    if (state === 'saved') el.append(icon('check'), h('span', { textContent: t('Saved') }));
+    else if (state === 'failed') el.append(icon('alert'), h('span', { textContent: locked ? t('Not saved: Sidecar is locked') : t('Not saved') }));
+  }
+
+
+
+  function h(tag, props, children) {
+    const el = document.createElement(tag);
+    if (props) Object.assign(el, props);
+    // A child that is not there (null, undefined, false) adds nothing; append() would write the word.
+    (children || []).forEach((c) => { if (c != null && c !== false) el.append(c); });
+    return el;
+  }
+
+  // Params that identify where a visitor came FROM, never which page they're on.
+  // Left in, every share link spawns its own thread.
+  //
+  // Deliberately a denylist, never "strip the whole query". For plenty of sites the
+  // query IS the page (youtube.com/watch?v=…), and dropping a load-bearing param is
+  // strictly worse than a split thread: the published identifier would then point at
+  // a URL rendering different content, or nothing. Anything ambiguous stays — `ref`
+  // in particular is functional often enough to leave alone.
+  const TRACKING_PARAMS = [
+    // ad-click IDs
+    'fbclid', 'gclid', 'dclid', 'gbraid', 'wbraid', 'msclkid', 'twclid', 'ttclid',
+    'yclid', 'igshid', 'li_fat_id', 'epik', 'rdt_cid', 'sccid', 'srsltid', 's_kwcid',
+    // email + marketing platforms
+    'mc_cid', 'mc_eid', 'mkt_tok', '_hsenc', '_hsmi', 'vero_conv', 'vero_id',
+    'oly_anon_id', 'oly_enc_id', '__s',
+    // analytics and referrer echoes
+    '_ga', '_openstat', 'ref_src', 'ref_url', 'ncid', 'spm', 'at_medium', 'at_campaign',
+    // Yahoo consent-redirect residue
+    'guccounter', 'guce_referrer', 'guce_referrer_sig',
+    // Facebook share callbacks
+    'fb_action_ids', 'fb_action_types', 'fb_ref', 'fb_source',
+    'action_object_map', 'action_type_map', 'action_ref_map',
+  ];
+
+  // Namespaces that exist only for analytics, so the whole family goes without
+  // enumerating it. `utm_` alone has a dozen variants past the common five
+  // (utm_name, utm_source_platform, utm_marketing_tactic, …) and vendors keep adding
+  // more — matching the prefix is what actually answers "utm junk", where a fixed
+  // list silently rots.
+  const TRACKING_PREFIXES = ['utm_', 'pk_', 'piwik_', 'mtm_', 'hsa_'];
+
+  // Pure tracking on a specific host, but possibly load-bearing elsewhere, so only
+  // stripped where we know what it means. YouTube's `si` is the most common
+  // real-world splitter there is: every press of Share mints a fresh one, so one
+  // video would otherwise carry a separate thread per sharer.
+  //
+  // Amazon is deliberately absent. Its `tag` is an affiliate code, which is sometimes
+  // the entire reason somebody shared the link, and a button offering to remove
+  // "tracking" should not quietly be a button that removes their earnings.
+  const HOST_TRACKING_PARAMS = [
+    { host: /(^|\.)(youtube\.com|youtu\.be)$/i, params: ['si', 'pp', 'feature', 'kw'] },
+    // Same shape as YouTube's `si`, and the same consequence: `t` is minted fresh on
+    // every press of Share, so one post would carry a separate thread per sharer.
+    { host: /^(x\.com|twitter\.com)$/i, params: ['s', 't'] },
+    { host: /(^|\.)spotify\.com$/i, params: ['si', 'nd', 'nd_lfid'] },
+    { host: /(^|\.)tiktok\.com$/i, params: ['is_from_webapp', 'sender_device', '_r', '_t'] },
+    { host: /(^|\.)reddit\.com$/i, params: ['share_id', 'rdt', 'correlation_id', 'ref_source', 'ref_campaign'] },
+    { host: /(^|\.)linkedin\.com$/i, params: ['trk', 'trackingid'] },
+  ];
+
+  // Case-insensitive: the same vendor ships both `ScCid` and `sccid`, and a param
+  // that survives on a capital letter splits the thread just as effectively.
+  function isTrackingParam(name) {
+    const n = String(name).toLowerCase();
+    return TRACKING_PARAMS.includes(n) || TRACKING_PREFIXES.some((p) => n.startsWith(p));
+  }
+
+  // ---- the same list, for a link pasted into a composer ----
+  //
+  // A link copied out of a browser usually arrives with a tail describing the person who
+  // copied it rather than the thing it points at: which campaign reached them, which app
+  // they were in, and an id that ties that click back to them. Posting it forwards all of
+  // that to everyone who reads the note, which is not something anyone means to do by
+  // pasting a link.
+  //
+  // OFFERED, NEVER DONE FOR YOU. Sidecar's claim is that it signs what you asked it to
+  // sign, and quietly rewriting the words in a composer is the same kind of act as
+  // quietly rewriting an event. So a paste that carries a tail says so, once, and one
+  // button takes it off.
+  //
+  // NOT normalizeWebUrl, which is next door and looks like it would do. That one builds a
+  // THREAD IDENTIFIER: it sorts the query and drops the fragment so two people reach the
+  // same address, both of which would be edits to a link the user did not ask us to edit.
+  // What is shared is the list of what counts as tracking, which is the part worth having
+  // in one place.
+  function hostTrackingParams(hostname) {
+    const rule = HOST_TRACKING_PARAMS.find((r) => r.host.test(String(hostname || '')));
+    return rule ? rule.params : null;
+  }
+
+  // Cuts whole k=v segments out of the query, textually. Rebuilding through URL or
+  // URLSearchParams would re-encode every parameter being KEPT: a %20 comes back a +, an
+  // unescaped bracket comes back escaped. That is a change to a link nobody asked us to
+  // change, on a path whose entire promise is that it changes nothing else.
+  //
+  // The query only, never the path. Several sites carry tracking in path segments too,
+  // and nothing tells those apart from an id without knowing the site. Confining this to
+  // whole parameters is what makes it safe against a URL for a site nobody here has heard
+  // of: the output is the input minus entire parameters, so a link that worked still
+  // works. Returns null when there is nothing to take off.
+  function cleanTrackedUrl(raw) {
+    const s = String(raw || '');
+    if (!/^https?:\/\//i.test(s)) return null;
+    const q = s.indexOf('?');
+    if (q === -1) return null;
+    let hostname;
+    try { hostname = new URL(s).hostname; } catch (_) { return null; }
+    const hashAt = s.indexOf('#', q);
+    const head = s.slice(0, q);
+    const tail = hashAt === -1 ? '' : s.slice(hashAt);
+    const query = s.slice(q + 1, hashAt === -1 ? undefined : hashAt);
+    const hostParams = hostTrackingParams(hostname);
+    const parts = query.split('&').filter((part) => part !== '');
+    const kept = parts.filter((part) => {
+      const eq = part.indexOf('=');
+      const encoded = (eq === -1 ? part : part.slice(0, eq)).replace(/\+/g, ' ');
+      let name = encoded;
+      try { name = decodeURIComponent(encoded); } catch (_) { /* a stray % is still a name */ }
+      if (isTrackingParam(name)) return false;
+      return !hostParams || hostParams.indexOf(name.toLowerCase()) === -1;
+    });
+    if (kept.length === parts.length) return null;
+    return head + (kept.length ? '?' + kept.join('&') : '') + tail;
+  }
+
+  // Trailing punctuation belongs to the sentence, not to the link. A URL written at the
+  // end of a line takes the period with it otherwise, and the cleaned version would come
+  // back without one.
+  function trimUrlTail(url) {
+    let out = url;
+    for (;;) {
+      const before = out;
+      out = out.replace(/[.,;:!?'"]+$/, '');
+      for (const [close, open] of [[')', '('], [']', '['], ['}', '{']]) {
+        if (!out.endsWith(close)) continue;
+        if (out.split(close).length > out.split(open).length) out = out.slice(0, -1);
+      }
+      if (out === before) return out;
+    }
+  }
+
+  function findTrackedUrls(text) {
+    const out = [];
+    const seen = new Set();
+    const re = /https?:\/\/[^\s<>"'`]+/gi;
+    let m;
+    while ((m = re.exec(String(text || '')))) {
+      const raw = trimUrlTail(m[0]);
+      if (!raw || seen.has(raw)) continue;
+      seen.add(raw);
+      const clean = cleanTrackedUrl(raw);
+      if (clean && clean !== raw) out.push({ raw, clean });
+    }
+    // Longest first, so replacing one link cannot eat the front of another that starts
+    // with it. Two shares of the same page with different campaign ids do exactly that.
+    out.sort((a, b) => b.raw.length - a.raw.length);
+    return out;
+  }
+
+  // ---- which cut of the artwork this theme wants ----
+  //
+  // Here rather than in the panel because the comment below already says why: it is the
+  // place a new light theme has to be registered, and the expanded composer page would
+  // have been one more. Everything in this block is a pure function of the theme name or
+  // of the live data-theme attribute, so any page can call it.
+  // Path to the full Sidecar logo for a given theme. Art Deco uses a variant
+  // whose wordmark is dark purple (#5a4a8a) for legibility on the light
+  // eggshell background; the cocktail-glass mark is identical in both files
+  // (official colors), so only the wordmark changes.
+  // Sibling copies live in content.js (LIGHT_CARD_THEMES, the page-side pay card) and
+  // prompt.js (the approval window's wordmark). Three documents, no module system between
+  // them; a new light theme has to be registered in all three.
+  const LIGHT_THEMES = new Set(['industria', 'aegean', 'bauhaus', 'populuxe', 'par-avion', 'werkstatte', 'ukiyo-e', 'mycelium', 'ben-day', 'turnstile', 'phantom-bouquet']);
+  // Light themes that draw a top bar dark, so a logo on that bar takes the light wordmark
+  // the dark themes use. Two lists, because the bars differ: Ben Day's composer bar is its
+  // black plate while its panel bars are white, and Turnstile's name tablet is on both.
+  const COMPOSE_DARK_BAR_THEMES = new Set(['ben-day', 'turnstile']);
+  const PANEL_DARK_BAR_THEMES = new Set(['turnstile']);
+  // A theme that wears its own cut of the logo, drawn in the theme's own inks: Phantom Bouquet
+  // in its dyes (the glass in madder, the wordmark in the balance's plum), Film Noir in silver,
+  // Brownstone in bronze and gold, Cast Iron in warm greys, Par Avion in airmail blue and red,
+  // Industria in ink brown and brass. A cut is the stock logo with only its colors changed
+  // (scripts/gen-theme-logos.py makes all but Phantom Bouquet's). The same table lives in
+  // content.js (the pay card recolors its inline copy) and prompt.js (the approval window), and
+  // test/theme-logos.test.js fails if the three, or the files, disagree. A cut for a theme
+  // beats LIGHT_THEMES below: that list only decides between the stock logo and the dark wordmark.
+  const THEME_LOGOS = {
+    'phantom-bouquet': 'icons/sidecar-logo-phantom-bouquet.svg',
+    'film-noir': 'icons/sidecar-logo-film-noir.svg',
+    'brownstone': 'icons/sidecar-logo-brownstone.svg',
+    'cast-iron': 'icons/sidecar-logo-cast-iron.svg',
+    'par-avion': 'icons/sidecar-logo-par-avion.svg',
+    'industria': 'icons/sidecar-logo-industria.svg',
+    'werkstatte': 'icons/sidecar-logo-werkstatte.svg',
+  };
+  function logoSrcFor(themeName) {
+    if (Object.prototype.hasOwnProperty.call(THEME_LOGOS, themeName)) return THEME_LOGOS[themeName];
+    // EVERY light theme needs the dark-wordmark variant; the default is baked
+    // lavender for a dark field and disappears on marble, eggshell or plaster.
+    // A set rather than a chain of ||, because this is the fourth place a theme
+    // has to be registered and the chain form is the one that gets forgotten.
+    return LIGHT_THEMES.has(themeName)
+      ? 'icons/sidecar-logo-deco.svg'
+      : 'icons/sidecar-logo.svg';
+  }
+
+  // Which cut of the placeholder garnish to use. It is drawn in white for a dark
+  // avatar disc, and on the five light themes that is white on white — the slice was
+  // simply not there, on the account switcher, the rows, the compose author, the
+  // notification modal, everywhere. Same shape as logoSrcFor above and for exactly the
+  // same reason, so it reads the same LIGHT_THEMES set: one place to register a theme,
+  // not two.
+  //
+  // Reads the live attribute rather than taking a parameter, because applyAvatar is
+  // called from a dozen renderers that have no idea what the theme is and should not
+  // have to be told.
+  function avatarPhSrc() {
+    return LIGHT_THEMES.has(document.documentElement.getAttribute('data-theme'))
+      ? 'icons/avatar-default-dark.svg'
+      : 'icons/avatar-default.svg';
+  }
+
+  // ---- the composer's editor ----
+  //
+  // Everything below was the panel's, and still reads exactly as it did there. What
+  // changed is where its collaborators come from: profile lookups, the follow list, the
+  // global name search and its consent ask are all page-level services, so the page
+  // hands them in and this file stays ignorant of which one it is drawing into.
+  //
+  // One mutable binding rather than an argument threaded through thirty functions. A
+  // document only ever runs one page, so there is only ever one installer, and keeping
+  // the moved code otherwise byte-identical was worth more than the purity.
+  // THE THROTTLE LIVES HERE, not at each call site. This fires on every input event, and
+  // the panel wrapped its own in a 20s guard while the expanded composer page passed the
+  // bare message: a keystroke each, waking the service worker the whole time somebody is
+  // writing. Only one of the two was going to be remembered, so neither is asked to.
+  let lastActivityPing = 0;
+  function pingActivity() {
+    const now = Date.now();
+    if (now - lastActivityPing < 20000) return;
+    lastActivityPing = now;
+    try { deps.noteActivity(); } catch (_) {}
+  }
+
+  let deps = null;
+  function installComposer(d) {
+    deps = d;
+    return {
+      serializeEditor, hydrateEditorFromText, createMentionEditor,
+      renderNotePreview, uploadMedia, minePow, powCancel,
+      resolveClient, showPostCountdown, splitGlyphs, ironDiceStyle,
+      resolveQuotePreviews, sha256Hex, glyphBeat, relTime, quoteSnippet, firstQuoteImage,
+      powSetting, postCountdownSetting,
+      // The panel calls these directly as well as through renderNotePreview: the about
+      // box resolves its own mentions, a quote preview needs embedRef, a reply's context
+      // strip renders with renderNoteText, the web-comment sheet draws its own link card,
+      // the unlock cooldown paints with paintCountdownNum, and the profile-picture
+      // uploader tries Blossom first. Every one of them is a name that used to be in the
+      // panel's scope for free.
+      renderNoteText, renderLinkCard, resolveMentions, embedRef, tryBlossomFirst,
+      paintCountdownNum, buildQuoteBlock, checkPastedQuote,
+    };
+  }
+
+  // Serialize a contenteditable editor div to plain nostr text.
+  // Text nodes → text, BR → \n, block divs → \n prefix, pill spans → their data-bech32.
+  //   (NBSP used after pills to prevent browser whitespace collapse) → regular space.
+  // A PILL THAT STARTS A LINE GETS AN ANCHOR IN FRONT OF IT: a zero-width space, in a text
+  // node of its own. A pill is contentEditable=false, and Chrome has no caret position in
+  // front of one with nothing editable before it on its line, so the caret snapped to the
+  // end of the line above: Delete there took the line break and the pill with it, Backspace
+  // "before" the pill took a letter of the line above, and the arrow keys jumped over both.
+  // The anchor is that missing position. It is never saved: serializeEditor drops it.
+  const PILL_ANCHOR = '\u200B';
+  const isPill = (n) => !!(n && n.nodeType === 1 && n.dataset && n.dataset.bech32);
+  const isAnchor = (n) => !!(n && n.nodeType === Node.TEXT_NODE && n.textContent && !n.textContent.replace(/\u200B/g, ''));
+  function anchorPills(el) {
+    el.querySelectorAll('[data-bech32]').forEach((pill) => {
+      let prev = pill.previousSibling;
+      // An empty text node is not something a caret can stand on either.
+      while (prev && prev.nodeType === Node.TEXT_NODE && !prev.textContent) { const p = prev.previousSibling; prev.remove(); prev = p; }
+      if (prev && prev.nodeName !== 'BR' && !isPill(prev)) return;
+      if (isAnchor(prev)) return;
+      pill.before(document.createTextNode(PILL_ANCHOR));
+    });
+  }
+
+  // A MENTION ENDS WHERE ITS KEY ENDS, and a reader can only tell where that is if the
+  // next character cannot belong to it. A pill with a word typed straight after it wrote
+  // `nostr:npub1…challenged`: every client, and this one reading the draft back, took the
+  // word for more of the key, so the mention broke and its person was never notified.
+  // So a letter or digit that follows a pill is set off by a space.
+  const JOINS_A_KEY = /^[\p{L}\p{N}_]/u;
+  // The pill a key would reach from the caret if anchors took no room, or null.
+  function pillAhead(node, off) {
+    let next;
+    if (node.nodeType === Node.TEXT_NODE) {
+      if (node.textContent.slice(off).replace(/\u200B/g, '')) return null;
+      next = node.nextSibling;
+    } else next = node.childNodes[off] || null;
+    while (isAnchor(next)) next = next.nextSibling;
+    return isPill(next) ? next : null;
+  }
+  function pillBehind(node, off) {
+    let prev;
+    if (node.nodeType === Node.TEXT_NODE) {
+      if (node.textContent.slice(0, off).replace(/\u200B/g, '')) return null;
+      prev = node.previousSibling;
+    } else prev = off > 0 ? node.childNodes[off - 1] : null;
+    while (isAnchor(prev)) prev = prev.previousSibling;
+    return isPill(prev) ? prev : null;
+  }
+  function serializeEditor(el) {
+    let out = '';
+    let afterPill = false;
+    const put = (s) => {
+      if (!s) return;
+      if (afterPill && JOINS_A_KEY.test(s)) out += ' ';
+      afterPill = false;
+      out += s;
+    };
+    // A LINE BREAK THAT ENDS ITS BLOCK IS NOT A LINE. A browser ends an empty line, and the
+    // last line of a note, with a <br> that only holds the line open: Enter in an empty
+    // editor leaves two of them (or two blocks), which is one line break, not two. Read as
+    // breaks, a lone Enter came out as "\n\n" and a note ending on a new line gained one.
+    // Each block is a line of its own, an empty one too.
+    let started = false;   // anything at all has been read
+    let lineStart = true;  // a break was just written, so a block needs no other
+    // WHAT FOLLOWS A BLOCK STARTS A LINE OF ITS OWN, even when it is not in a block itself.
+    // Chrome leaves a line typed after the last block as bare text beside it
+    // (`<div>Cheers</div><div><br></div>My clankers`), and the browser draws it on its own
+    // line; read as more of the block before it, the blank line above it was lost.
+    let afterBlock = false;
+    const endBlock = () => { if (afterBlock) { out += '\n'; afterBlock = false; afterPill = false; lineStart = true; } };
+    const holdsLineOpen = (br) => {
+      let next = br.nextSibling;
+      while (next && next.nodeType === Node.TEXT_NODE && !next.textContent.replace(/\u200B/g, '')) next = next.nextSibling;
+      return !next;
+    };
+    const walk = (node) => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        const s = node.textContent.replace(/\u200B/g, '').replace(/\u00a0/g, ' ');
+        if (s) { endBlock(); started = true; lineStart = false; }
+        put(s);
+      } else if (node.nodeName === 'BR') {
+        endBlock();
+        started = true;
+        if (!holdsLineOpen(node)) { put('\n'); lineStart = true; }
+      } else if (node.dataset && node.dataset.bech32) {
+        endBlock();
+        started = true; lineStart = false;
+        put(node.dataset.bech32);
+        afterPill = true;
+      } else {
+        const isBlock = node.nodeName === 'DIV' || node.nodeName === 'P';
+        if (isBlock) afterBlock = false;
+        // A block inside a block that has just started a line is on that line, not another.
+        if (isBlock && started && !lineStart) { out += '\n'; afterPill = false; lineStart = true; }
+        node.childNodes.forEach(walk);
+        if (isBlock) { started = true; lineStart = false; afterBlock = true; }
+      }
+    };
+    el.childNodes.forEach(walk);
+    return out;
+  }
+
+  // The longest start of a bech32 run that decodes, and what it decodes to; null if no
+  // start of it does. The checksum is what marks where a key really ends: `npub1…` with a
+  // word run on after it decodes only when cut back to the key itself. Notes and drafts
+  // written before serializeEditor spaced a mention off still carry that join.
+  function readRef(code, NT) {
+    // The whole run first, so anything that decoded before decodes the same; then shorter,
+    // down to the shortest that could hold a checksum.
+    const floor = Math.min(code.length, code.indexOf('1') + 1 + 6);
+    for (let end = code.length; end >= floor; end--) {
+      try { return { code: code.slice(0, end), decoded: NT.nip19.decode(code.slice(0, end)) }; } catch (_) { /* shorter */ }
+    }
+    return null;
+  }
+
+  // ---- what a clipboard or a drop holds, as text ----
+  //
+  // SOME APPS PUT ONLY HTML ON THE CLIPBOARD, and a paste that read text/plain alone pasted
+  // nothing at all. The HTML is read for its words: a block (paragraph, heading, list item,
+  // table row) is a line, a <br> is a break, table cells are tab-separated, whitespace
+  // collapses as a browser collapses it, and nothing else of it (styles, links, pictures,
+  // scripts) comes along.
+  function textFromHtml(html) {
+    let doc;
+    try { doc = new DOMParser().parseFromString(String(html || ''), 'text/html'); } catch (_) { return ''; }
+    doc.querySelectorAll('script, style, head, template, noscript').forEach((n) => n.remove());
+    const BLOCK = /^(P|DIV|LI|H[1-6]|TR|BLOCKQUOTE|PRE|UL|OL|TABLE|SECTION|ARTICLE|HEADER|FOOTER|DT|DD|FIGURE|FIGCAPTION|HR)$/;
+    let out = '';
+    const newline = () => { if (out && !out.endsWith('\n')) out += '\n'; };
+    // A PARAGRAPH IS SET OFF BY A BLANK LINE, as the browser's own plain text of it is: two
+    // pasted paragraphs became one line break, and the blank line between them was lost.
+    const blankLine = () => { if (!out) return; newline(); if (!out.endsWith('\n\n')) out += '\n'; };
+    const walk = (node, pre) => {
+      if (node.nodeType === 3) {
+        let t = node.textContent;
+        if (!pre) {
+          t = t.replace(/[\t\n\r ]+/g, ' ');
+          if (out.endsWith('\n') || out.endsWith(' ') || out.endsWith('\t') || !out) t = t.replace(/^ /, '');
+        }
+        out += t.replace(/\u00a0/g, ' ');
+        return;
+      }
+      if (node.nodeType !== 1) return;
+      const tag = node.nodeName;
+      if (tag === 'BR') { out += '\n'; return; }
+      if (tag === 'TD' || tag === 'TH') {
+        if (node.previousElementSibling) out = out.replace(/ $/, '') + '\t';
+        node.childNodes.forEach((c) => walk(c, pre));
+        return;
+      }
+      const block = BLOCK.test(tag);
+      const para = tag === 'P';
+      if (block) { out = out.replace(/ $/, ''); para ? blankLine() : newline(); }
+      node.childNodes.forEach((c) => walk(c, pre || tag === 'PRE'));
+      if (block) { out = out.replace(/ $/, ''); para ? blankLine() : newline(); }
+    };
+    walk(doc.body || doc.documentElement, false);
+    return out.replace(/^\n+|\n+$/g, '');
+  }
+  function transferText(dt) {
+    if (!dt) return '';
+    const plain = dt.getData('text/plain');
+    if (plain) return plain;
+    const html = dt.getData('text/html');
+    return html ? textFromHtml(html) : '';
+  }
+
+  // ---- what a clipboard or a drop holds, as markdown ----
+  //
+  // AN ARTICLE IS MARKDOWN, so formatting pasted into one is kept, written the way a person
+  // would type it: bold as **bold**, a link as [text](address), headings, lists, quotes,
+  // code and pictures. What markdown cannot say (colors, fonts, sizes) is dropped, as a
+  // note drops everything. Only http(s) links and pictures come along.
+  //
+  // Returns null when there is nothing to keep: the HTML carries no formatting markdown can
+  // say, or it is code (a code editor's copy is colored, preformatted text), and the
+  // clipboard's own plain text is then the paste, with its spacing exactly as copied.
+  const MD_BLOCK = /^(P|DIV|LI|H[1-6]|UL|OL|BLOCKQUOTE|PRE|TABLE|THEAD|TBODY|TFOOT|TR|SECTION|ARTICLE|HEADER|FOOTER|MAIN|NAV|ASIDE|ADDRESS|FIGURE|FIGCAPTION|HR|DL|DT|DD)$/;
+  const MD_MARKUP = /\*\*|(^|[^\w])_[^\s_]|`|!?\[[^\]\n]*\]\(|^#{1,6} |^> |^[-*+] |^\d+[.)] |^---$|~~/m;
+  function markdownFromHtml(html) {
+    let doc;
+    try { doc = new DOMParser().parseFromString(String(html || ''), 'text/html'); } catch (_) { return null; }
+    doc.querySelectorAll('script, style, head, template, noscript, meta, link, title').forEach((n) => n.remove());
+    const body = doc.body;
+    if (!body) return null;
+    // Code: preformatted all through, as a code editor copies.
+    if (!body.querySelector('pre') && /white-space:\s*pre/i.test(body.innerHTML) && !body.querySelector('h1,h2,h3,h4,h5,h6,li,blockquote,a[href]')) return null;
+    const httpUrl = (u) => { try { const x = new URL(u); return x.protocol === 'https:' || x.protocol === 'http:' ? x.href : null; } catch (_) { return null; } };
+    const weight = (el) => {
+      const w = (el.style && el.style.fontWeight) || '';
+      if (/^(bold|bolder|[6-9]00)$/.test(w)) return 'bold';
+      if (/^(normal|lighter|[1-5]00)$/.test(w)) return 'normal';
+      return '';
+    };
+    const italic = (el) => {
+      const s = (el.style && el.style.fontStyle) || '';
+      return s === 'italic' || s === 'oblique' ? 'italic' : s === 'normal' ? 'normal' : '';
+    };
+    // Marks hug the words: "** bold **" is not bold in markdown, so spaces go outside.
+    const wrap = (mark, s) => {
+      if (!s.trim()) return s;
+      const m = s.match(/^(\s*)([\s\S]*?)(\s*)$/);
+      return m[1] + mark + m[2] + mark + m[3];
+    };
+    function inline(node, st) {
+      if (node.nodeType === 3) return node.textContent.replace(/[\t\n\r ]+/g, ' ').replace(/ /g, ' ');
+      if (node.nodeType !== 1) return '';
+      const tag = node.nodeName;
+      if (tag === 'BR') return '\n';
+      if (tag === 'IMG') {
+        const src = httpUrl(node.getAttribute('src'));
+        return src ? '![' + (node.getAttribute('alt') || '').replace(/[\[\]\n]/g, ' ').trim() + '](' + src + ')' : '';
+      }
+      if (MD_BLOCK.test(tag)) return '\n' + blocks(node) + '\n';
+      if (tag === 'CODE' || tag === 'KBD' || tag === 'SAMP') {
+        const code = node.textContent.replace(/\s+/g, ' ');
+        return code.trim() ? '`' + code.replace(/`/g, "'") + '`' : code;
+      }
+      const w = weight(node), it = italic(node);
+      const bold = (tag === 'B' || tag === 'STRONG' || w === 'bold') && w !== 'normal';
+      const em = (tag === 'I' || tag === 'EM' || it === 'italic') && it !== 'normal';
+      const strike = tag === 'S' || tag === 'DEL' || tag === 'STRIKE';
+      const next = { b: st.b || bold, i: st.i || em, s: st.s || strike };
+      let s = '';
+      node.childNodes.forEach((c) => { s += inline(c, next); });
+      if (strike && !st.s) s = wrap('~~', s);
+      if (em && !st.i) s = wrap('_', s);
+      if (bold && !st.b) s = wrap('**', s);
+      if (tag === 'A') {
+        const href = httpUrl(node.getAttribute('href'));
+        const text = s.trim();
+        if (href && text && !/^!\[/.test(text)) {
+          if (text === href || text === href.replace(/\/$/, '')) return href;
+          return s.replace(text, '[' + text.replace(/[\[\]]/g, '') + '](' + href + ')');
+        }
+      }
+      return s;
+    }
+    // A run of inline content, tidied into lines: no space at either end of a line.
+    const tidy = (s) => s.split('\n').map((l) => l.replace(/ +/g, ' ').trim()).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+    function blockOf(el) {
+      const tag = el.nodeName;
+      if (/^H[1-6]$/.test(tag)) {
+        const text = tidy(inlineOf(el)).replace(/\n+/g, ' ').replace(/^\*\*([\s\S]*)\*\*$/, '$1');
+        return text ? '#'.repeat(Number(tag[1])) + ' ' + text : '';
+      }
+      if (tag === 'HR') return '---';
+      if (tag === 'PRE') {
+        const code = el.textContent.replace(/\n$/, '');
+        return code.trim() ? '```\n' + code + '\n```' : '';
+      }
+      if (tag === 'BLOCKQUOTE') {
+        const inner = blocks(el);
+        return inner ? inner.split('\n').map((l) => (l ? '> ' + l : '>')).join('\n') : '';
+      }
+      if (tag === 'UL' || tag === 'OL') {
+        const start = tag === 'OL' ? Number(el.getAttribute('start')) || 1 : 1;
+        let n = 0;
+        return [...el.children].map((li) => {
+          if (li.nodeName === 'UL' || li.nodeName === 'OL') return blockOf(li).replace(/^/gm, '   ');
+          const marker = tag === 'OL' ? (start + n++) + '. ' : '- ';
+          const body = blocks(li).replace(/\n{2,}/g, '\n');
+          if (!body) return '';
+          return marker + body.split('\n').join('\n' + ' '.repeat(marker.length));
+        }).filter(Boolean).join('\n');
+      }
+      if (tag === 'TABLE' || tag === 'THEAD' || tag === 'TBODY' || tag === 'TFOOT') {
+        return [...el.querySelectorAll('tr')].filter((tr) => tr.closest('table') === (tag === 'TABLE' ? el : el.closest('table')))
+          .map((tr) => [...tr.children].map((c) => tidy(inlineOf(c)).replace(/\n+/g, ' ')).filter(Boolean).join(' | '))
+          .filter(Boolean).join('\n');
+      }
+      return blocks(el);
+    }
+    function inlineOf(el) {
+      let s = '';
+      el.childNodes.forEach((c) => { s += inline(c, {}); });
+      return s;
+    }
+    // A container's children: inline runs become paragraphs, blocks are converted, and
+    // the two are kept apart by a blank line.
+    function blocks(el) {
+      const out = [];
+      let run = '';
+      const flush = () => { const p = tidy(run); if (p) out.push(p); run = ''; };
+      el.childNodes.forEach((c) => {
+        if (c.nodeType === 1 && MD_BLOCK.test(c.nodeName)) { flush(); const b = blockOf(c); if (b) out.push(b); }
+        else run += inline(c, {});
+      });
+      flush();
+      return out.join('\n\n');
+    }
+    const md = blocks(body).replace(/\n{3,}/g, '\n\n').trim();
+    return md && MD_MARKUP.test(md) ? md : null;
+  }
+
+  // TEXT WITH nostr: MENTIONS IN IT, PASTED, COMES IN AS PILLS. Through insertHTML, so the
+  // paste is one step on the undo stack; text with no mention goes through insertText as it
+  // always did.
+  function insertPasted(editor, text) {
+    // A Windows clipboard ends lines with \r\n and an old Mac one with \r; left in, the \r
+    // is published as part of the note. Chrome cleaned it on the way in and Firefox did not.
+    const s = String(text || '').replace(/\r\n?/g, '\n');
+    if (!/nostr:(npub1|nprofile1)/.test(s)) { document.execCommand('insertText', false, s); return; }
+    const scratch = document.createElement('div');
+    hydrateEditorFromText(scratch, s, { holdLastLine: false }); // pasted mid-note, not a note's end
+    scratch.querySelectorAll('.mention-pill').forEach((p) => p.setAttribute('data-pasted', ''));
+    // Anchors are the editor's own business, added again once the paste is in. The empty
+    // span marks where the paste ends: the caret goes there, which the browser left nowhere
+    // when the paste ended on a pill, and the next letter typed was lost.
+    document.execCommand('insertHTML', false, scratch.innerHTML.replace(/\u200B/g, '') + '<span data-paste-end></span>');
+    const end = editor.querySelector('[data-paste-end]');
+    if (end) {
+      const r = document.createRange();
+      r.setStartBefore(end);
+      r.collapse(true);
+      end.remove();
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(r);
+    }
+    // The names: insertHTML made new pills from the markup, so the lookups hydrate started
+    // were for copies no one sees.
+    editor.querySelectorAll('.mention-pill[data-pasted]').forEach((p) => {
+      p.removeAttribute('data-pasted');
+      p.contentEditable = 'false';
+      const ref = readRef(p.dataset.bech32.replace(/^nostr:/, ''), deps.NT);
+      const d = ref && ref.decoded;
+      const pk = d ? (d.type === 'npub' ? d.data : d.data.pubkey) : null;
+      if (!pk) return;
+      const cached = deps.cachedProfile(pk);
+      if (cached && cached.name) p.textContent = '@' + cached.name;
+      else deps.fetchPreviewProfile(pk).then((pr) => { if (pr && pr.name) p.textContent = '@' + pr.name; });
+    });
+    editor.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  // Inverse of serializeEditor: rebuild the editor's rich DOM (mention pills,
+  // line breaks) from a raw saved string — used when resuming a draft, since
+  // just setting .textContent leaves 'nostr:npub1…' as visible plain text
+  // instead of a resolved @name pill. A pill's name resolves instantly from the
+  // profile cache when available, else shows a short npub that upgrades in
+  // place once the profile loads (same pattern as embed cards elsewhere).
+  function hydrateEditorFromText(editor, text, { holdLastLine = true } = {}) {
+    editor.innerHTML = '';
+    const appendText = (s) => {
+      const lines = s.split('\n');
+      lines.forEach((line, i) => {
+        if (line) editor.appendChild(document.createTextNode(line));
+        if (i < lines.length - 1) editor.appendChild(document.createElement('br'));
+      });
+    };
+    const mentionRe = /nostr:(npub1[0-9a-z]+|nprofile1[0-9a-z]+)/g;
+    let last = 0, m;
+    while ((m = mentionRe.exec(text)) !== null) {
+      if (m.index > last) appendText(text.slice(last, m.index));
+      // Only as much as decodes: a draft saved before the space above came back with the
+      // next word glued on, and that word is text again, not part of the pill.
+      const ref = readRef(m[1], deps.NT);
+      if (ref) mentionRe.lastIndex = m.index + 'nostr:'.length + ref.code.length;
+      const bech32 = ref ? 'nostr:' + ref.code : m[0];
+      let pubkey = null, fallback = bech32;
+      try {
+        const decoded = ref ? ref.decoded : deps.NT.nip19.decode(m[1]);
+        pubkey = decoded.type === 'npub' ? decoded.data : decoded.data.pubkey;
+        fallback = deps.shortNpub(deps.NT.nip19.npubEncode(pubkey));
+      } catch (_) {}
+      const pill = document.createElement('span');
+      pill.className = 'mention-pill';
+      pill.contentEditable = 'false';
+      pill.dataset.bech32 = bech32;
+      const cached = pubkey ? deps.cachedProfile(pubkey) : null;
+      pill.textContent = '@' + (cached && cached.name ? cached.name : fallback);
+      editor.appendChild(pill);
+      last = mentionRe.lastIndex;
+      // A plain space right after the mention is the pill's trailing separator —
+      // render it as NBSP (matching live insertion via the @-autocomplete) so it
+      // isn't visually collapsed; serializeEditor turns it back into a space.
+      if (text[last] === ' ') {
+        editor.appendChild(document.createTextNode(' '));
+        last += 1;
+        mentionRe.lastIndex = last;
+      }
+      if (pubkey && !(cached && cached.name)) {
+        deps.fetchPreviewProfile(pubkey).then((p) => { if (p && p.name) pill.textContent = '@' + p.name; });
+      }
+    }
+    if (last < text.length) appendText(text.slice(last));
+    // A note that ends on a new line ends with an empty line, and a browser shows an empty
+    // last line only with a <br> holding it open (serializeEditor reads that one as no
+    // break). Without it the line was not there to type on, and the draft lost it.
+    if (holdLastLine && text.endsWith('\n')) editor.appendChild(document.createElement('br'));
+    anchorPills(editor);
+  }
+
+  // ---- a URL pasted on its own is a picture asking to be attached ----
+  //
+  // Offered, never done — the same rule the tracking-tags row lives by. A paste whose
+  // whole content is one image URL gets a single offer to become an attachment
+  // (thumbnail in the strip, URL appended to the note's end at publish, exactly as
+  // if it had been uploaded), and the offer is one button that the next keystroke
+  // withdraws. Riding inside a larger paste is prose and stays prose.
+  // A VIDEO IS AS ATTACHABLE AS AN IMAGE. This gated on IMG_EXT alone, so pasting a
+  // .mp4 got no offer at all and the URL stayed as prose, while the identical paste of
+  // a .png became an attachment. VID_EXT was already in this file and already used to
+  // decide how a URL RENDERS; the offer simply never asked it.
+  function loneMediaUrl(text) {
+    const s = String(text || '').trim();
+    if (!/^https?:\/\/\S+$/i.test(s)) return null;
+    return IMG_EXT.test(s) || VID_EXT.test(s) ? s : null;
+  }
+
+  // Which of the two it was, for the draft slot. Read here rather than at each call
+  // site, so the thumbnail strip and the offer can never disagree about a URL.
+  function urlIsVideo(url) {
+    return VID_EXT.test(String(url || ''));
+  }
+
+  // Where the pasted URL landed. An offer may cut it out of the text only when it
+  // sits on a boundary: alone on its line, or glued to either END of one — a paste
+  // straight after a paragraph, no return pressed, is attach intent too. A URL with
+  // words on both sides of it is inside a sentence and stays in the sentence; a URL
+  // appearing twice on one line is ambiguous and declines.
+  function urlOnBoundary(lines, url) {
+    for (const raw of lines) {
+      const t = raw.trim();
+      if (!t.includes(url)) continue;
+      const parts = t.split(url);
+      if (parts.length !== 2) return false;
+      return !parts[0].trim() || !parts[1].trim();
+    }
+    return false;
+  }
+
+  // Cut a URL line back out of the editor — the reverse of appending it. Text-node
+  // surgery rather than a rebuild, so the caret and every other word stay where the
+  // user left them.
+  function removeUrlFromEditor(editor, url) {
+    const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+    let wn;
+    while ((wn = walker.nextNode())) {
+      if (wn.textContent.includes(url)) {
+        wn.textContent = wn.textContent.replace('\n' + url, '').replace(url, '');
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // A rich text box with @mention autocomplete and pills, shared by the note
+  // composer and the page-comment modal. Owns its own dropdown state so two can
+  // coexist; the caller supplies `onChange` for whatever it does with the text
+  // (draft autosave, enabling a Post button, repainting a preview).
+  //
+  // Returns { wrap, editor, getText, setText, focus, close }. Append `wrap` —
+  // not `editor` — since the dropdown positions itself against the wrapper.
+  function createMentionEditor(opts) {
+    const onChange = (opts && opts.onChange) || (() => {});
+    // The attachment offer only exists where a draft can hold one: the note
+    // composers hand in the conversion, and an editor without one (the page-comment
+    // box) never shows the row.
+    const onAttachUrl = (opts && opts.onAttachUrl) || null;
+    const editor = h('div', { className: 'compose-text compose-editor is-empty', contentEditable: 'true' }); // dir: see syncEmptyClass
+    editor.dataset.placeholder = (opts && opts.placeholder) || '';
+    const wrap = h('div', { className: 'compose-editor-wrap' });
+    wrap.append(editor);
+
+    let acDropdown = null, acResults = [], acIndex = 0;
+    let acSeq = 0, acSuggestTimer = null; // guard stale async + debounce global search
+    let reAskDismissed = false; // "Just my follows" answered on the ask that returns when nothing matches
+
+    function syncEmptyClass() {
+      // EMPTY MEANS NOTHING AT ALL. A space or a line break is something the writer put
+      // there, at the start of a note as anywhere else; this once tested the trimmed text,
+      // so a space or Enter in an empty editor was wiped as it was typed. The lone <br> a
+      // browser leaves when everything is deleted still counts as empty, and is left where
+      // it is: clearing it by hand cut the browser's undo history, so in Firefox Select
+      // All, Delete, then Undo brought nothing back.
+      const isEmpty = !editor.textContent && !editor.querySelector('[data-bech32]')
+        && editor.querySelectorAll('br').length <= 1;
+      editor.classList.toggle('is-empty', isEmpty);
+      // UNTIL THERE IS A LETTER, THE EDITOR GOES THE PAGE'S WAY. dir="auto" with nothing to
+      // go by reads as left-to-right, so in Arabic, Hebrew, Persian or Urdu the placeholder
+      // and the caret sat at the left of an empty editor. The first letter decides after that.
+      const decided = isEmpty ? false : (/\p{L}/u.test(editor.textContent) || !!editor.querySelector('[data-bech32]'));
+      if (decided) editor.dir = 'auto'; else editor.removeAttribute('dir');
+    }
+
+    // Report the text upward, keeping the placeholder state in sync first.
+    function emit() {
+      anchorPills(editor);
+      const text = serializeEditor(editor);
+      syncEmptyClass();
+      onChange(text);
+    }
+
+    function getCaretContext() {
+      const sel = window.getSelection();
+      if (!sel.rangeCount) return null;
+      const range = sel.getRangeAt(0);
+      if (!range.collapsed) return null;
+      const node = range.startContainer;
+      if (node.nodeType !== Node.TEXT_NODE || !editor.contains(node)) return null;
+      const before = node.textContent.slice(0, range.startOffset);
+      // The @ must sit at a word boundary — line start, whitespace, punctuation, or
+      // emoji before it. A letter or digit before it means an address being typed
+      // (daniel@example.com), and a popup there ends with a pill spliced into the
+      // middle of it. A consuming prefix rather than a lookbehind: WebViews this
+      // ships in do not all support lookbehind. Same rule BARE_REF_RE applies to
+      // bare bech32 references: a reference embedded in a word isn't a reference.
+      const match = before.match(/(?:^|[^\p{L}\p{N}_])@([^\s@]*)$/u);
+      if (!match) return null;
+      return { node, query: match[1] };
+    }
+
+    function closeAcDropdown() {
+      if (acDropdown) { acDropdown.remove(); acDropdown = null; }
+      acResults = []; acIndex = 0;
+    }
+
+    function updateAcActiveItem() {
+      if (!acDropdown) return;
+      acDropdown.querySelectorAll('.ac-item').forEach((el, i) => el.classList.toggle('active', i === acIndex));
+    }
+
+    function selectAcItem(contact, query) {
+      const sel = window.getSelection();
+      if (!sel.rangeCount) return;
+      const range = sel.getRangeAt(0);
+      const node = range.startContainer;
+      if (node.nodeType !== Node.TEXT_NODE) return;
+      const offset = range.startOffset;
+      // Text before the '@'. Trim any trailing whitespace and re-add exactly one
+      // space, so the mention is always preceded by a single space (or nothing
+      // at line start). Trimming the whole run both collapses a stray double
+      // space and sidesteps the old single-code-unit check, which mis-read an
+      // emoji's surrogate half (e.g. 🤝) as a non-space char and inserted an
+      // extra space.
+      const beforeAt = node.textContent.slice(0, Math.max(0, offset - (query.length + 1)));
+      const trimmed = beforeAt.replace(/\s+$/, '');
+      const atStart = trimmed.length;
+      const needsLeadingSpace = trimmed.length > 0;
+      range.setStart(node, atStart);
+      range.setEnd(node, offset);
+      range.deleteContents();
+      const pill = document.createElement('span');
+      pill.className = 'mention-pill';
+      pill.contentEditable = 'false';
+      pill.dataset.bech32 = 'nostr:' + deps.NT.nip19.npubEncode(contact.pubkey);
+      pill.textContent = '@' + contact.name;
+      if (needsLeadingSpace) range.insertNode(document.createTextNode(' '));
+      range.collapse(false);
+      range.insertNode(pill);
+      // NBSP after pill: never collapsed by the browser, normalized to space by serializer.
+      const trailingSpace = document.createTextNode(' ');
+      range.setStartAfter(pill);
+      range.insertNode(trailingSpace);
+      // Inside the space's own text node, not "after it" among the editor's children: emit()
+      // adds an anchor in front of a pill that starts a line, which moves every child one
+      // place on, and a caret held as a child index slid back in front of the space. The
+      // next word typed then went against the pill.
+      range.setStart(trailingSpace, trailingSpace.length);
+      range.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(range);
+      closeAcDropdown();
+      emit();
+    }
+
+    // Anchor the dropdown just under the caret line rather than the bottom of
+    // the (tall) editor box. Falls back to the CSS default if no caret rect.
+    function positionAcDropdown() {
+      if (!acDropdown) return;
+      try {
+        const sel = window.getSelection();
+        if (!sel.rangeCount) return;
+        const r = sel.getRangeAt(0).getBoundingClientRect();
+        if (!r || (!r.top && !r.bottom)) return;
+        const wrapRect = wrap.getBoundingClientRect();
+        acDropdown.style.top = Math.round(r.bottom - wrapRect.top + 4) + 'px';
+      } catch (_) {}
+    }
+
+    // `loading` shows a "Searching Nostr…" footer while the global lookup runs,
+    // and keeps the dropdown open even when there are no local matches yet.
+    // `askEl` is the one-time name-search ask standing in for that footer
+    // while the setting is unset (see the NA block).
+    function renderAcResults(items, ctx, loading, askEl) {
+      acResults = items;
+      if (!acResults.length && !loading && !askEl) { closeAcDropdown(); return; }
+      acIndex = Math.max(0, Math.min(acIndex, Math.max(0, acResults.length - 1)));
+      if (!acDropdown) {
+        acDropdown = h('div', { className: 'ac-dropdown' });
+        wrap.append(acDropdown);
+      }
+      positionAcDropdown();
+      acDropdown.innerHTML = '';
+      acResults.forEach((c, i) => {
+        const item = h('div', { className: 'ac-item' + (i === acIndex ? ' active' : '') });
+        const av = h('span', { className: 'ac-item-av' });
+        deps.applyAvatar(av, c.picture ? { picture: c.picture } : {});
+        item.append(av, h('span', { className: 'ac-item-name', textContent: '@' + c.name }));
+        item.addEventListener('mousedown', (e) => {
+          e.preventDefault();
+          const fresh = getCaretContext();
+          // The popup may outlive its context (text moved since it opened). A fresh
+          // null means the @ no longer sits at a boundary — picking now would splice
+          // the pill into whatever word is there now, so the pick is refused.
+          if (!fresh) return;
+          selectAcItem(c, fresh.query);
+        });
+        acDropdown.append(item);
+      });
+      if (loading) {
+        acDropdown.append(h('div', { className: 'ac-loading' }, [
+          h('span', { className: 'ac-spinner' }),
+          h('span', { textContent: acResults.length ? t('Searching more…') : t('Searching Nostr…') }),
+        ]));
+      }
+      // The ask goes ABOVE the results: the box caps at 200px and scrolls, and
+      // appended last it landed below the fold as soon as matches rendered —
+      // withdrawn from view exactly when results populated, unread.
+      if (askEl) acDropdown.prepend(askEl);
+    }
+
+    // Two async sources feed the dropdown: your follow list (instant from
+    // cache, else a slow first relay load) and a global Nostr search. NEVER
+    // block the UI on the follow list — the first load hits relays and can take
+    // many seconds. Paint immediately (with a spinner), then repaint as each
+    // source resolves. `paint()` renders the deduped union + loading state.
+    async function updateAcDropdown() {
+      const ctx = getCaretContext();
+      if (!ctx || ctx.query.length === 0) { reAskDismissed = false; closeAcDropdown(); return; }
+      const seq = ++acSeq;
+      const q = ctx.query.toLowerCase();
+      const willSearchGlobal = ctx.query.length >= 2 && deps.naAvailable();
+
+      const matchFollows = (list) => [...new Map([...(opts?.candidates?.() || []),...list].map(c=>[c.pubkey,c])).values()].filter((c) => c.name && c.name.toLowerCase().includes(q));
+      let followMatches = matchFollows([]);
+      let globals = [];
+      let globalPending = false;
+      let askEl = null; // the one-time name-search ask, while the setting is unset
+      // After a "no", the ask comes back only when the follows have nothing to offer: the
+      // dropdown would be empty, and an empty one hides that a wider search exists. Held
+      // back until the follows have been read, so it does not flash up before they land.
+      let reAsk = null;
+      let followsReady = false;
+      const paint = () => {
+        if (seq !== acSeq) return;
+        const seen = new Set(followMatches.map((c) => c.pubkey));
+        const merged = followMatches.slice();
+        for (const g of globals) { if (!seen.has(g.pubkey)) { seen.add(g.pubkey); merged.push(g); } }
+        const ask = askEl || (reAsk && followsReady && !merged.length && !reAskDismissed ? reAsk : null);
+        renderAcResults(merged.slice(0, 8), ctx, globalPending, ask);
+      };
+
+      // Follows: use the cache synchronously if present; otherwise load in the
+      // background and repaint when ready (no await here).
+      //
+      // Through the page rather than off its own globals. This read used to reach straight
+      // into the panel's followListCache and state.activePubkey, which is exactly the kind
+      // of reach that stops working the moment this file is loaded by anything else: those
+      // names are not in scope here at all, so it would have thrown on the first @ typed in
+      // the expanded composer.
+      const cached = deps.cachedFollowList();
+      if (cached) { followMatches = matchFollows(cached); followsReady = true; }
+      paint(); // instant feedback: local matches (maybe none)
+      if (!cached) {
+        deps.getFollowList().then((list) => { if (seq === acSeq) { followMatches = matchFollows(list); followsReady = true; paint(); } }).catch(() => { if (seq === acSeq) { followsReady = true; paint(); } });
+      }
+
+      // Global search across all of Nostr so you can tag people you don't
+      // follow. Debounced; best-effort — a failure/rate-limit just clears the
+      // spinner and leaves the follow matches. With the name search setting
+      // still unset, the spinner's slot carries the one-time ask instead;
+      // answering it re-enters here with the decision written.
+      if (!willSearchGlobal) return;
+      const na = await deps.naSetting();
+      if (seq !== acSeq) return;
+      if (na === true) {
+        globalPending = true;
+        paint();
+        if (acSuggestTimer) clearTimeout(acSuggestTimer);
+        acSuggestTimer = setTimeout(async () => {
+          const res = await deps.naSuggest(ctx.query);
+          if (seq !== acSeq) return; // query changed since
+          globals = res;
+          globalPending = false;
+          paint();
+        }, 250);
+      } else if (na !== false) {
+        askEl = deps.naAskEl((on) => { deps.naDecide(on).then(updateAcDropdown); });
+        paint();
+      } else {
+        reAsk = deps.naAskEl((on) => {
+          if (!on) { reAskDismissed = true; updateAcDropdown(); return; }
+          deps.naDecide(true).then(updateAcDropdown);
+        });
+        paint();
+      }
+    }
+
+    editor.addEventListener('input', () => {
+      emit();
+      updateAcDropdown();
+      pingActivity(); // composing counts as activity, which keeps auto-lock at bay
+      // Typing does not withdraw the attachment offer — writing the caption that
+      // goes with the picture is exactly what a user who intends to accept is
+      // about to do. The offer re-checks instead: it stands while the URL still
+      // sits on its own line, and goes only when that line does.
+      refreshAttachOffer();
+    });
+
+    // JOINING A LINE THAT STARTS WITH A PILL. Backspace with the caret at the start of such a
+    // line (on its anchor) and Delete at the end of the line above both take the line break
+    // and nothing else, as they would before a word. Left to the browser, the first deleted
+    // only the anchor (nothing visible happened) and the second deleted the pill too.
+    editor.addEventListener('keydown', (e) => {
+      if ((e.key !== 'Backspace' && e.key !== 'Delete') || e.isComposing || acDropdown) return;
+      // Cmd+Backspace (to the start of the line) and its kin are the browser's to do whole.
+      if (e.metaKey || e.ctrlKey) return;
+      const sel = window.getSelection();
+      if (!sel.rangeCount || !sel.isCollapsed) return;
+      const r = sel.getRangeAt(0);
+      const node = r.startContainer; const off = r.startOffset;
+      if (!editor.contains(node)) return;
+      let br = null;
+      if (e.key === 'Backspace') {
+        // On the anchor, with only the anchor before the caret; or just in front of it.
+        let anchor = null;
+        if (isAnchor(node) && !node.textContent.slice(0, off).replace(/\u200B/g, '')) anchor = node;
+        else if (node.nodeType === 1 && isAnchor(node.childNodes[off])) anchor = node.childNodes[off];
+        else if (node.nodeType === 1 && isPill(node.childNodes[off]) && node.childNodes[off - 1] && node.childNodes[off - 1].nodeName === 'BR') br = node.childNodes[off - 1];
+        if (anchor && anchor.previousSibling && anchor.previousSibling.nodeName === 'BR') br = anchor.previousSibling;
+      } else {
+        // At the end of the line above: the next thing after the caret is the break, and the
+        // line it ends starts with a pill (or its anchor).
+        let next = null;
+        if (node.nodeType === Node.TEXT_NODE) next = off >= node.textContent.length ? node.nextSibling : null;
+        else next = node.childNodes[off] || null;
+        if (next && next.nodeName === 'BR' && (isPill(next.nextSibling) || (isAnchor(next.nextSibling) && isPill(next.nextSibling.nextSibling)))) br = next;
+      }
+      if (!br) {
+        // THE ANCHOR IS NOT A CHARACTER ANYONE CAN SEE, so a key acts as if it were not
+        // there: Delete with only anchors between the caret and a pill takes the pill, and so
+        // does Backspace with only anchors between a pill and the caret. Left to the browser,
+        // a click just left of a pill that starts a line put the caret before its anchor, and
+        // Delete took the anchor and nothing visible happened.
+        const pill = e.key === 'Delete' ? pillAhead(node, off) : pillBehind(node, off);
+        if (!pill) return;
+        e.preventDefault();
+        deleteNodes(sel, pill, pill);
+        return;
+      }
+      e.preventDefault();
+      // Only the break: the two lines meet, and the pill stays.
+      deleteNodes(sel, br, br);
+    });
+
+    // A WORD TYPED AGAINST A PILL GETS ITS SPACE AS IT IS TYPED. The saved text always has
+    // one there (serializeEditor), so the screen shows it too, at the keystroke, rather than
+    // after a reload. Through the browser's insert, so undo takes the letter and the space
+    // together.
+    editor.addEventListener('beforeinput', (e) => {
+      if (e.inputType !== 'insertText' || e.isComposing || !e.data || !JOINS_A_KEY.test(e.data)) return;
+      const sel = window.getSelection();
+      if (!sel.rangeCount || !sel.isCollapsed) return;
+      const node = sel.anchorNode; const off = sel.anchorOffset;
+      if (!editor.contains(node) || !pillBehind(node, off)) return;
+      // Only right against it: anchors aside, nothing may stand between the pill and the caret.
+      e.preventDefault();
+      document.execCommand('insertText', false, '\u00a0' + e.data);
+    });
+
+    // A LINE BREAK IS AN UNDO STEP OF ITS OWN, as in any text editor: Cmd+Z after "one",
+    // Enter, "two" takes "two", then the break. Chrome keeps one typing group open across
+    // them once script has touched the editor while it was typed (the empty-state class
+    // does), and undo took the whole note at once. Setting the selection again, to where it
+    // already is, closes the group: before the break, and after it.
+    const closeTyping = () => {
+      const sel = window.getSelection();
+      if (!sel.rangeCount || !editor.contains(sel.anchorNode)) return;
+      const r = sel.getRangeAt(0).cloneRange();
+      sel.removeAllRanges();
+      sel.addRange(r);
+    };
+    const isBreak = (e) => !e.isComposing && (e.inputType === 'insertParagraph' || e.inputType === 'insertLineBreak');
+    editor.addEventListener('beforeinput', (e) => { if (isBreak(e)) closeTyping(); });
+    editor.addEventListener('input', (e) => { if (isBreak(e)) closeTyping(); });
+
+    // EVERY DELETION HERE GOES THROUGH THE BROWSER'S OWN DELETE, on a selection of exactly
+    // what is to go, so it lands on the undo stack: Cmd+Z brings a pill or a line break
+    // back. Removing the nodes by hand, as these keys first did, left nothing to undo.
+    function deleteNodes(sel, first, last) {
+      const r = document.createRange();
+      r.setStartBefore(first);
+      r.setEndAfter(last);
+      sel.removeAllRanges();
+      sel.addRange(r);
+      document.execCommand('delete');
+    }
+
+    // THE ARROW KEYS STEP OVER WHAT CANNOT BE SEEN. An anchor is a character to the browser,
+    // so at a pill that starts a line one press of an arrow moved the caret across it and
+    // nothing visible happened. A move that crossed only anchors moves again.
+    editor.addEventListener('keydown', (e) => {
+      if ((e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') || e.metaKey || e.ctrlKey || e.altKey || e.isComposing || acDropdown) return;
+      const sel = window.getSelection();
+      if (!sel.rangeCount || !sel.modify) return;
+      if (!sel.isCollapsed && !e.shiftKey) return; // collapsing a selection is one step already
+      e.preventDefault();
+      const alter = e.shiftKey ? 'extend' : 'move';
+      // modify() is told the visual side, so right-to-left text moves the way the key points.
+      const side = e.key === 'ArrowLeft' ? 'left' : 'right';
+      for (let i = 0; i < 4; i++) {
+        const fromNode = sel.focusNode; const fromOff = sel.focusOffset;
+        sel.modify(alter, side, 'character');
+        if (sel.focusNode === fromNode && sel.focusOffset === fromOff) break; // the end of the note
+        // What the step crossed, in document order, whichever way it went.
+        const crossed = document.createRange();
+        crossed.setStart(fromNode, fromOff);
+        crossed.collapse(true);
+        if (crossed.comparePoint(sel.focusNode, sel.focusOffset) < 0) crossed.setStart(sel.focusNode, sel.focusOffset);
+        else crossed.setEnd(sel.focusNode, sel.focusOffset);
+        const bit = crossed.cloneContents();
+        const onlyAnchors = !bit.querySelector('*') && bit.textContent && !bit.textContent.replace(/\u200B/g, '');
+        if (!onlyAnchors) break;
+      }
+    });
+
+    // A CLICK ON A PILL PUTS THE CARET BESIDE IT, on the side clicked. Left to the browser,
+    // the click selected the pill with nothing to show it, and the next letter typed
+    // replaced the mention.
+    editor.addEventListener('mousedown', (e) => {
+      const pill = e.target && e.target.closest && e.target.closest('[data-bech32]');
+      if (!pill || !editor.contains(pill) || e.button !== 0 || e.shiftKey) return;
+      e.preventDefault();
+      editor.focus();
+      const box = pill.getBoundingClientRect();
+      const r = document.createRange();
+      if ((e.clientX - box.left) < box.width / 2) r.setStartBefore(pill); else r.setStartAfter(pill);
+      r.collapse(true);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(r);
+    });
+
+    // THE CARET NEVER STANDS INSIDE A PILL. Firefox puts it there: Enter in front of a pill
+    // left it inside the pill on the new line, and a click just left of a pill that starts a
+    // line put it at the pill's end. A pill cannot be edited, so the next letters typed went
+    // nowhere and Delete did nothing. Moved out, it goes to the side a click was nearer, or
+    // in front of the pill when it stood at its start.
+    let lastPress = null;
+    editor.addEventListener('pointerdown', (e) => { lastPress = { x: e.clientX, at: Date.now() }; }, true);
+    const caretOutOfPill = () => {
+      if (!editor.isConnected) { document.removeEventListener('selectionchange', caretOutOfPill); return; }
+      const sel = window.getSelection();
+      if (!sel.rangeCount || !sel.isCollapsed) return;
+      const node = sel.anchorNode;
+      // A CARET BETWEEN TWO LINES BELONGS TO ONE OF THEM. After Select All and the Right
+      // arrow, Firefox leaves the caret in the editor itself, between its line blocks, and the
+      // next Enter made an empty line with whatever came next on another line below it. It
+      // goes to the end of the line before it (ahead of a <br> that only holds that line
+      // open), or to the start of the first line.
+      if (node === editor) {
+        const kids = editor.childNodes;
+        const isLine = (n) => n && n.nodeType === 1 && (n.nodeName === 'DIV' || n.nodeName === 'P');
+        const before = kids[sel.anchorOffset - 1], after = kids[sel.anchorOffset];
+        const r = document.createRange();
+        if (isLine(before)) {
+          const last = before.lastChild;
+          if (last && last.nodeName === 'BR') r.setStartBefore(last); else r.setStart(before, before.childNodes.length);
+        } else if (!before && isLine(after)) r.setStart(after, 0);
+        else return;
+        r.collapse(true);
+        sel.removeAllRanges(); sel.addRange(r);
+        return;
+      }
+      const el = node && (node.nodeType === 1 ? node : node.parentElement);
+      const pill = el && el.closest && el.closest('[data-bech32]');
+      if (!pill || !editor.contains(pill)) return;
+      let before;
+      if (lastPress && Date.now() - lastPress.at < 500) {
+        const box = pill.getBoundingClientRect();
+        before = lastPress.x < box.left + box.width / 2;
+      } else {
+        const ahead = document.createRange();
+        ahead.setStart(pill, 0);
+        ahead.setEnd(node, sel.anchorOffset);
+        before = !ahead.toString();
+      }
+      const r = document.createRange();
+      if (before) r.setStartBefore(pill); else r.setStartAfter(pill);
+      r.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(r);
+    };
+    document.addEventListener('selectionchange', caretOutOfPill);
+
+    // COPY AND CUT CARRY A MENTION AS ITS ADDRESS. The browser copied a pill as the words on
+    // it, "@name", and pasting that back gave text that mentions nobody. What is copied is
+    // the note's own text, nostr: addresses and all, which this editor (and any client)
+    // reads back as the mention.
+    function copySelection(e, cut) {
+      const sel = window.getSelection();
+      if (!sel.rangeCount || sel.isCollapsed || !editor.contains(sel.getRangeAt(0).commonAncestorContainer)) return;
+      const box = document.createElement('div');
+      box.append(sel.getRangeAt(0).cloneContents());
+      // Always the editor's own reading, not only around a mention: Firefox copied lines
+      // with a blank one between them with an extra break, so pasting them back added a line.
+      e.preventDefault();
+      e.clipboardData.setData('text/plain', serializeEditor(box));
+      if (cut) document.execCommand('delete');
+    }
+    editor.addEventListener('copy', (e) => copySelection(e, false));
+    editor.addEventListener('cut', (e) => copySelection(e, true));
+
+    // PASTE AND DROP ARE TEXT, IN EVERY EDITOR. Left to the browser, a contenteditable takes
+    // rich text with its fonts, colors and links, and pictures as inline images that are
+    // never uploaded or published; a drop bypassed the composers' paste handling entirely,
+    // and the page-comment box had none at all. Text comes in as text (mentions as pills,
+    // through insertPasted, so it can be undone). Files go to onFiles where the editor's owner
+    // takes attachments, and are refused where it does not. onPasteText lets an owner take a
+    // paste as something else (a quoted note) by returning true.
+    const onFiles = (opts && opts.onFiles) || null;
+    const onPasteText = (opts && opts.onPasteText) || null;
+    const filesIn = (dt) => [...((dt && dt.files) || [])];
+    const takeText = (text) => {
+      if (!text) return;
+      if (onPasteText && onPasteText(text)) return;
+      insertPasted(editor, text);
+    };
+    editor.addEventListener('paste', (e) => {
+      const dt = e.clipboardData;
+      e.preventDefault();
+      const files = filesIn(dt).filter((f) => f.type.startsWith('image/'));
+      if (files.length) { if (onFiles) onFiles(files, { pasted: true }); return; }
+      takeText(transferText(dt));
+    });
+    // Text dragged within the editor is its own markup moving, and the browser moves it.
+    let draggingInside = false;
+    editor.addEventListener('dragstart', () => { draggingInside = true; });
+    editor.addEventListener('dragend', () => { draggingInside = false; });
+    editor.addEventListener('drop', (e) => {
+      if (draggingInside) { draggingInside = false; return; }
+      e.preventDefault();
+      const dt = e.dataTransfer;
+      const files = filesIn(dt);
+      if (files.length) { if (onFiles) onFiles(files, { pasted: false }); return; }
+      const text = transferText(dt);
+      if (!text) return;
+      // Where it was dropped, as the browser would have put it.
+      let at = null;
+      if (document.caretPositionFromPoint) {
+        const p = document.caretPositionFromPoint(e.clientX, e.clientY);
+        if (p) { at = document.createRange(); at.setStart(p.offsetNode, p.offset); }
+      } else if (document.caretRangeFromPoint) at = document.caretRangeFromPoint(e.clientX, e.clientY);
+      if (at && editor.contains(at.startContainer)) at.collapse(true);
+      else { at = document.createRange(); at.selectNodeContents(editor); at.collapse(false); } // off the text: at its end
+      editor.focus();
+      const sel = window.getSelection();
+      sel.removeAllRanges(); sel.addRange(at);
+      takeText(text);
+    });
+
+    editor.addEventListener('keydown', (e) => {
+      if (!acDropdown) return;
+      if (e.key === 'ArrowDown') { e.preventDefault(); acIndex = Math.min(acIndex + 1, acResults.length - 1); updateAcActiveItem(); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); acIndex = Math.max(acIndex - 1, 0); updateAcActiveItem(); }
+      else if (e.key === 'Enter' || e.key === 'Tab') {
+        if (acResults[acIndex]) {
+          // Same refusal as the mousedown pick: an eager Enter on a popup whose
+          // context has gone stale (the caret now sits mid-word on an address)
+          // must not splice a pill with an empty query — it lands as the word.
+          const ctx = getCaretContext();
+          if (!ctx) return;
+          e.preventDefault();
+          selectAcItem(acResults[acIndex], ctx.query);
+        }
+      } else if (e.key === 'Escape') { e.preventDefault(); closeAcDropdown(); }
+    });
+
+    // A pending one-time ask is a consent question, not search chrome: focus
+    // moving away (a click elsewhere in the panel, another window) must not
+    // withdraw it before it's answered. Escape still dismisses, and an
+    // unanswered ask simply returns on the next @-keystroke.
+    editor.addEventListener('blur', () => setTimeout(() => {
+      if (acDropdown && acDropdown.querySelector('.na-ask')) return;
+      closeAcDropdown();
+    }, 150));
+
+    // ---- the offer, for a link that arrived with a tail ----
+    //
+    // In the wrapper rather than the note composer's own toolbar, because the page
+    // comment box is a composer too and gets its links pasted the same way. Both are
+    // built here, so both get this at once.
+    const trackRow = h('div', { className: 'track-row hidden' });
+    const trackBtn = h('button', { className: 'mini ghost compose-add track-clean', type: 'button' });
+    const trackLabel = h('span', { textContent: t('Remove tracking tags') });
+    trackBtn.append(icon('eye-off'), trackLabel);
+    trackRow.append(trackBtn);
+    wrap.append(trackRow);
+
+    let tracked = [];
+    function scanTracking() {
+      tracked = findTrackedUrls(serializeEditor(editor));
+      if (!tracked.length) { hide(trackRow); return; }
+      // The count only when there is more than one, because "Remove tracking tags from 1
+      // link" is a sentence nobody writes.
+      trackLabel.textContent = tracked.length === 1
+        ? t('Remove tracking tags')
+        : t('Remove tracking tags from {{count}} links', { count: I18N.fmtNum(tracked.length) });
+      show(trackRow);
+    }
+    trackBtn.addEventListener('click', () => {
+      let text = serializeEditor(editor);
+      for (const hit of tracked) text = text.split(hit.raw).join(hit.clean);
+      editor.innerHTML = '';
+      if (text) hydrateEditorFromText(editor, text);
+      syncEmptyClass();
+      emit(); // the draft and the Post button both read the text, not the DOM
+      scanTracking();
+      // BACK WHERE YOU WERE WRITING. The rewrite replaces every node in the editor, and
+      // focus() on its own leaves the caret at the very top, so tapping this would cost
+      // a click to get back to the end of the sentence you were in the middle of. One
+      // button, one tap, nothing to put right afterwards.
+      editor.focus();
+      const sel = window.getSelection();
+      if (sel) {
+        const end = document.createRange();
+        end.selectNodeContents(editor);
+        end.collapse(false);
+        sel.removeAllRanges();
+        sel.addRange(end);
+      }
+    });
+    // AFTER the paste lands, not instead of it. The note composer has its own paste
+    // handler that inserts the plain text itself, and the comment box has none at all;
+    // a scan on the next tick reads whatever either of them ended up with.
+    editor.addEventListener('paste', () => setTimeout(scanTracking, 0));
+
+    // ---- the attachment offer, for a URL pasted on its own ----
+    //
+    // The paste is checked, not the editor: only a paste whose whole content is one
+    // image URL qualifies. The offer sits ABOVE the editor, where the eye starts —
+    // under a long note it was below the fold and read as nothing — and it wears
+    // the accent for the same reason. It stays up while the offered URL still sits
+    // on its own line, so typing the caption beside it never loses the offer; the
+    // moment the line is edited away, the offer follows.
+    const attachRow = h('div', { className: 'attach-row hidden' });
+    const attachBtn = h('button', { className: 'mini ghost compose-add attach-accept', type: 'button' });
+    // Named per paste, not fixed: the offer now covers video too, and "Attach this
+    // image" over an .mp4 is the offer describing something else.
+    const attachLabel = h('span', { textContent: t('Attach this image') });
+    attachBtn.append(icon('plus'), attachLabel);
+    attachRow.append(attachBtn);
+    wrap.prepend(attachRow);
+    let offeredUrl = null;
+    function hideAttachOffer() {
+      offeredUrl = null;
+      attachRow.classList.add('hidden');
+    }
+    function refreshAttachOffer() {
+      if (!offeredUrl) return;
+      if (urlOnBoundary(serializeEditor(editor).split('\n'), offeredUrl)) return;
+      // The line is gone, so the dismissal expires with it: pasting the same URL
+      // afresh later is a new question.
+      attachDismissed.delete(offeredUrl);
+      hideAttachOffer();
+    }
+    attachBtn.addEventListener('click', () => {
+      const url = offeredUrl;
+      hideAttachOffer();
+      if (url) onAttachUrl(url);
+    });
+    // A WAY TO SAY "NOT THIS ONE". The offer stands while the URL line stands —
+    // that is what keeps it from vanishing under the typing — but a user who means
+    // the URL as prose was left with an accented row indefinitely and no answer to
+    // it. The ✕ dismisses for THIS url; the offer returns only after the line has
+    // gone and the url is pasted afresh, so a deliberate no is not a forever no.
+    const attachDismissed = new Set();
+    const attachX = h('button', { className: 'attach-x', title: t('Keep it as text'), type: 'button' });
+    attachX.append(icon('x'));
+    attachRow.append(attachX);
+    attachX.addEventListener('click', () => {
+      if (offeredUrl) attachDismissed.add(offeredUrl);
+      hideAttachOffer();
+    });
+    editor.addEventListener('paste', (e) => {
+      if (!onAttachUrl) return;
+      const url = loneMediaUrl(e.clipboardData && e.clipboardData.getData('text/plain'));
+      if (!url || attachDismissed.has(url)) return;
+      setTimeout(() => {
+        // On a line boundary — alone on the line, or glued to one end of it. A URL
+        // with words on both sides is inside a sentence, and the offer would be to
+        // rip it out of one.
+        if (!urlOnBoundary(serializeEditor(editor).split('\n'), url)) return;
+        offeredUrl = url;
+        attachLabel.textContent = urlIsVideo(url) ? t('Attach this video') : t('Attach this image');
+        attachRow.classList.remove('hidden');
+      }, 0);
+    });
+
+    // WHERE THE CARET WAS. A toolbar button takes focus, and the picker it opens takes
+    // it again, so by the time something is chosen the editor has no selection of its
+    // own. The last range seen inside it is kept for insertText to come back to.
+    let lastRange = null;
+    function rememberCaret() {
+      const sel = window.getSelection();
+      if (!sel || !sel.rangeCount) return;
+      const r = sel.getRangeAt(0);
+      if (editor.contains(r.startContainer) && editor.contains(r.endContainer)) lastRange = r.cloneRange();
+    }
+    ['keyup', 'mouseup', 'input', 'blur'].forEach((ev) => editor.addEventListener(ev, rememberCaret));
+
+    // Text at the caret, or the end when there is none to return to, with the caret left
+    // after it. A text node rather than execCommand, so the emoji goes in whole, and never
+    // inside a mention pill: a range that sits in one is moved to just after it.
+    function insertText(text) {
+      if (!text) return;
+      editor.focus();
+      let range = lastRange && editor.contains(lastRange.startContainer) && editor.contains(lastRange.endContainer)
+        ? lastRange : null;
+      if (!range) {
+        range = document.createRange();
+        range.selectNodeContents(editor);
+        range.collapse(false);
+      }
+      const pill = (n) => (n.nodeType === Node.ELEMENT_NODE ? n : n.parentElement)?.closest?.('[data-bech32]');
+      const inside = pill(range.startContainer);
+      if (inside) { range.setStartAfter(inside); range.collapse(true); }
+      range.deleteContents();
+      const node = document.createTextNode(text);
+      range.insertNode(node);
+      range.setStartAfter(node);
+      range.collapse(true);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      lastRange = range.cloneRange();
+      emit();
+    }
+
+    return {
+      wrap,
+      editor,
+      insertText,
+      getText: () => serializeEditor(editor),
+      // Pasted text at the caret, as the paste handlers insert it: mentions in it come in as
+      // pills, through the browser's own insert so the paste can be undone.
+      insertPasted: (text) => insertPasted(editor, text),
+      // Re-read the editor after the caller mutated its DOM directly (e.g.
+      // appending an uploaded media URL) so the text, placeholder and any
+      // onChange-driven state agree with what's on screen.
+      sync: emit,
+      setText(text) {
+        editor.innerHTML = '';
+        if (text) hydrateEditorFromText(editor, text);
+        syncEmptyClass();
+        // A paste is not the only way a tail arrives. This is the path a restored draft
+        // takes, so a link pasted yesterday is still offered today.
+        scanTracking();
+      },
+      focus: () => editor.focus(),
+      close: closeAcDropdown,
+      refreshSuggestions: updateAcDropdown,
+    };
+  }
+
+  // ---- the rest of a composer's furniture ----
+  //
+  // Rendering a note preview, putting a file on a media server, and mining a proof of
+  // work. All three were the panel's, and all three are things any composer needs, so
+  // they travel with the editor rather than being rebuilt beside it.
+  //
+  // Their collaborators are injected like the editor's. The relay reads are the ones
+  // that matter: this file never touches the panel's pool, so a page hands in its own
+  // poolGet and poolQuerySync and the preview resolves mentions and embeds through
+  // whatever sockets that page already owns.
+  async function resolveMentions(mentions) {
+    // Only fetch pubkeys not already in the shared profile cache; batch the rest
+    // in one query (efficient for many authors) and populate the shared cache so
+    // these results are reused by profile previews and future mentions.
+    //
+    // ASKED OF purplepag.es TOO, and A MISS IS NOT CACHED. The configured relays alone
+    // rarely carry a stranger's kind:0, and a miss written to the cache as an empty profile
+    // read as "this person has no name" to everything after it: the full-size composer's
+    // preview showed the mention, and then the embedded note's author, as an npub.
+    const named = (pk) => { const r = deps.cachedProfile(pk); return !!(r && r.name); };
+    const need = [...new Set(mentions.map((x) => x.pubkey))].filter((pk) => !named(pk));
+    if (need.length) {
+      try {
+        const relays = [...new Set([...(await deps.relayUrls(false)), 'wss://purplepag.es'])];
+        const events = await Promise.race([
+          deps.poolQuerySync(relays, { kinds: [0], authors: need }),
+          new Promise((res) => setTimeout(() => res([]), 6000)),
+        ]);
+        const latest = {};
+        (events || []).forEach((ev) => {
+          if (!latest[ev.pubkey] || ev.created_at > latest[ev.pubkey].created_at) latest[ev.pubkey] = ev;
+        });
+        need.forEach((pk) => {
+          if (!latest[pk]) return;
+          let content = {};
+          try { content = JSON.parse(latest[pk].content) || {}; } catch (_) {}
+          deps.cacheProfile(pk, content);
+        });
+      } catch (_) {}
+    }
+    mentions.forEach(({ el, pubkey }) => {
+      // Through cachedProfile rather than reaching into the Map it reads, so this works
+      // in any page that can answer the question rather than only the one that owns it.
+      const rec = deps.cachedProfile(pubkey);
+      if (rec && rec.name) el.textContent = '@' + rec.name;
+    });
+  }
+
+  function renderNoteText(container, text, maxLen) {
+    const mentions = [];
+    const quotes = [];
+    let last = 0;
+    let used = 0;
+    let truncated = false;
+    // Set after a block-level item: the next text run's leading whitespace
+    // would render under pre-wrap as a blank line stacked on the item's margin.
+    let skipLead = false;
+    let m;
+    PREVIEW_RE.lastIndex = 0;
+    const pushText = (s) => {
+      if (!s || truncated) return;
+      if (skipLead) { s = s.replace(/^\s+/, ''); skipLead = false; if (!s) return; }
+      if (used + s.length > maxLen) {
+        container.append(document.createTextNode(s.slice(0, Math.max(0, maxLen - used)) + '…'));
+        truncated = true;
+      } else {
+        container.append(document.createTextNode(s));
+        used += s.length;
+      }
+    };
+    // Media and the quote box are block-level and carry their own margins, so
+    // the newlines an author puts around the ref are padding on top of that —
+    // pre-wrap renders each one as a full empty line between the prose and the
+    // block. Trim the whitespace off the text node before the block and out of
+    // the run after it; the block's margin is the separation. Mentions and
+    // plain links stay inline, which is why only this path trims.
+    const pushBlock = (el) => {
+      const tail = container.lastChild;
+      if (tail && tail.nodeType === Node.TEXT_NODE) tail.textContent = tail.textContent.replace(/\s+$/, '');
+      container.append(el);
+      skipLead = true;
+    };
+    while ((m = PREVIEW_RE.exec(text)) !== null) {
+      if (m.index > last) pushText(text.slice(last, m.index));
+      // Text before this token filled the budget → stop; don't render the token
+      // (mention/link/media) that sits past the truncation point.
+      if (truncated) break;
+      if (m[1]) {
+        const url = m[1];
+        if (IMG_EXT.test(url)) {
+          const im = document.createElement('img');
+          im.className = 'note-media';
+          im.referrerPolicy = 'no-referrer';
+          im.src = url;
+          pushBlock(im);
+        } else if (VID_EXT.test(url)) {
+          const v = document.createElement('video');
+          v.className = 'note-media';
+          v.controls = true;
+          // Same host-privacy reason the img branch gives: no referrer to media hosts.
+          v.referrerPolicy = 'no-referrer';
+          v.src = url;
+          pushBlock(v);
+        } else {
+          const a = document.createElement('a');
+          a.href = url; a.target = '_blank'; a.rel = 'noreferrer noopener';
+          a.textContent = url;
+          container.append(a);
+        }
+      } else if (m[2]) {
+        const bech = m[2];
+        let d = null;
+        try { d = deps.NT.nip19.decode(bech); } catch (_) {}
+        if (d && (d.type === 'npub' || d.type === 'nprofile')) {
+          const pubkey = d.type === 'npub' ? d.data : d.data.pubkey;
+          const span = h('span', { className: 'mention', textContent: '@' + bech.slice(0, 10) + '…' });
+          if (pubkey) mentions.push({ el: span, pubkey });
+          container.append(span);
+        } else {
+          // Nested note/nevent/naddr ref — one level down only: a truncated
+          // link-out preview (see resolveQuotePreviews), never a second full
+          // embed card. Quoting a note that quotes a note is common, and the
+          // old plain "quoted note" link showed nothing of what's inside.
+          const a = document.createElement('a');
+          a.className = 'quote-inline loading';
+          a.href = 'https://njump.me/' + bech;
+          a.target = '_blank'; a.rel = 'noreferrer noopener';
+          a.textContent = t('quoted note…');
+          quotes.push({ el: a, bech });
+          pushBlock(a);
+        }
+      } else if (m[3]) {
+        // A fence is block-level, so it goes through pushBlock and takes the newlines
+        // around it with it, the same as an image or a quote box.
+        //
+        // COUNTED AGAINST THE CAP, or a truncated context strip could be one enormous
+        // listing. It is counted whole and refused whole: half a code block is worse
+        // than a line saying there is one, because a reader cannot tell a cut from the
+        // code actually ending there.
+        if (!truncated) {
+          if (used + m[3].length > maxLen) { pushText('…'); truncated = true; }
+          else { pushBlock(codeBlockEl(m[3])); used += m[3].length; }
+        }
+      } else if (m[4]) {
+        if (!truncated) {
+          if (used + m[4].length > maxLen) { pushText('…'); truncated = true; }
+          else { container.append(codeInlineEl(m[4])); used += m[4].length; }
+        }
+      }
+      last = PREVIEW_RE.lastIndex;
+    }
+    if (last < text.length) pushText(text.slice(last));
+    resolveMentions(mentions);
+    resolveQuotePreviews(quotes);
+  }
+
+  async function fetchBlossomServers(pubkey) {
+    const cached = _blossomServerCache.get(pubkey);
+    if (cached && cached.expiresAt > Date.now()) return cached.servers;
+    let servers = [];
+    try {
+      // Server lists are published to the account's write relays. Settings'
+      // bootstrap set alone can miss them even when another client finds them.
+      // Use the shared account policy in both composers, including write-only
+      // relays and honoring the account's choice to exclude bootstrap relays.
+      const map = await deps.call({ type: 'SIDECAR_GET_ACCOUNT_RELAYS', pubkey });
+      const relays = Object.keys(map || {}).filter((url) => map[url].read || map[url].write);
+      if (!relays.length) return [];
+      const ev = await deps.poolGet(relays, { kinds: [BLOSSOM_SERVER_LIST_KIND], authors: [pubkey] });
+      if (ev) {
+        servers = ev.tags
+          .filter((t) => t[0] === 'server' && t[1] && t[1].startsWith('https://'))
+          .map((t) => t[1].replace(/\/$/, ''));
+      }
+    } catch (e) {
+      // NOT SILENT. This swallowed a ReferenceError for BLOSSOM_SERVER_LIST_KIND, left
+      // behind in the panel when the uploader moved here, and an empty list reads exactly
+      // like an account with no Blossom server: every upload went to nostr.build instead,
+      // in both composers, with nothing said anywhere.
+      uploadLog('warn', 'could not read the Blossom server list', { error: String((e && e.message) || e) });
+    }
+    // A relay failure or a missing event is not proof that this account has no
+    // Blossom servers. Cache only usable lists, so the next upload can recover
+    // immediately instead of silently using nostr.build for another five minutes.
+    if (servers.length) {
+      _blossomServerCache.set(pubkey, {
+        servers, expiresAt: Date.now() + BLOSSOM_CACHE_TTL, staleUntil: Date.now() + BLOSSOM_STALE_TTL,
+      });
+      return servers;
+    }
+    // THE LAST GOOD LIST, WHEN THE REFRESH COMES BACK EMPTY. A relay that is slow or down for
+    // one lookup said nothing about the account's servers, and answering "none" sent the
+    // upload to nostr.build: the same image went to the person's own server one minute and
+    // not the next. The old entry stays expired, so the next upload asks again, and it is
+    // only used for an hour, so a list the person really did clear is not honored forever.
+    if (cached && cached.staleUntil > Date.now()) {
+      uploadLog('warn', 'could not refresh the Blossom server list; using the last one that worked', { servers: cached.servers });
+      return cached.servers;
+    }
+    _blossomServerCache.delete(pubkey);
+    return servers;
+  }
+
+  async function uploadToBlossom(file, servers, forPubkey) {
+    const buffer = await file.arrayBuffer();
+    const hash = await sha256Hex(buffer);
+    const now = Math.floor(Date.now() / 1000);
+    const authEvent = {
+      kind: BLOSSOM_AUTH_KIND,
+      created_at: now,
+      tags: [['t', 'upload'], ['x', hash], ['expiration', String(now + 300)]],
+      content: 'Upload file',
+    };
+    const signed = await deps.call({ type: 'SIDECAR_OWNER_SIGN', event: authEvent, expectedPubkey: forPubkey });
+    const authorization = 'Nostr ' + btoa(JSON.stringify(signed));
+    let lastError;
+    for (const server of servers) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), blossomTimeoutFor(file));
+      try {
+        const resp = await fetch(server + '/upload', {
+          method: 'PUT',
+          body: file,
+          headers: { Authorization: authorization, 'Content-Type': file.type || 'application/octet-stream' },
+          signal: controller.signal,
+        });
+        clearTimeout(timer);
+        if (!resp.ok) {
+          // THE SERVER SAYS WHY, in an X-Reason header (BUD-01), and the status alone threw it
+          // away: a 403 could be a banned type, a quota, a closed list or a bad signature, and
+          // the notice could only say "HTTP 403". The host is named too, so a list of several
+          // servers says which one answered.
+          const why = resp.headers && typeof resp.headers.get === 'function' ? resp.headers.get('X-Reason') : null;
+          const host = server.replace(/^https?:\/\//, '');
+          throw new Error(why
+            ? t('{{host}} answered HTTP {{status}}: {{reason}}', { host, status: resp.status, reason: why })
+            : t('{{host}} answered HTTP {{status}}', { host, status: resp.status }));
+        }
+        const data = await resp.json().catch(() => null);
+        if (data && data.url) return data.url;
+        throw new Error(t('No URL in Blossom response'));
+      } catch (e) {
+        clearTimeout(timer);
+        uploadLog('warn', 'Blossom upload failed', { server, error: e && e.name === 'AbortError' ? 'timed out' : String((e && e.message) || e), type: file.type, bytes: file.size });
+        lastError = e;
+      }
+    }
+    throw lastError || new Error(t('All Blossom servers failed'));
+  }
+
+  // Every upload decision, in the console and, in an unpacked build, in Settings → Developer →
+  // Debug log, which keeps it across the panel closing. The console was the only record, so
+  // finding out why a file went to nostr.build meant opening developer tools at the right
+  // moment. Server, status, the server's reason, file type and size: never the file or a key.
+  function uploadLog(level, msg, data) {
+    console.warn('[Upload] ' + msg + (data ? ' ' + JSON.stringify(data) : ''));
+    try { if (deps && deps.devLog) deps.devLog(level, msg, data || null); } catch (_) {}
+  }
+
+  async function tryBlossomFirst(file, forPubkey) {
+    // Through the page. The fallback used to read the panel's own state.activePubkey,
+    // which is not a name this file can see and would have thrown on the first upload
+    // from anywhere else.
+    const pk = forPubkey || deps.activePubkey();
+    if (!pk) return null;
+    try {
+      const servers = await fetchBlossomServers(pk);
+      if (!servers.length) {
+        uploadLog('warn', 'no Blossom server list found; using nostr.build', null);
+        return null;
+      }
+      return await uploadToBlossom(file, servers, pk);
+    } catch (e) {
+      uploadLog('error', 'every Blossom server refused; using nostr.build', { error: String((e && e.message) || e) });
+      // SAID, NOT ONLY LOGGED. The account has Blossom servers and none took the file, which
+      // is the one case where "it went to nostr.build" is a surprise: the link in the note is
+      // not on the person's own server and nothing on screen said why. An account with no
+      // list never gets here, so it is never told about a choice it did not make.
+      if (deps.onUploadFallback) {
+        const reason = e && e.name === 'AbortError' ? t('it took too long') : (e && e.message) || t('it did not answer');
+        try { deps.onUploadFallback(t('Your Blossom server did not take this file ({{reason}}). Uploaded to nostr.build instead.', { reason })); } catch (_) {}
+      }
+      return null;
+    }
+  }
+
+  // A PHOTO COPIED TO THE CLIPBOARD ARRIVES AS A PNG. The browser decodes the picture and
+  // hands over every pixel losslessly: a 1.3 MB phone JPEG of 2917 by 3888 pixels pasted as
+  // a 39 MB PNG, which is slow to send, heavy on the server and a long wait for whoever
+  // reads the note. Photos are what JPEG is for, so a large PNG is re-encoded as one. It is
+  // left alone when that would cost something:
+  //   - small files, where there is nothing worth saving;
+  //   - anything with transparency, which JPEG cannot hold;
+  //   - a screenshot or drawing, whose flat colors and hard edges PNG already stores well and
+  //     JPEG smears: the JPEG has to come out at least 30 percent smaller to be used;
+  //   - a picture too large to decode safely, and any browser that cannot decode it.
+  // Only PNG is touched. A JPEG, GIF, WebP or video goes up exactly as it was chosen.
+  const RECOMPRESS_MIN_BYTES = 300 * 1024;
+  const RECOMPRESS_MAX_PIXELS = 36 * 1000 * 1000;
+  const RECOMPRESS_QUALITY = 0.85;
+  const RECOMPRESS_KEEP_RATIO = 0.7;
+
+  // AN HDR PHOTO PASTES AS RAW SIGNAL. Preview on a Mac copies an HDR photo (one with a gain
+  // map) as a 16-bit PNG whose color profile declares the PQ curve, the HDR brightness
+  // encoding, in a `cicp` tag. Chrome does not read that tag: it decodes the values as if they
+  // were ordinary ones, and the re-encoded JPEG came out gray and flat, its blacks lifted and
+  // its whites dimmed. So the PNG's color chunks are read before the picture is decoded:
+  // PNG's own cICP chunk, or the cicp tag in its ICC profile. Transfer 16 is PQ, 18 is HLG.
+  function pngChunksBeforeData(bytes) {
+    const sig = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+    if (bytes.length < 8 || sig.some((b, i) => bytes[i] !== b)) return null;
+    const out = [];
+    let i = 8;
+    while (i + 8 <= bytes.length) {
+      const len = ((bytes[i] << 24) | (bytes[i + 1] << 16) | (bytes[i + 2] << 8) | bytes[i + 3]) >>> 0;
+      const type = String.fromCharCode(bytes[i + 4], bytes[i + 5], bytes[i + 6], bytes[i + 7]);
+      if (type === 'IDAT' || type === 'IEND') return out;
+      if (i + 12 + len > bytes.length) return out;
+      out.push({ type, start: i, end: i + 12 + len, data: bytes.subarray(i + 8, i + 8 + len) });
+      i += 12 + len;
+    }
+    return out;
+  }
+
+  async function inflateZlib(data) {
+    if (typeof DecompressionStream !== 'function') return null;
+    const stream = new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate'));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  }
+
+  function iccCicpTransfer(icc) {
+    if (!icc || icc.length < 132) return null;
+    const u32 = (o) => ((icc[o] << 24) | (icc[o + 1] << 16) | (icc[o + 2] << 8) | icc[o + 3]) >>> 0;
+    const count = u32(128);
+    for (let k = 0; k < count && 132 + 12 * k + 12 <= icc.length; k++) {
+      const at = 132 + 12 * k;
+      if (String.fromCharCode(icc[at], icc[at + 1], icc[at + 2], icc[at + 3]) !== 'cicp') continue;
+      const off = u32(at + 4);
+      return off + 10 <= icc.length ? icc[off + 9] : null;
+    }
+    return null;
+  }
+
+  // 'pq', 'hlg' or null, and the chunks that set the picture's color, for the probe below.
+  // The color chunks all come before the image data, so only the head of the file is read.
+  const HDR_TRANSFER = { 16: 'pq', 18: 'hlg' };
+  const PNG_COLOR_CHUNKS = ['cHRM', 'gAMA', 'iCCP', 'sRGB', 'cICP', 'mDCV', 'cLLI'];
+  async function pngHdrInfo(file) {
+    try {
+      const head = new Uint8Array(await file.slice(0, 2 * 1024 * 1024).arrayBuffer());
+      const chunks = pngChunksBeforeData(head);
+      if (!chunks) return null;
+      let transfer = null;
+      for (const c of chunks) {
+        if (c.type === 'cICP' && c.data.length >= 2) transfer = HDR_TRANSFER[c.data[1]] || transfer;
+        if (c.type === 'iCCP' && !transfer) {
+          const nul = c.data.indexOf(0);
+          if (nul < 0) continue;
+          const icc = await inflateZlib(c.data.subarray(nul + 2));
+          transfer = HDR_TRANSFER[iccCicpTransfer(icc)] || transfer;
+        }
+      }
+      if (!transfer) return null;
+      return { transfer, colorChunks: chunks.filter((c) => PNG_COLOR_CHUNKS.includes(c.type)).map((c) => head.slice(c.start, c.end)) };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // DOES THIS BROWSER READ IT RAW? Measured, not assumed, so a Chrome that learns the tag
+  // later is not corrected twice: a one-pixel PNG carrying the photo's own color chunks and a
+  // known PQ value is decoded, and only if that value comes back unchanged is the correction
+  // applied.
+  const PROBE_VALUE = 148;
+  let crcTable = null;
+  function crc32(bytes) {
+    if (!crcTable) {
+      crcTable = new Uint32Array(256);
+      for (let n = 0; n < 256; n++) {
+        let c = n;
+        for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+        crcTable[n] = c >>> 0;
+      }
+    }
+    let c = 0xFFFFFFFF;
+    for (const b of bytes) c = crcTable[(c ^ b) & 0xFF] ^ (c >>> 8);
+    return (c ^ 0xFFFFFFFF) >>> 0;
+  }
+  function pngChunk(type, data) {
+    const out = new Uint8Array(12 + data.length);
+    const dv = new DataView(out.buffer);
+    dv.setUint32(0, data.length);
+    for (let i = 0; i < 4; i++) out[4 + i] = type.charCodeAt(i);
+    out.set(data, 8);
+    dv.setUint32(8 + data.length, crc32(out.subarray(4, 8 + data.length)));
+    return out;
+  }
+  function probePng(colorChunks) {
+    const ihdr = new Uint8Array([0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0]); // 1x1, 8-bit RGB
+    const row = [0, PROBE_VALUE, PROBE_VALUE, PROBE_VALUE]; // filter byte, then the pixel
+    let a = 1, b = 0;
+    for (const v of row) { a = (a + v) % 65521; b = (b + a) % 65521; }
+    // zlib, one stored deflate block: no compressor needed for four bytes.
+    const idat = new Uint8Array([0x78, 0x01, 0x01, 4, 0, 0xFB, 0xFF, ...row, b >> 8, b & 0xFF, a >> 8, a & 0xFF]);
+    const parts = [new Uint8Array([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]), pngChunk('IHDR', ihdr), ...colorChunks, pngChunk('IDAT', idat), pngChunk('IEND', new Uint8Array(0))];
+    return new Blob(parts, { type: 'image/png' });
+  }
+  async function decodesSignalRaw(colorChunks) {
+    let bitmap = null;
+    try {
+      bitmap = await createImageBitmap(probePng(colorChunks));
+      const canvas = typeof OffscreenCanvas === 'function'
+        ? new OffscreenCanvas(1, 1)
+        : Object.assign(document.createElement('canvas'), { width: 1, height: 1 });
+      const ctx = canvas.getContext('2d', { colorSpace: 'display-p3' }) || canvas.getContext('2d');
+      ctx.drawImage(bitmap, 0, 0);
+      return Math.abs(ctx.getImageData(0, 0, 1, 1).data[0] - PROBE_VALUE) <= 2;
+    } catch (_) {
+      return false;
+    } finally {
+      if (bitmap && typeof bitmap.close === 'function') bitmap.close();
+    }
+  }
+
+  // PQ signal to standard range, one entry per 8-bit value: the PQ curve gives the light in
+  // nits, 203 nits is the white of a standard-range picture (ITU-R BT.2408), anything brighter
+  // is clipped, and the result is encoded with the sRGB curve that a Display P3 canvas uses.
+  // Checked against the photo that prompted it: the average error against the original's own
+  // standard-range image fell from 28 levels to 3.
+  const SDR_WHITE_NITS = 203;
+  function pqToSdrTable() {
+    const m1 = 0.1593017578125, m2 = 78.84375, c1 = 0.8359375, c2 = 18.8515625, c3 = 18.6875;
+    const table = new Uint8ClampedArray(256);
+    for (let v = 0; v < 256; v++) {
+      const p = Math.pow(v / 255, 1 / m2);
+      const nits = 10000 * Math.pow(Math.max(p - c1, 0) / (c2 - c3 * p), 1 / m1);
+      const l = Math.min(nits / SDR_WHITE_NITS, 1);
+      const enc = l <= 0.0031308 ? 12.92 * l : 1.055 * Math.pow(l, 1 / 2.4) - 0.055;
+      table[v] = Math.round(255 * enc);
+    }
+    return table;
+  }
+
+  async function recompressImage(file, { pasted = false, onHdr } = {}) {
+    if (!file || file.type !== 'image/png' || file.size < RECOMPRESS_MIN_BYTES) return file;
+    if (typeof createImageBitmap !== 'function') return file;
+    let bitmap = null;
+    try {
+      // An HDR PNG someone chose goes up as it is, its HDR intact: only the clipboard's copy is
+      // worth trading for size. A pasted one is corrected to standard range, which looks like
+      // the original on any screen that is not HDR, so nothing needs saying. Only one that
+      // cannot be corrected (HLG, or a browser that fails the probe) tells the person, while
+      // there is still time to attach the original instead.
+      const hdr = await pngHdrInfo(file);
+      if (hdr && !pasted) return file;
+      const toSdr = hdr && hdr.transfer === 'pq' && await decodesSignalRaw(hdr.colorChunks) ? pqToSdrTable() : null;
+      if (hdr && !toSdr && typeof onHdr === 'function') { try { onHdr(hdr.transfer); } catch (_) {} }
+      bitmap = await createImageBitmap(file);
+      const w = bitmap.width;
+      const h = bitmap.height;
+      if (!w || !h || w * h > RECOMPRESS_MAX_PIXELS) return file;
+      const canvas = typeof OffscreenCanvas === 'function'
+        ? new OffscreenCanvas(w, h)
+        : Object.assign(document.createElement('canvas'), { width: w, height: h });
+      // WIDE COLOR KEEPS ITS COLOR. A phone photo is Display P3, and a default canvas is
+      // sRGB: the re-encoded JPEG came out tagged sRGB and its colors shifted. A Display P3
+      // canvas keeps the gamut and the browser writes that profile into the JPEG; an sRGB
+      // picture loses nothing in it. A browser that cannot make one falls back to sRGB.
+      const ctx = canvas.getContext('2d', { colorSpace: 'display-p3' }) || canvas.getContext('2d');
+      ctx.drawImage(bitmap, 0, 0);
+      // Transparency anywhere means the PNG stays: JPEG would turn it black.
+      const img = ctx.getImageData(0, 0, w, h);
+      const px = img.data;
+      for (let i = 3; i < px.length; i += 4) if (px[i] !== 255) return file;
+      if (toSdr) {
+        for (let i = 0; i < px.length; i += 4) { px[i] = toSdr[px[i]]; px[i + 1] = toSdr[px[i + 1]]; px[i + 2] = toSdr[px[i + 2]]; }
+        ctx.putImageData(img, 0, 0);
+      }
+      const blob = canvas.convertToBlob
+        ? await canvas.convertToBlob({ type: 'image/jpeg', quality: RECOMPRESS_QUALITY })
+        : await new Promise((res) => canvas.toBlob(res, 'image/jpeg', RECOMPRESS_QUALITY));
+      if (!blob || blob.size > file.size * RECOMPRESS_KEEP_RATIO) return file;
+      const stem = String(file.name || 'image').replace(/\.[^.]+$/, '');
+      return new File([blob], stem + '.jpg', { type: 'image/jpeg' });
+    } catch (e) {
+      console.warn('[Upload] could not recompress the image; sending it as it is:', e);
+      return file;
+    } finally {
+      if (bitmap && typeof bitmap.close === 'function') bitmap.close();
+    }
+  }
+
+  // A PHOTO CARRIES WHERE IT WAS TAKEN. A phone writes GPS coordinates, the camera and often
+  // the owner's name into a JPEG's EXIF and XMP blocks, and every upload sent them along: to a
+  // server that strips them, one that refuses the file for them ("Private metadata detected"),
+  // or one that keeps and serves them to anyone who downloads the picture. So they come out
+  // before anything leaves. In the file's own bytes, not by redrawing it: APP1 (EXIF and XMP)
+  // and APP13 (IPTC) are dropped and the image data is untouched, so there is no quality lost
+  // and the color profile (APP2) stays. The one thing EXIF does for the picture is say which
+  // way up it is; a photo whose orientation is not the default is redrawn upright instead, on
+  // a Display P3 canvas, because dropping the tag alone would leave it on its side.
+  function jpegSegments(bytes) {
+    if (bytes[0] !== 0xFF || bytes[1] !== 0xD8) return null;
+    const segs = [];
+    let i = 2;
+    while (i + 4 <= bytes.length) {
+      if (bytes[i] !== 0xFF) return null;
+      const marker = bytes[i + 1];
+      if (marker === 0xFF) { i += 1; continue; }
+      if (marker === 0xDA) { segs.push({ marker, start: i, end: bytes.length }); return segs; } // image data to the end
+      if (marker === 0xD9) { segs.push({ marker, start: i, end: i + 2 }); return segs; }
+      if (marker === 0x01 || (marker >= 0xD0 && marker <= 0xD7)) { segs.push({ marker, start: i, end: i + 2 }); i += 2; continue; }
+      const len = (bytes[i + 2] << 8) | bytes[i + 3];
+      if (len < 2 || i + 2 + len > bytes.length) return null;
+      segs.push({ marker, start: i, end: i + 2 + len });
+      i += 2 + len;
+    }
+    return null;
+  }
+
+  // EXIF orientation (tag 0x0112) from an APP1 segment, or 1 when there is none to read.
+  function exifOrientation(bytes, seg) {
+    const b = bytes.subarray(seg.start + 4, seg.end);
+    if (b.length < 14 || String.fromCharCode(b[0], b[1], b[2], b[3]) !== 'Exif') return 1;
+    const t = b.subarray(6);
+    const le = t[0] === 0x49;
+    const u16 = (o) => (le ? t[o] | (t[o + 1] << 8) : (t[o] << 8) | t[o + 1]);
+    const u32 = (o) => (le ? (t[o] | (t[o + 1] << 8) | (t[o + 2] << 16)) + t[o + 3] * 16777216 : t[o] * 16777216 + ((t[o + 1] << 16) | (t[o + 2] << 8) | t[o + 3]));
+    const ifd = u32(4);
+    if (ifd + 2 > t.length) return 1;
+    const n = u16(ifd);
+    for (let k = 0; k < n; k++) {
+      const e = ifd + 2 + k * 12;
+      if (e + 12 > t.length) break;
+      if (u16(e) === 0x0112) return u16(e + 8) || 1;
+    }
+    return 1;
+  }
+
+  async function redrawUpright(file) {
+    if (typeof createImageBitmap !== 'function') return null;
+    let bitmap = null;
+    try {
+      bitmap = await createImageBitmap(file); // applies the EXIF orientation by default
+      const w = bitmap.width;
+      const h = bitmap.height;
+      if (!w || !h || w * h > RECOMPRESS_MAX_PIXELS) return null;
+      const canvas = typeof OffscreenCanvas === 'function'
+        ? new OffscreenCanvas(w, h)
+        : Object.assign(document.createElement('canvas'), { width: w, height: h });
+      const ctx = canvas.getContext('2d', { colorSpace: 'display-p3' }) || canvas.getContext('2d');
+      ctx.drawImage(bitmap, 0, 0);
+      const blob = canvas.convertToBlob
+        ? await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.92 })
+        : await new Promise((res) => canvas.toBlob(res, 'image/jpeg', 0.92));
+      return blob ? new File([blob], file.name || 'image.jpg', { type: 'image/jpeg' }) : null;
+    } catch (_) {
+      return null;
+    } finally {
+      if (bitmap && typeof bitmap.close === 'function') bitmap.close();
+    }
+  }
+
+  const PRIVATE_SEGMENTS = new Set([0xE1, 0xED]); // APP1 (EXIF, XMP), APP13 (IPTC)
+
+  // Returns the file without its private metadata. FAILS CLOSED: a JPEG whose metadata cannot
+  // be removed is not sent at all, because sending the location was the bug.
+  async function stripPrivateMetadata(file) {
+    if (!file || file.type !== 'image/jpeg') return file;
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const segs = jpegSegments(bytes);
+    if (!segs) throw new Error(t('This photo could not be read, so it was not uploaded.'));
+    const priv = segs.filter((s) => PRIVATE_SEGMENTS.has(s.marker));
+    if (!priv.length) return file;
+    const orientation = priv.filter((s) => s.marker === 0xE1).reduce((o, s) => (o !== 1 ? o : exifOrientation(bytes, s)), 1);
+    if (orientation !== 1) {
+      const upright = await redrawUpright(file);
+      if (upright) return upright;
+      throw new Error(t('This photo could not be cleaned of its location data, so it was not uploaded.'));
+    }
+    const kept = segs.filter((s) => !PRIVATE_SEGMENTS.has(s.marker));
+    const parts = [bytes.subarray(0, 2), ...kept.map((s) => bytes.subarray(s.start, s.end))];
+    return new File(parts, file.name || 'image.jpg', { type: 'image/jpeg' });
+  }
+
+  // HEIC AND HEIF STOP HERE. An iPhone photo is HEIC, a browser cannot decode one (so the
+  // canvas redraw that re-encodes a PNG is not available), and many apps cannot open it,
+  // so it used to go up as chosen and show as a broken image in someone else's feed.
+  // Found by what it says and what it is: Windows hands over no type at all, and a file can
+  // be renamed, so the type, the extension and the ftyp box (its brands) each count.
+  // AVIF shares the box layout and the mif1 brand, so only the HEVC-coded brands decide.
+  const HEIC_BRANDS = new Set(['heic', 'heix', 'heim', 'heis', 'hevc', 'hevx', 'hevm', 'hevs']);
+  async function isHeic(file) {
+    if (/^image\/hei[cf]/i.test(file.type || '') || /\.hei[cf]s?$/i.test(file.name || '')) return true;
+    try {
+      const head = new Uint8Array(await file.slice(0, 64).arrayBuffer());
+      const four = (at) => String.fromCharCode(head[at], head[at + 1], head[at + 2], head[at + 3]);
+      if (head.length < 12 || four(4) !== 'ftyp') return false;
+      const size = ((head[0] << 24) | (head[1] << 16) | (head[2] << 8) | head[3]) >>> 0;
+      const end = Math.min(size || 64, head.length);
+      if (HEIC_BRANDS.has(four(8))) return true;
+      for (let at = 16; at + 4 <= end; at += 4) if (HEIC_BRANDS.has(four(at))) return true;
+    } catch (_) {}
+    return false;
+  }
+
+  // `info`, when given, is filled with what an imeta tag says about the file that went up
+  // (buildImetaTag): its type, its size in pixels if it is a picture, and its hash when the
+  // URL is named by it, as a Blossom URL is, so the hash is known to be of the bytes served.
+  async function uploadMedia(original, forPubkey, { pasted = false, info = null } = {}) {
+    if (await isHeic(original)) throw new Error(t('HEIC is not a supported image type. Try pasting the image instead.'));
+    const isImg = original.type.startsWith('image/');
+    const isVid = original.type.startsWith('video/');
+    if (!isImg && !isVid) throw new Error(t('Choose an image or video'));
+    if (original.size > 100 * 1024 * 1024) throw new Error(t('File too large (max 100MB)'));
+    // A canvas writes no metadata, so only what goes up as chosen needs stripping.
+    const file = await recompressImage(await stripPrivateMetadata(original), {
+      pasted,
+      onHdr: () => {
+        if (deps.onUploadNotice) deps.onUploadNotice(t('This pasted HDR photo may lose definition. Attach the original file for best results.'));
+      },
+    });
+    const forPk = forPubkey || deps.activePubkey();
+    const blossomUrl = await tryBlossomFirst(file, forPk);
+    if (blossomUrl) {
+      uploadLog('info', 'uploaded to Blossom', { url: blossomUrl, type: file.type, bytes: file.size });
+      if (info) await describeUpload(file, blossomUrl, info);
+      return blossomUrl;
+    }
+    const url = 'https://nostr.build/api/v2/upload/files';
+    const authEvent = {
+      kind: 27235,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [['u', url], ['method', 'POST']],
+      content: '',
+    };
+    const signed = await deps.call({ type: 'SIDECAR_OWNER_SIGN', event: authEvent, expectedPubkey: forPk });
+    const token = 'Nostr ' + btoa(JSON.stringify(signed));
+    const form = new FormData();
+    form.append('file', file);
+    const resp = await fetch(url, { method: 'POST', headers: { Authorization: token }, body: form });
+    if (!resp.ok) {
+      // OVER THE FREE LIMIT: 413, or a refusal that says the file is too big. Not a 429, which
+      // is a rate limit and has nothing to do with the file. Said as such, with the plans link
+      // (uploadErrorParts), because a plan is the answer to it and to nothing else here.
+      let body = '';
+      try { body = await resp.text(); } catch (_) {}
+      if (resp.status !== 429 && (resp.status === 413 || /too (large|big)|file size|max(imum)? (file )?size|size limit/i.test(body))) {
+        const e = new Error(t('This file is over nostr.build’s free upload limit.'));
+        e.nbPlans = true;
+        throw e;
+      }
+      throw new Error(t('Upload failed ({{status}})', { status: resp.status }));
+    }
+    const json = await resp.json().catch(() => null);
+    const u = json && json.data && (Array.isArray(json.data) ? json.data[0] && json.data[0].url : json.data.url);
+    if (!u) throw new Error(t('Upload returned no URL'));
+    if (info) await describeUpload(file, u, info);
+    return u;
+  }
+
+  // Best effort, never throws: a fact that cannot be read is left out of the tag.
+  async function describeUpload(file, url, info) {
+    if (file.type) info.mime = file.type;
+    try {
+      const x = await sha256Hex(await file.arrayBuffer());
+      if (String(url).includes(x)) info.x = x;
+    } catch (_) {}
+    if (!file.type.startsWith('image/') || typeof createImageBitmap !== 'function') return;
+    try {
+      const bmp = await createImageBitmap(file);
+      if (bmp.width > 0 && bmp.height > 0) info.dim = bmp.width + 'x' + bmp.height;
+      bmp.close();
+    } catch (_) {}
+  }
+
+  // ---- NIP-92 imeta alt text, the write side ----
+  //
+  // Sidecar never renders the images inside a note — the client reading the note does
+  // that — so there is no read path here to keep honest. What a composer owes the note
+  // is the tag: one `imeta` per described attachment, its `alt` slot carrying the
+  // description the way zap.cooking writes them (and Amethyst and Gossip before it),
+  // so the words typed here are what a screen reader says somewhere else.
+  //
+  // A slot's value is everything after its first space, so a description keeps its
+  // spaces, its quotes and its line breaks: JSON escapes them on the wire, the event id
+  // hashes the same bytes either way, and no client has to decode anything. Line breaks
+  // are normalized rather than stripped — CRLF to LF, each line trimmed, runs of blank
+  // lines capped at one paragraph gap — the same shape zap.cooking ships after
+  // learning the flattened version the hard way.
+  const ALT_MAX = 2000;
+
+  function normalizeAltBreaks(text) {
+    return String(text || '')
+      .replace(/\r\n?/g, '\n')
+      .split('\n')
+      .map((line) => line.trim())
+      .join('\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+
+  // The cap counts CHARACTERS, not code units: a hard .slice(0, ALT_MAX) can land
+  // mid-emoji and ship half of one down the wire. Astral pairs are two code units
+  // for one character, so the cut goes by code points and never splits a pair.
+  function capAltText(text) {
+    return Array.from(String(text || '')).slice(0, ALT_MAX).join('');
+  }
+
+  // One tag row for one attachment, or null when there is nothing to say: an empty
+  // description means no alt slot and no imeta tag at all — never empty metadata. The
+  // cap is applied here as well as in the editor because a draft can be restored into
+  // a composer that publishes without the editor ever being opened.
+  function buildImetaTag(url, alt, extra) {
+    const cleaned = capAltText(normalizeAltBreaks(alt));
+    // What the file itself says about it: its type, its hash and its size in pixels.
+    // Checked here rather than trusted, because a draft is restored from storage and a
+    // malformed slot must come out as no slot, never as a tag a client chokes on.
+    // A picture's type is an image type and a video's a video type, or it is left out.
+    const mime = extra && /^(image|video)\/[\w.+-]{1,60}$/i.test(extra.m || '')
+      && (!extra.as || extra.m.toLowerCase().startsWith(extra.as + '/')) ? extra.m.toLowerCase() : '';
+    const x = extra && /^[0-9a-f]{64}$/.test(extra.x || '') ? extra.x : '';
+    const dim = extra && /^[1-9]\d{0,4}x[1-9]\d{0,4}$/.test(extra.dim || '') ? extra.dim : '';
+    if (!url || !(cleaned || mime || x || dim)) return null;
+    const tag = ['imeta', 'url ' + url];
+    if (mime) tag.push('m ' + mime);
+    if (x) tag.push('x ' + x);
+    if (dim) tag.push('dim ' + dim);
+    if (cleaned) tag.push('alt ' + cleaned);
+    return tag;
+  }
+
+  // In draft order, one tag per attachment with something to say. A picture uploaded here
+  // says its type, its hash and its size (uploadMedia reads them from the file that went
+  // up), so a client can reserve its box before a byte arrives and check what it fetched.
+  // A pasted link to a picture, never uploaded here, has nothing to add and contributes
+  // nothing.
+  //
+  // A VIDEO'S TYPE AND SIZE RIDE ALONG BY DEFAULT: a client that knows the shape before it
+  // fetches a byte can reserve the box and pick a player, and several decline to show a
+  // video inline without it. `videoImeta: false` (Settings) leaves them out.
+  function imetaTagsForMedia(media, opts) {
+    const withVideo = !(opts && opts.videoImeta === false);
+    const out = [];
+    for (const m of media || []) {
+      const extra = !m ? null : m.isVideo ? (withVideo ? { as: 'video', m: m.mime, x: m.x, dim: m.dim } : null) : { as: 'image', m: m.mime, x: m.x, dim: m.dim };
+      const tag = buildImetaTag(m && m.url, m && m.alt, extra);
+      if (tag) out.push(tag);
+    }
+    return out;
+  }
+
+  // A video's type and pixel size, read from the file in the browser before it goes up:
+  // the same bytes the server receives, so what the tag says is what was sent. Best
+  // effort and bounded: a codec the browser cannot read, or a file that never answers,
+  // resolves to what is known (the type) after five seconds rather than holding the
+  // upload open. Never throws.
+  function readVideoMeta(file) {
+    return new Promise((resolve) => {
+      const out = {};
+      if (!file || !/^video\//.test(file.type || '')) { resolve(out); return; }
+      out.mime = file.type;
+      let finished = false;
+      let objectUrl = '';
+      const video = document.createElement('video');
+      const timer = setTimeout(finish, 5000);
+      function finish() {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timer);
+        try { video.removeAttribute('src'); video.load(); } catch (_) {}
+        try { if (objectUrl) URL.revokeObjectURL(objectUrl); } catch (_) {}
+        resolve(out);
+      }
+      video.preload = 'metadata';
+      video.muted = true;
+      video.addEventListener('loadedmetadata', () => {
+        if (video.videoWidth > 0 && video.videoHeight > 0) out.dim = video.videoWidth + 'x' + video.videoHeight;
+        finish();
+      });
+      video.addEventListener('error', finish);
+      try {
+        objectUrl = URL.createObjectURL(file);
+        video.src = objectUrl;
+      } catch (_) { finish(); }
+    });
+  }
+
+  // The ALT editor as one full-width row: thumbnail and explainer on top, the
+  // multiline field beneath, a meter of the room left and its Save stretched under
+  // that. Stacked rather than beside anything, per the only grammar a 360px column
+  // has room for. Both composers seat it under the thumbnail strip; this file builds
+  // it and knows nothing about which one is asking.
+  //
+  // IT AUTOSAVES, like everything else in this composer: a keystroke in the editor
+  // saves the note, so a keystroke here saves the description — `onChange` fires
+  // with the field's text as it is, debounced half a second, and no exit asks
+  // whether the user meant it. `onSave` fires on the way out — Save description,
+  // Escape, the trash (which saves an empty description, which is how one is
+  // removed) — always with the field's current text, so the tail never depends on
+  // the timer. The old contract, commit-on-Save alone, was the trap: the composer
+  // promises that closing is safe, and a field where closing meant losing the words
+  // broke that promise with the rest of the draft there to vouch for it.
+  function buildAltEditorRow(opts) {
+    const initial = normalizeAltBreaks(opts.alt || '');
+    const onSave = opts.onSave || function () {};
+    const onChange = opts.onChange || function () {};
+    const row = h('div', { className: 'compose-alt-row' });
+
+    const head = h('div', { className: 'compose-alt-head' });
+    if (opts.url && opts.isVideo) {
+      // A video is never decoded for a 36px square: its cover glyph stands in for it.
+      head.append(h('span', { className: 'compose-alt-thumb compose-alt-thumb-vid' }, [icon('video')]));
+    } else if (opts.url) {
+      const im = document.createElement('img');
+      im.className = 'compose-alt-thumb';
+      // Same reason every other media element here carries it: media hosts 403 a
+      // chrome-extension:// referrer.
+      im.referrerPolicy = 'no-referrer';
+      im.src = opts.url;
+      head.append(im);
+    }
+    head.append(h('span', { className: 'compose-alt-hint', textContent: opts.isVideo ? t('Describe this video for anyone who may not be able to see it.') : t('Describe this image for anyone who may not be able to see it.') }));
+    if (initial) {
+      const rm = h('button', { className: 'mini ghost compose-alt-remove', title: t('Remove the description'), type: 'button' });
+      rm.append(icon('trash'));
+      rm.addEventListener('click', () => commit(''));
+      head.append(rm);
+    }
+    row.append(head);
+
+    const field = h('textarea', { className: 'compose-alt-text', maxLength: ALT_MAX, placeholder: opts.isVideo ? t('What does the video show?') : t('What does the image show?') });
+    field.value = initial;
+    row.append(field);
+
+    // THE ROOM LEFT IS A RING WITH A NUMBER BESIDE IT, NOT A COUNT THE BUTTON
+    // ANSWERS TO. Save is the quietest button in the row — a ghost at its natural
+    // width, not a filled one stretched across it — and what decides its width must
+    // never change: the ring is a fixed 20px and the count is fixed at four digits
+    // (tabular, right-aligned), so "2000" and "12" occupy the same box and the
+    // button never readjusts. The count carries no word; the ring carries the
+    // proportion, amber for the last tenth of the cap.
+    const RING_R = 8;
+    const RING_C = 2 * Math.PI * RING_R;
+    const ring = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    ring.setAttribute('viewBox', '0 0 20 20');
+    ring.setAttribute('class', 'compose-alt-ring');
+    ring.innerHTML =
+      '<circle cx="10" cy="10" r="' + RING_R + '" class="ring-track"/>' +
+      '<circle cx="10" cy="10" r="' + RING_R + '" class="ring-fill" ' +
+      'stroke-dasharray="' + RING_C + '" stroke-dashoffset="' + RING_C + '" transform="rotate(-90 10 10)"/>';
+    const count = h('span', { className: 'compose-alt-count' });
+    const save = h('button', { className: 'ghost compose-alt-save', type: 'button', textContent: tn('Save description', 'Save descriptions', opts.count || 1) });
+    row.append(h('div', { className: 'compose-alt-foot' }, [ring, count, save]));
+
+    function paintMeter() {
+      count.textContent = String(ALT_MAX - field.value.length);
+      const used = field.value.length / ALT_MAX;
+      ring.querySelector('.ring-fill').setAttribute('stroke-dashoffset', String(RING_C * (1 - used)));
+      ring.classList.toggle('is-near', used >= 0.9); // the last stretch, said in color
+    }
+    let asTimer = null;
+    function scheduleAutosave() {
+      if (asTimer) clearTimeout(asTimer);
+      asTimer = setTimeout(() => { asTimer = null; onChange(field.value); }, 500);
+    }
+    // Every way out commits what is in the field first, so the last half second
+    // never depends on the timer.
+    function commit(value) {
+      if (asTimer) { clearTimeout(asTimer); asTimer = null; }
+      row.remove();
+      onSave(value);
+    }
+    field.addEventListener('input', () => { paintMeter(); scheduleAutosave(); });
+    paintMeter();
+    save.addEventListener('click', () => commit(field.value));
+    field.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      e.stopPropagation(); // the composer underneath stays open
+      commit(field.value);
+    });
+    // The caller appends the row the moment this returns; focus lands on the next
+    // frame, once the row is actually in a document.
+    requestAnimationFrame(() => { if (row.isConnected) field.focus(); });
+    // A PENDING AUTOSAVE THE PAGE CAN FLUSH ON ITS OWN CLOSE PATHS. The row commits
+    // on its three own exits, but pages close it for their own reasons — a chip
+    // toggle, the review window starting, an account moving under the tab — and a
+    // close that skips this drops the last half-second of typing on the floor. The
+    // page decides when the slot is still the one the row was opened for; flushing
+    // after the media array has been spliced would write one image's words onto
+    // another.
+    row.flushPending = () => {
+      if (!asTimer) return;
+      clearTimeout(asTimer);
+      asTimer = null;
+      onChange(field.value);
+    };
+    return row;
+  }
+
+  // ---- media in the composer: held beside the prose, appended at publish ----
+  //
+  // The composer shows the prose only. A 100-character CDN URL is not text anybody
+  // is thinking about while writing, and it pushed every real sentence down the
+  // panel; the attachments live in the draft's media slot and are appended to the
+  // content at publish, each URL on its own line after a blank line. The wire format
+  // does not change — the URL in the content is still what most clients read, and
+  // the imeta tags beside it describe those same URLs in the same order.
+
+  // What the note says on the wire, and what the preview should show: the one place
+  // prose and attachments meet again, so the review window previews the note that
+  // will actually go out rather than the half of it the editor was showing.
+  //
+  // THE STRIP IS THE ORDER. An entry is a file URL or a quoted note (`{ quote: 'nostr:…' }`,
+  // the card a trailing quote becomes when it is moved in), and they publish in the
+  // strip's order after the person's words: one line each, a blank line wherever the kind
+  // changes, so a quote always starts its own paragraph the way a written one does.
+  function composeNoteContent(text, media) {
+    const prose = String(text || '').trim();
+    const groups = [];
+    let last = '';
+    for (const m of media || []) {
+      const line = m && (m.url || m.quote);
+      if (!line) continue;
+      const kind = m.url ? 'url' : 'quote';
+      if (kind === last) groups[groups.length - 1].push(line); else groups.push([line]);
+      last = kind;
+    }
+    return [prose, ...groups.map((g) => g.join('\n'))].filter(Boolean).join('\n\n');
+  }
+
+  // What the note's tags are read from: the words, and every quoted note the strip
+  // holds. The q and p tags come from the content a reader will see, not from the editor
+  // alone, or a quote moved into the strip would stop being tagged as one.
+  function proseWithQuotes(prose, media) {
+    const quotes = (media || []).map((m) => m && m.quote).filter(Boolean);
+    return [String(prose || ''), ...quotes].filter(Boolean).join('\n');
+  }
+
+  // ---- a quote that ends the post, offered to the strip ----
+  //
+  // A quote draft ends on a nostr: reference, and the attachments are appended after it.
+  // Some clients draw a note's images from where they sit in the text, and a picture
+  // below the quoted card ends up looking like part of the quote or lost beneath it. So
+  // the strip can hold the quote too, and the order is whatever the person drags it to.
+  //
+  // THE QUOTE IS ONLY OFFERED WHEN IT ENDS THE POST: whole lines of nostr: note, nevent
+  // or naddr references (a bare one counts, linkBareRefs links it before publish) and
+  // nothing else after them. A mention (npub), a reference in the middle of a sentence, or
+  // text written under the quote leaves the order exactly as it always was.
+  const QUOTE_REF = '(?:nostr:)?(?:nevent|note|naddr)1[023456789acdefghjklmnpqrstuvwxyz]+';
+  const QUOTE_REF_LINE = new RegExp('^\\s*(?:' + QUOTE_REF + '\\s*)+$');
+  const QUOTE_REF_WORD = new RegExp('^' + QUOTE_REF + '$');
+  // One note named once or many times is one entry, in the nostr: form that publishes; two
+  // different notes are none, because the strip quotes one and never picks between two.
+  function singleQuote(refs) {
+    const distinct = [...new Set(refs.map((r) => 'nostr:' + r.replace(/^nostr:/, '')))];
+    return distinct.length === 1 ? [{ quote: distinct[0] }] : [];
+  }
+
+  function splitTrailingQuote(text) {
+    const whole = String(text || '').trim();
+    const lines = whole.split('\n');
+    let at = lines.length;
+    // Blank lines between two quotes belong to the tail; the first line that is neither
+    // blank nor a reference ends it.
+    while (at > 0 && (!lines[at - 1].trim() || QUOTE_REF_LINE.test(lines[at - 1]))) at--;
+    const tail = lines.slice(at).join('\n').trim();
+    if (!tail) return { head: whole, tail: '' };
+    return { head: lines.slice(0, at).join('\n').trim(), tail };
+  }
+
+  // The trailing quote taken out of the text, as a strip entry. `head` is what stays in the
+  // editor. ONE NOTE ONLY: the strip holds a single quote, so a tail naming two different
+  // notes is left alone as text, and so is a quote when the strip already has one. The
+  // reference is normalized to its nostr: form, which is what gets published; the same
+  // note written twice is still one note.
+  function takeTrailingQuote(text, media) {
+    const whole = String(text || '');
+    if ((media || []).some((m) => m && m.quote)) return { head: whole, quotes: [] };
+    const { head, tail } = splitTrailingQuote(whole);
+    const quotes = singleQuote(tail.match(new RegExp(QUOTE_REF, 'g')) || []);
+    return quotes.length ? { head, quotes } : { head: whole, quotes: [] };
+  }
+
+  // A paste that is nothing but one quoted note: a note1, nevent1 or naddr reference, with or
+  // without nostr:. That is a person bringing a note in to quote it, so it becomes a block
+  // under the field instead of a line of bech32. Anything else (a sentence with a reference
+  // in it, a mention, a URL, or two different notes) is not recognized and pastes as the text
+  // it is: the strip quotes one note, and a paste never picks between two. Returns the entry
+  // in the nostr: form that publishes, or [] when there is nothing to quote; and [] when the
+  // strip already holds a quote, because a second paste does not silently replace the first.
+  // A QUOTE YOU ASKED FOR GOES INTO THE DRAFT. The Quote button is an explicit choice of
+  // note, so it takes the strip's quote slot: added when the draft has no quote, swapped in
+  // place of the old one when it has (same spot in the strip, so the pictures stay where
+  // they were), and nothing else in the draft moves. Without this a draft that already
+  // quoted something either dropped the new note or had to be thrown away whole, and the
+  // only way through was the old quote's two-tap trash. A PASTE still never replaces a
+  // quote (quoteEntriesFromPaste): pasting is ambiguous, tapping Quote is not.
+  // Returns the new media list and what changed: 'added', 'replaced' or null.
+  function placeQuote(media, entry) {
+    const out = Array.isArray(media) ? media.slice() : [];
+    if (!entry || typeof entry.quote !== 'string') return { media: out, change: null };
+    const at = out.findIndex((m) => m && m.quote);
+    if (at < 0) { out.push(entry); return { media: out, change: 'added' }; }
+    if (out[at].quote === entry.quote) return { media: out, change: null };
+    out[at] = entry;
+    return { media: out, change: 'replaced' };
+  }
+
+  function quoteEntriesFromPaste(text, media) {
+    if ((media || []).some((m) => m && m.quote)) return [];
+    const raw = String(text || '').trim();
+    if (!raw) return [];
+    const toks = raw.split(/\s+/);
+    return toks.every((tk) => QUOTE_REF_WORD.test(tk)) ? singleQuote(toks) : [];
+  }
+
+  // THE STRIP IS TWO BLOCKS: the pictures (and videos), in their own order, and the quoted
+  // note. The only question is which comes first, so the note is pinned to one end and the
+  // pictures reorder among themselves, never past it. Everything below keeps that true.
+
+  // The note to the front or to the back. Returns a new array (the same one when it is
+  // already there, or when there is nothing to go past).
+  function moveQuoteEntry(media, index, dir) {
+    const list = Array.isArray(media) ? media : [];
+    const q = list[index];
+    if (!q || !q.quote || list.length < 2) return list;
+    if (dir < 0 ? index === 0 : index === list.length - 1) return list;
+    const rest = list.slice(0, index).concat(list.slice(index + 1));
+    return dir < 0 ? [q, ...rest] : [...rest, q];
+  }
+
+  // A picture moved from one slot to another, the note staying at its end. `from` and `to`
+  // are indexes into `media`; either one naming the note moves nothing.
+  function movePicture(media, from, to) {
+    const list = Array.isArray(media) ? media : [];
+    if (!list[from] || !list[to] || list[from].quote || list[to].quote) return list;
+    const quotes = list.filter((m) => m && m.quote);
+    const pics = list.filter((m) => !(m && m.quote));
+    const pt = pics.indexOf(list[to]);
+    pics.splice(pics.indexOf(list[from]), 1);
+    pics.splice(pt, 0, list[from]);
+    if (!quotes.length) return pics;
+    return list[0].quote ? [...quotes, ...pics] : [...pics, ...quotes];
+  }
+
+  // Whether the picture at `i` has another picture to step past in that direction.
+  function canMovePicture(media, i, dir) {
+    const list = Array.isArray(media) ? media : [];
+    const j = i + dir;
+    return !!list[i] && !list[i].quote && j >= 0 && j < list.length && !(list[j] && list[j].quote);
+  }
+
+  function pictureCount(media) {
+    return (media || []).filter((m) => m && !m.quote).length;
+  }
+
+  // The strip takes a new order. The movers return copies, and the array is shared with the
+  // drawer and the autosave, so it is rewritten in place.
+  function replaceMedia(media, next) {
+    media.splice(0, media.length, ...next);
+  }
+
+  // A new attachment goes in with the pictures: when the note is last it goes in ahead of
+  // it, which keeps the pictures-then-note order that was already chosen. Edits in place.
+  function addMedia(media, entry) {
+    const last = media.length - 1;
+    if (last >= 0 && media[last] && media[last].quote) media.splice(last, 0, entry);
+    else media.push(entry);
+  }
+
+  // Drafts saved before the URLs moved out of the editor carry them in the saved
+  // text — the same URLs the media slot holds. Stripped on restore, or the publish
+  // would append them a second time. A no-op on drafts saved since, and on prose a
+  // user typed that merely looks like a URL: only a line matching an attachment's
+  // own URL is taken out.
+  function stripDraftMediaUrls(text, media) {
+    // A LINE-BOUNDARY OCCURRENCE AT A TIME, never every occurrence: the old format
+    // wrote each URL on its own line, so only boundary occurrences are migration
+    // leftovers. A URL the user deliberately put inside a sentence — "mirror at
+    // https://x/a.png if the first dies" — is authored prose and stays; a URL twice
+    // on one line is ambiguous and stays too. The same rule the paste offer uses to
+    // decide what it may cut out (urlOnBoundary), pointed the other way.
+    const urls = (media || []).map((m) => m && m.url).filter(Boolean);
+    if (!urls.length) return String(text || '');
+    const kept = String(text || '').split('\n').map((line) => {
+      for (const url of urls) {
+        if (!line.includes(url)) continue;
+        const parts = line.split(url);
+        if (parts.length === 2 && (!parts[0].trim() || !parts[1].trim())) return line.replace(url, '');
+      }
+      return line;
+    });
+    return kept.join('\n').replace(/\s+$/, '');
+  }
+
+  // ---- reply threading, shared by both composers ------------------------------------
+  //
+  // MOVED HERE so the panel and the expanded tab build byte-identical threading. It used
+  // to live in sidepanel.js, which is why Expand was disabled on replies: the tab had no
+  // way to produce these tags and popping a reply out would have published a top-level
+  // note, detached from the thread, with nothing on screen saying so.
+  //
+  // selfPubkey is a parameter rather than a read of some global, because the two callers
+  // keep the active account in different places and the one thing this must not get wrong
+  // is which key to leave OUT of the p tags.
+  const WEB_COMMENT_KIND = 1111;
+
+  // The kind a reply to this event goes out as: 1 under a note, 1111 under anything else. Asked
+  // of replyTags itself rather than restated, so the label that announces it cannot
+  // drift from what is published.
+  function replyKind(target) {
+    return target ? replyTags(target, '').kind : null;
+  }
+
+  function replyTags(target, selfPubkey) {
+    const tags = [];
+    const tgTags = (target && target.tags) || [];
+    const id = target && target.id;
+    const author = target && target.pubkey;
+
+    // Everyone already in the conversation, so they are notified. Deduped, and never
+    // the replier themselves — self-p-tagging shows up as a notification from you.
+    const people = [];
+    const seenP = new Set([selfPubkey]);
+    const addP = (pk) => {
+      if (!pk || seenP.has(pk)) return;
+      seenP.add(pk);
+      people.push(['p', pk]);
+    };
+    addP(author);
+    tgTags.forEach((t) => { if (t[0] === 'p' && t[1]) addP(t[1]); });
+
+    if (target.kind === WEB_COMMENT_KIND) {
+      // Scope, verbatim. A 1111 always carries its root in uppercase tags.
+      tgTags.forEach((t) => { if (t[0] === 'I' || t[0] === 'K' || t[0] === 'E' || t[0] === 'A') tags.push(t.slice()); });
+      // AND THE ROOT AUTHOR, which NIP-22 says a comment MUST carry and this did not.
+      // It is the mirror of the bug this branch fixes: a client watching `#P` for replies
+      // in its own threads could not see ours. Copied from the parent when the parent is
+      // itself the root, since then the two are the same person.
+      const rootP = tgTags.find((t) => t[0] === 'P' && t[1]);
+      if (rootP) tags.push(rootP.slice());
+      else {
+        // No P on the parent. The spec also carries the root author as the FOURTH element
+        // of the E tag, so that is where to look before giving up rather than guessing at
+        // the parent's author, who is only the same person on a top-level comment. A
+        // web-rooted comment (an I tag) has no author at all and correctly gets none.
+        const rootE = tgTags.find((t) => t[0] === 'E' && t[3]);
+        if (rootE) tags.push(['P', rootE[3]]);
+      }
+      // Parent: the comment being answered.
+      tags.push(['e', id], ['k', String(target.kind)]);
+      return { kind: WEB_COMMENT_KIND, tags: [...tags, ...people] };
+    }
+
+    // A REPLY TO ANYTHING BUT A NOTE IS A COMMENT (NIP-22). An article, a recipe, a picture,
+    // a highlight: answered with a kind 1 it was a note in a thread nobody reads that way,
+    // and Zap Cooking's comments under a recipe never showed it. The thing answered is the
+    // root, in uppercase, and the parent, in lowercase; an addressable one (an article, a
+    // recipe) is named by its address too, so a comment survives the article being edited.
+    const kind = typeof target.kind === 'number' ? target.kind : 1;
+    if (kind !== 1) {
+      const d = kind >= 30000 && kind < 40000 ? ((tgTags.find((t) => t[0] === 'd') || [])[1] || '') : null;
+      const address = d !== null ? `${kind}:${author}:${d}` : null;
+      if (address) tags.push(['A', address]);
+      tags.push(['E', id, '', author], ['K', String(kind)], ['P', author]);
+      if (address) tags.push(['a', address]);
+      tags.push(['e', id, '', author], ['k', String(kind)]);
+      return { kind: WEB_COMMENT_KIND, tags: [...tags, ...people] };
+    }
+
+    // NIP-10. Reuse the target's root when it has one; otherwise the target is the root.
+    const rootTag = tgTags.find((t) => t[0] === 'e' && t[3] === 'root' && t[1]);
+    const root = rootTag ? rootTag[1] : id;
+    tags.push(['e', root, '', 'root']);
+    if (root !== id) tags.push(['e', id, '', 'reply']);
+    return { kind: 1, tags: [...tags, ...people] };
+  }
+
+  // ---- what a note's text tags, shared by both composers ----------------------------
+  //
+  // MOVED HERE from sidepanel.js so the expanded tab tags a note's text the way the
+  // panel does. It never did: from the tab's first release a mention went out with no p
+  // tag and a quote with no q tag, so the people mentioned were never notified and a
+  // quote did not read as one, while the same note written in the panel did both. Two
+  // copies of a publish path is how that happens, so there is one now.
+
+  // `p` tags for every profile mentioned in the text, deduped and in order.
+  //
+  // This is what makes a mention reach the person mentioned: notification discovery is
+  // `{'#p': [pubkey]}`, so a mention with no p tag renders for every reader and is
+  // invisible to its target.
+  function mentionPTags(content, NT) {
+    const out = [];
+    const seen = new Set();
+    const re = /nostr:(npub1[0-9a-z]+|nprofile1[0-9a-z]+)/g;
+    let m;
+    while ((m = re.exec(String(content || ''))) !== null) {
+      try {
+        const ref = readRef(m[1], NT);
+        if (!ref) continue;
+        const d = ref.decoded;
+        const pk = d.type === 'npub' ? d.data : d.data.pubkey;
+        if (pk && !seen.has(pk)) { seen.add(pk); out.push(['p', pk]); }
+      } catch (_) { /* malformed mention — skip it, don't fail the post */ }
+    }
+    return out;
+  }
+
+  // NIP-18 `q` tags for the event references in a note's body, plus the pubkeys of the
+  // quoted authors (noteBodyTags p-tags them).
+  //
+  // A bech32 reference in the content is not, on its own, a quote: without the `q` tag
+  // the note goes out as plain text with a 210-character string in the middle of it.
+  // Clients key quote rendering off `q`, the quoted author is never notified, and
+  // Sidecar's own notification list tells "quoted your note" from a reply by it.
+  //
+  // note/nevent quote by event id; naddr quotes by "kind:pubkey:d" coordinate, since an
+  // addressable event's id changes with every edit.
+  const BODY_REF_RE = /nostr:(note1[0-9a-z]+|nevent1[0-9a-z]+|naddr1[0-9a-z]+)/g;
+  function quoteTags(content, NT) {
+    const tags = [];
+    const authors = [];
+    const seen = new Set();
+    let m;
+    BODY_REF_RE.lastIndex = 0;
+    while ((m = BODY_REF_RE.exec(String(content || ''))) !== null) {
+      let d = null;
+      const ref = readRef(m[1], NT);
+      if (!ref) continue; // malformed ref — skip it, don't fail the post
+      d = ref.decoded;
+      let value = null;
+      let relay = '';
+      let author = '';
+      if (d.type === 'note') {
+        value = d.data;
+      } else if (d.type === 'nevent') {
+        value = d.data.id;
+        relay = (d.data.relays || [])[0] || '';
+        author = d.data.author || '';
+      } else if (d.type === 'naddr') {
+        value = d.data.kind + ':' + d.data.pubkey + ':' + d.data.identifier;
+        relay = (d.data.relays || [])[0] || '';
+        author = d.data.pubkey || '';
+      }
+      if (!value || seen.has(value)) continue;
+      seen.add(value);
+      // Positional tag, so an author can only be given if the relay slot is filled —
+      // with an empty string when there's no hint, which is what other clients emit.
+      tags.push(author ? ['q', value, relay, author] : relay ? ['q', value, relay] : ['q', value]);
+      if (author) authors.push(author);
+    }
+    return { tags, authors };
+  }
+
+  // A BARE REFERENCE IS STILL A REFERENCE. Nobody should have to know that a pasted
+  // npub1…, note1…, nevent1… or naddr1… only counts as a mention or a quote in its
+  // nostr: form (NIP-27): the preview draws a bare one as a quote or a name, other clients
+  // mostly draw it as text, and the tags that notify and link came only from the nostr:
+  // form. So at Post a reference standing on its own is written as nostr:, and the note
+  // goes out as the preview showed it. Left alone: one already in nostr: form, one inside
+  // a link (njump.me/nevent1…), one inside code, and anything that does not decode.
+  const BARE_REF_RE = /(^|[\s(\[{"'\u201c\u2018<])((?:npub1|nprofile1|note1|nevent1|naddr1)[02-9ac-hj-np-z]+)/g;
+  function linkBareRefs(text, NT) {
+    return String(text || '')
+      .split(/(```[\s\S]*?```|`[^`\n]+`)/)
+      .map((part, i) => (i % 2 ? part : part.replace(BARE_REF_RE, (whole, lead, ref) => {
+        try { NT.nip19.decode(ref); } catch (_) { return whole; }
+        return lead + 'nostr:' + ref;
+      })))
+      .join('');
+  }
+
+  // EVERYTHING A NOTE'S TEXT TAGS, in the order a note carries it: the people mentioned,
+  // then the authors it quotes that are not already among them, less anyone the reply's
+  // own threading tags already name (threadTags), and the q tags. Both composers place
+  // these after the threading and client tags: p tags, then q tags, then imeta.
+  // A HASHTAG IS A t TAG (NIP-24), lowercase, once each, in the order written: clients and
+  // relays find posts by hashtag through #t filters, so one written only in the text is a
+  // word no search finds. Not inside a link (a page's #section), not inside code, and not a
+  // number on its own ("#1 fan"). A trailing hyphen or underscore is punctuation, not tag.
+  function hashtagTags(text) {
+    const prose = String(text || '').replace(/```[\s\S]*?```|`[^`\n]+`/g, ' ').replace(/\b(?:https?|wss?):\/\/\S+/gi, ' ');
+    const out = [];
+    const seen = new Set();
+    for (const m of prose.matchAll(/(^|[^\p{L}\p{N}_&#/])#([\p{L}\p{N}_][\p{L}\p{M}\p{N}_-]*)/gu)) {
+      const tag = m[2].replace(/[-_]+$/, '').toLowerCase();
+      if (!tag || /^\p{N}+$/u.test(tag) || seen.has(tag)) continue;
+      seen.add(tag);
+      out.push(['t', tag]);
+    }
+    return out;
+  }
+
+  function noteBodyTags(prose, NT, threadTags) {
+    const pTags = mentionPTags(prose, NT);
+    const quotes = quoteTags(prose, NT);
+    const seenP = new Set(pTags.map((t) => t[1]));
+    for (const pk of quotes.authors) {
+      if (seenP.has(pk)) continue;
+      seenP.add(pk);
+      pTags.push(['p', pk]);
+    }
+    const already = new Set((threadTags || []).filter((t) => t[0] === 'p').map((t) => t[1]));
+    return { p: pTags.filter((t) => !already.has(t[1])), q: quotes.tags, t: hashtagTags(prose) };
+  }
+
+  // ---- dev-build composer fixtures, shared by both composers ------------------------
+  //
+  // Three tools for authoring test events from an unpacked build: an event kind other
+  // than the one a reply would take, p tags the text never mentions, and a reply to any
+  // event by id. Gated by the build in each composer, never here: these are pure, and the
+  // gate belongs to the page that knows what build it is. Moved here so the panel and the
+  // expanded tab produce the same events; two copies drift.
+
+  // Typed keys to p-tag silently: npub1… or 64 hex, separated by spaces or commas.
+  // Anything unreadable is DROPPED rather than guessed at, because a tag aimed at the
+  // wrong key is worse than no tag and nothing in the note would reveal it.
+  function parseSilentTags(text, NT) {
+    const out = [];
+    const seen = new Set();
+    String(text || '').split(/[\s,]+/).forEach((tok) => {
+      const t = tok.trim().replace(/^nostr:/i, '');
+      if (!t) return;
+      let hex = '';
+      if (/^[0-9a-f]{64}$/i.test(t)) hex = t.toLowerCase();
+      else if (/^npub1/i.test(t)) {
+        try {
+          const d = NT.nip19.decode(t);
+          if (d && d.type === 'npub' && typeof d.data === 'string') hex = d.data;
+        } catch (_) {}
+      }
+      if (hex && !seen.has(hex)) { seen.add(hex); out.push(hex); }
+    });
+    return out;
+  }
+
+  // An event reference: note1…, nevent1… (its relay hints and author come with it) or
+  // 64 hex characters, with or without nostr:. Anything else is null, never a guess.
+  function parseEventRef(text, NT) {
+    const raw = String(text || '').trim().replace(/^nostr:/, '');
+    if (/^[0-9a-f]{64}$/i.test(raw)) return { id: raw.toLowerCase(), relays: [], author: null };
+    try {
+      const d = NT.nip19.decode(raw);
+      if (d.type === 'note' && typeof d.data === 'string') return { id: d.data, relays: [], author: null };
+      if (d.type === 'nevent' && d.data && d.data.id) {
+        return { id: d.data.id, relays: d.data.relays || [], author: d.data.author || null };
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  // The event, from its hints, the page's own read relays and its author's write relays
+  // when the reference names one. via: ownRelays() and outboxOf(pubkey) resolve to
+  // relay lists, get(relays, filter) to one event. Only an event whose id IS the one
+  // asked for is accepted: a relay is not obliged to honor the filter.
+  async function fetchEventRef(ref, via) {
+    const own = await Promise.resolve().then(via.ownRelays).catch(() => []);
+    let outbox = [];
+    if (ref.author) {
+      try { outbox = (await via.outboxOf(ref.author)) || []; } catch (_) {}
+    }
+    const relays = [...new Set([...(ref.relays || []), ...(own || []), ...outbox])];
+    if (!relays.length) return null;
+    const ev = await Promise.race([
+      Promise.resolve().then(() => via.get(relays, { ids: [ref.id] })).catch(() => null),
+      new Promise((res) => setTimeout(() => res(null), 8000)),
+    ]);
+    return ev && ev.id === ref.id ? ev : null;
+  }
+
+  // A reply's threading with its KIND chosen rather than inherited: kind 1 or kind 1111
+  // answering anything, so a reader's handling of mixed threads can be tested. 0 (or no
+  // choice) is the ordinary reply. authorOf(id) resolves to a note's author, for a
+  // comment whose thread root the target names but does not carry the author of.
+  async function devReplyTags(target, selectedKind, selfPubkey, authorOf) {
+    if (!selectedKind) return target ? replyTags(target, selfPubkey) : null;
+    if (!target) {
+      if (selectedKind === WEB_COMMENT_KIND) throw new Error(t('Reply to a note to create a kind 1111 comment.'));
+      return null;
+    }
+    const normal = replyTags(target, selfPubkey);
+    if (selectedKind === normal.kind) return normal;
+    const people = normal.tags.filter((t) => t[0] === 'p');
+    if (selectedKind === WEB_COMMENT_KIND) {
+      const rootTag = (target.tags || []).find((t) => t[0] === 'e' && t[3] === 'root' && t[1]);
+      const rootId = rootTag ? rootTag[1] : target.id;
+      const rootAuthor = rootId === target.id ? target.pubkey
+        : rootTag[4] || (await authorOf(rootId));
+      if (!rootAuthor) throw new Error(t('Could not load the thread author. Try again before posting this comment.'));
+      return { kind: WEB_COMMENT_KIND, tags: [
+        // K is the root's kind: the event itself when it is the root (an article, a picture,
+        // whatever Reply to any event loaded), and a note when it sits in a kind 1 thread.
+        ['E', rootId, rootTag?.[2] || '', rootAuthor], ['K', rootId === target.id ? String(target.kind) : '1'], ['P', rootAuthor],
+        ['e', target.id, '', target.pubkey], ['k', String(target.kind)], ...people,
+      ] };
+    }
+    // Intentionally nonstandard: useful for testing tolerant readers of mixed threads.
+    const root = (target.tags || []).find((t) => t[0] === 'E' && t[1]);
+    const rootId = root ? root[1] : target.id;
+    const rootAuthor = (target.tags || []).find((t) => t[0] === 'P' && t[1])?.[1] || root?.[3];
+    if (rootAuthor && rootAuthor !== selfPubkey && !people.some((t) => t[1] === rootAuthor)) {
+      people.push(['p', rootAuthor]);
+    }
+    const tags = [['e', rootId, root?.[2] || '', 'root']];
+    if (rootId !== target.id) tags.push(['e', target.id, '', 'reply']);
+    return { kind: 1, tags: [...tags, ...people] };
+  }
+
+  // THE COVER A VIDEO WEARS INSTEAD OF A FRAME.
+  //
+  // A <video> in a 72px cell is a bad thumbnail three ways: it paints black until it has
+  // decoded something, it downloads part of a file nobody asked to watch, and a single
+  // frame at that size tells you less than the word VIDEO does. The element stays in the
+  // cell, at preload=metadata, purely so a 404 is still detectable; this covers it.
+  //
+  // It carries the extension because two videos in a strip are otherwise the same square
+  // twice, and the strip's whole job is to say what is attached and in what order.
+  // A FRAME IS WORTH MORE THAN A GLYPH, but it has to be asked for. preload=metadata
+  // fetches the header and stops: dimensions and duration, no decoded picture, so the
+  // element paints nothing. Seeking a fraction of a second in forces exactly one frame
+  // to decode, and the browser range-requests only what that needs.
+  //
+  // NOT 0. The first frame of a video is very often black or a fade-in, which is a
+  // thumbnail that says less than the glyph it replaced. A tenth of a second in is past
+  // most of them and still the opening shot. Clamped to the duration, because a clip
+  // shorter than that would seek past its end and never fire `seeked`.
+  //
+  // Everything here is best-effort and silent on failure. A codec the browser will not
+  // decode, a host that refuses range requests, a seek that never completes: each leaves
+  // the cover exactly as it was, which is a working thumbnail, so none of them is worth
+  // an error anybody has to read.
+  function primeVideoThumb(el, cell) {
+    let asked = false;
+    el.addEventListener('loadedmetadata', () => {
+      if (asked) return;
+      asked = true;
+      try {
+        const d = Number(el.duration);
+        el.currentTime = Number.isFinite(d) && d > 0 ? Math.min(0.1, d / 2) : 0.1;
+      } catch (_) {}
+    });
+    // The frame is on screen from here, so the cover gets out of its way and becomes a
+    // corner badge. Still a badge, because a still frame does not say "this is a video"
+    // and the strip's job is to say what is attached.
+    el.addEventListener('seeked', () => cell.classList.add('has-frame'));
+  }
+
+  function videoThumbCover(url) {
+    const cover = h('div', { className: 'compose-thumb-vid' });
+    cover.append(icon('video'));
+    // From the PATH, never the query: a signed URL can carry ?x=y.mp4 and the extension
+    // is not whatever the last dot in the whole string happens to precede.
+    const m = /\.([a-z0-9]{2,5})$/i.exec(String(url || '').split('?')[0].split('#')[0]);
+    if (m) cover.append(h('span', { textContent: m[1].toUpperCase() }));
+    return cover;
+  }
+
+  // The copy icon's feedback, shared by every copy button in the composer: the clipboard
+  // write, then a check mark for about a second. A failed write changes nothing.
+  function copyWithCheck(btn, text) {
+    navigator.clipboard.writeText(text).then(() => {
+      btn.innerHTML = '';
+      btn.append(icon('check'));
+      btn.classList.add('did');
+      setTimeout(() => {
+        btn.innerHTML = '';
+        btn.append(icon('copy'));
+        btn.classList.remove('did');
+      }, 900);
+    }).catch(() => {});
+  }
+
+  // One row per link: the URL, truncated, and a copy button in the icon slot. The rows of
+  // the reference drawer and of the pictures' own list are this.
+  function buildUrlRow(url) {
+    const rowEl = h('div', { className: 'compose-media-row' });
+    const u = h('span', { className: 'compose-media-url', textContent: url });
+    u.title = url;
+    const cp = h('button', { className: 'compose-media-copy', title: t('Copy link'), type: 'button' });
+    cp.setAttribute('aria-label', t('Copy link'));
+    cp.append(icon('copy'));
+    cp.addEventListener('click', () => copyWithCheck(cp, url));
+    rowEl.append(u, cp);
+    return rowEl;
+  }
+
+  // An icon-only button in the label row of the pictures' block or the quote's.
+  function blockIconBtn(name, title, fn) {
+    const b = h('button', { className: 'quote-block-btn', title, type: 'button' });
+    b.setAttribute('aria-label', title);
+    b.append(icon(name));
+    b.addEventListener('click', fn);
+    return b;
+  }
+
+  // The pictures' own block in the strip, shown only while a quote is attached beside them
+  // (the strip is then two blocks and each one says what it is and which way it can go).
+  // Returns { label, list }: the label goes above the first picture, the list of links
+  // below the last, so the links stay with the pictures they belong to when the blocks swap.
+  // The label's chevron opens the list; whether it is open outlives the strip's repaints.
+  // The arrow is the quote block's, seen from the other side: the pictures going below the
+  // note is the note going above them. It ends the row, in the same column as the quote
+  // block's own arrow.
+  let attachmentUrlsOpen = false;
+  function buildAttachmentsLabel(count, ctl) {
+    const c = ctl || {};
+    const urls = (c.urls || []).filter(Boolean);
+    const list = h('div', { className: 'compose-media-drawer attach-group-list' });
+    for (const u of urls) list.append(buildUrlRow(u));
+    const toggle = h('button', { className: 'attach-group-toggle', type: 'button' });
+    let links = null; // the list button in the actions, made below
+    const paintOpen = () => {
+      list.classList.toggle('hidden', !attachmentUrlsOpen);
+      toggle.classList.toggle('open', attachmentUrlsOpen);
+      toggle.setAttribute('aria-expanded', attachmentUrlsOpen ? 'true' : 'false');
+      if (links) {
+        links.title = attachmentUrlsOpen ? t('Hide links') : t('Show links');
+        links.setAttribute('aria-label', links.title);
+        links.setAttribute('aria-expanded', attachmentUrlsOpen ? 'true' : 'false');
+      }
+    };
+    toggle.append(icon('chevron-down'), h('span', { textContent: tn('{{count}} attachment', '{{count}} attachments', count) }));
+    toggle.addEventListener('click', () => { attachmentUrlsOpen = !attachmentUrlsOpen; paintOpen(); });
+    const actions = h('span', { className: 'quote-block-actions' });
+    // THE LINKS, IN THE OPEN. The label opens the list too, but it reads as a heading
+    // like "Quoting", and nothing said it could be tapped. This opens and closes the same
+    // list whatever the count, and copying stays on its rows: one button that copied for
+    // one attachment and opened a list for several could not be read before tapping.
+    if (urls.length) {
+      links = blockIconBtn('list', t('Show links'), () => { attachmentUrlsOpen = !attachmentUrlsOpen; paintOpen(); });
+      links.classList.add('attach-group-links');
+      actions.append(links);
+    }
+    paintOpen();
+    if (c.canUp) actions.append(blockIconBtn('arrow-up', t('Move above the quote'), c.onUp));
+    if (c.canDown) actions.append(blockIconBtn('arrow-down', t('Move below the quote'), c.onDown));
+    const label = h('div', { className: 'attach-group-label' }, [toggle, actions]);
+    return { label, list };
+  }
+
+  // The attachments' reference drawer: one collapsed line saying how many and where
+  // they go, expanding to one row per attachment — the URL, truncated, with a copy
+  // button in the icon slot. Read-only on purpose: the order shown is the thumbs'
+  // order, and reordering happens on the thumbnails themselves. `getMedia` is a
+  // function because the draft is rebound when the account moves under the tab; the
+  // drawer re-reads it on every sync.
+  function buildMediaDrawer(getMedia, opts) {
+    const wrap = h('div', { className: 'compose-media-note hidden' });
+    const toggle = h('button', { className: 'compose-media-toggle', type: 'button' });
+    const chev = icon('chevron-down');
+    const label = h('span', { className: 'compose-media-toggle-label' });
+    toggle.append(chev, label);
+    const drawer = h('div', { className: 'compose-media-drawer hidden' });
+    // THE QUOTE OFFER, only when it means something: attachments are on the post and the
+    // words end on a quoted note. One tap moves the quote into the strip, where it is a
+    // card that reorders with the images (the order of the strip is the order of the post).
+    // Never done silently: a quote that stays in the text works exactly as it always did.
+    // `opts.getText` reads the live prose; `opts.onMoveQuote` is the page's move.
+    const offer = h('button', { className: 'compose-media-offer', type: 'button', textContent: t('Move the quote into the attachments') });
+    offer.addEventListener('click', () => { if (opts && opts.onMoveQuote) opts.onMoveQuote(); });
+    wrap.append(toggle, offer, drawer);
+
+    function sync() {
+      const media = (getMedia && getMedia()) || [];
+      const urls = media.filter((m) => m && m.url);
+      // With a quote in the strip the pictures carry their own label and list of links.
+      if (!urls.length || media.some((m) => m && m.quote)) {
+        wrap.classList.add('hidden');
+        drawer.classList.add('hidden');
+        toggle.classList.remove('open');
+        return;
+      }
+      wrap.classList.remove('hidden');
+      const trailing = opts && opts.getText ? takeTrailingQuote(opts.getText(), media).quotes : [];
+      const quoted = trailing.length > 0 && !quoteMissed.has(trailing[0].quote);
+      offer.classList.toggle('hidden', !quoted);
+      label.textContent = tn('{{count}} attachment, added to the end of your post', '{{count}} attachments, added to the end of your post', urls.length);
+      // The rows only when the links changed: sync also runs on every keystroke, for the offer.
+      const shown = urls.map((m) => m.url).join('\n');
+      if (shown === rowsFor) return;
+      rowsFor = shown;
+      drawer.innerHTML = '';
+      for (const m of urls) drawer.append(buildUrlRow(m.url));
+    }
+    let rowsFor = null;
+    toggle.addEventListener('click', () => {
+      drawer.classList.toggle('hidden');
+      toggle.classList.toggle('open', !drawer.classList.contains('hidden'));
+    });
+    sync();
+    return { wrap, drawer, sync };
+  }
+
+  // cost() is a function so it is translated when read, not when this file loads, which
+  // is before the language has.
+  const POW_LEVELS = [
+    { bits: 16, cost: () => t('Usually instant.') },
+    { bits: 18, cost: () => t('About a second.') },
+    { bits: 20, cost: () => t('A few seconds, sometimes fifteen.') },
+    { bits: 22, cost: () => t('Ten seconds or so, sometimes a minute.') },
+  ];
+  const POW_DEFAULT_BITS = 18;
+  const powLevelFor = (bits) => POW_LEVELS.find((l) => l.bits === bits) || POW_LEVELS[1];
+
+  const IMG_EXT = /\.(jpg|jpeg|png|gif|webp|svg|bmp|avif)(\?.*)?$/i;
+
+  const VID_EXT = /\.(mp4|webm|mov|m4v)(\?.*)?$/i;
+
+  // CODE IS APPENDED, NOT PREPENDED, so m[1] and m[2] keep meaning what they meant to
+  // every existing branch. It still wins over a URL inside a fence: the engine takes the
+  // LEFTMOST match, and a fence opens before anything it contains.
+  //
+  // Fenced first, then inline, or ``` would match as an empty inline pair followed by a
+  // stray backtick. Inline refuses newlines, so an unclosed backtick in prose cannot
+  // swallow the rest of a note looking for its partner.
+  const PREVIEW_RE = /(https?:\/\/[^\s]+)|(?:nostr:)?(npub1[0-9a-z]{58}|nprofile1[0-9a-z]{50,}|note1[0-9a-z]{58}|nevent1[0-9a-z]{50,}|naddr1[0-9a-z]{50,})|(```[\s\S]*?```)|(`[^`\n]+`)/gi;
+
+  // The text inside a fence, without the fences and without the language tag authors put
+  // on the opening line. The tag is dropped rather than shown: it is an instruction to a
+  // highlighter, and there is no highlighter here.
+  function fenceBody(raw) {
+    let t = String(raw).slice(3, -3);
+    t = t.replace(/^[^\n`]*\n/, '');   // ```js\n  -> drop the tag line
+    return t.replace(/^\n+/, '').replace(/\s+$/, '');
+  }
+
+  // THE BLOCK IS COPYABLE, because the reason somebody pastes code into a note is for
+  // you to run it, and a box that scrolls sideways is the worst possible thing to select
+  // by hand on a phone or in a 360px panel.
+  //
+  // The button sits OUTSIDE the scrolling element, in a wrapper, or it would scroll away
+  // with the content the moment a long line was read.
+  function codeBlockEl(raw) {
+    const body = fenceBody(raw);
+    const wrap = h('div', { className: 'note-code-wrap' });
+    const pre = h('pre', { className: 'note-code' });
+    pre.append(h('code', { textContent: body }));
+
+    const copy = h('button', { className: 'note-code-copy', type: 'button', title: t('Copy code') });
+    copy.append(icon('copy'));
+    copy.addEventListener('click', (e) => {
+      // The block can sit inside a row that is itself a link to the note.
+      e.preventDefault();
+      e.stopPropagation();
+      navigator.clipboard.writeText(body).then(() => {
+        copy.innerHTML = '';
+        copy.append(icon('check'));
+        copy.classList.add('ok');
+        // Reverted rather than left as a tick: the next block down is a different block,
+        // and a permanent tick on one of several says the wrong thing about which.
+        setTimeout(() => {
+          if (!copy.isConnected) return;
+          copy.innerHTML = '';
+          copy.append(icon('copy'));
+          copy.classList.remove('ok');
+        }, 1200);
+      }, () => {});
+    });
+
+    wrap.append(pre, copy);
+    return wrap;
+  }
+
+  // ---- polls, shared by both composers -------------------------------------------
+  //
+  // Moved here from sidepanel.js so the expanded tab can compose one too. Until it
+  // could, the always-expanded setting had to refuse a poll draft outright, since a tab
+  // with no poll editor shows the question and the options as nothing and then publishes
+  // a plain note over the top of them.
+  const POLL_KIND = 1068;
+  const POLL_SINGLE = 'singlechoice';
+  const POLL_MULTIPLE = 'multiplechoice';
+  // A day rather than the week this started at, because a week is not what anyone means
+  // by "I'm asking". Twitter defaults to a day and caps at seven; Amethyst's own poll
+  // composer opens on oneDayAhead. Longer is still offered, up to thirty days, since a
+  // poll about something slow is a real thing to want. The default is the common case.
+  const POLL_DEFAULT_SECS = 86400;
+  const POLL_DURATIONS = [
+    { secs: 3600, label: '1 hour' },
+    { secs: 6 * 3600, label: '6 hours' },
+    { secs: POLL_DEFAULT_SECS, label: '1 day' },
+    { secs: 3 * 86400, label: '3 days' },
+    { secs: 7 * 86400, label: '7 days' },
+    { secs: 14 * 86400, label: '14 days' },
+    { secs: 30 * 86400, label: '30 days' },
+  ];
+  // The label above is English for tests and logs; what the select shows is built here,
+  // since "6 hours" is a count and takes its language's plural form.
+  function pollDurationLabel(secs) {
+    if (secs < 86400) {
+      const n = secs / 3600;
+      return tn('{{count}} hour', '{{count}} hours', n);
+    }
+    const n = secs / 86400;
+    return tn('{{count}} day', '{{count}} days', n);
+  }
+  // Four, matching what Jumble writes. These tags tell a voter where to publish, and a
+  // long list is not more reachable: it is the same votes scattered wider, which makes
+  // the count slower to gather and more likely to be partial.
+  const POLL_RELAY_LIMIT = 4;
+
+  // Alphanumeric, which is all NIP-88 asks of an option id. Nine characters matches what
+  // Jumble writes, so ids from either client look the same on a relay.
+  function pollOptionId() {
+    const abc = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    const bytes = new Uint8Array(9);
+    crypto.getRandomValues(bytes);
+    let out = '';
+    for (const b of bytes) out += abc[b % abc.length];
+    return out;
+  }
+
+  function newPollDraft() {
+    return {
+      options: ['', ''],
+      multiple: false,
+      ends: { kind: 'in', secs: POLL_DEFAULT_SECS },
+    };
+  }
+
+  // A DURATION IS RESOLVED AT PUBLISH, NOT AT DRAFT. Storing the absolute timestamp when
+  // the editor opened meant a poll drafted on Monday and posted on Thursday went out with
+  // three of its days already gone, and one left in a draft past its own duration
+  // published already closed. `kind: 'at'` is the one case the author really did name a
+  // moment, so that one is passed through untouched.
+  function pollEndsAtFor(pollDraft, nowSecs) {
+    const ends = pollDraft && pollDraft.ends;
+    if (!ends || ends.kind === 'none') return null;
+    if (ends.kind === 'at') return ends.at > 0 ? ends.at : null;
+    return nowSecs + ends.secs;
+  }
+
+  // Two options with something in them is the floor: one option is not a question, and
+  // a blank is not a choice anyone can pick. Blanks are dropped rather than rejected so
+  // an author can leave the trailing empty row alone instead of tidying it.
+  function pollDraftOptions(pollDraft) {
+    return ((pollDraft && pollDraft.options) || []).map((o) => o.trim()).filter(Boolean);
+  }
+
+  function pollDraftIsPostable(pollDraft) {
+    return pollDraftOptions(pollDraft).length >= 2;
+  }
+
+  // The tags that turn a note into a poll. Pure, so the shape of a published poll is
+  // testable without a relay or a signer.
+  //
+  // Ids are generated here rather than in the editor because they are not the author's
+  // business, and because an id has to be unique WITHIN the poll: pollOptions drops a
+  // duplicate rather than merging it, so a collision would silently lose an option
+  // between what the author typed and what anyone can vote for.
+  function buildPollTags(pollDraft, nowSecs, relays) {
+    const tags = [];
+    const used = new Set();
+    pollDraftOptions(pollDraft).forEach((label) => {
+      let id = pollOptionId();
+      while (used.has(id)) id = pollOptionId();
+      used.add(id);
+      tags.push(['option', id, label]);
+    });
+    // Written even for the default. NIP-88 says an absent polltype is singlechoice, so
+    // this is redundant on paper, and it is the difference between a reader having to
+    // know the default and being told.
+    tags.push(['polltype', pollDraft.multiple ? POLL_MULTIPLE : POLL_SINGLE]);
+    const endsAt = pollEndsAtFor(pollDraft, nowSecs);
+    if (endsAt) tags.push(['endsAt', String(endsAt)]);
+    (relays || []).slice(0, POLL_RELAY_LIMIT).forEach((u) => tags.push(['relay', u]));
+    return tags;
+  }
+
+  // THE POLL EDITOR, built here so both composers have one.
+  //
+  // It used to live inside openComposer, which is why the expanded tab had no polls at
+  // all and the always-expanded setting had to refuse a poll draft: a tab with no editor
+  // shows the question and the options as nothing, then publishes a plain note over the
+  // top of them.
+  //
+  // `d` is everything it used to close over, as accessors rather than values, because
+  // the draft object is rebound under the tab when the account changes and a captured
+  // reference would go on editing the previous account's poll.
+  //
+  //   poll()      the draft's poll, or null
+  //   setPoll(p)  write it back
+  //   changed()   the draft moved: repaint Post and save. BOTH, always: the two were
+  //               separate calls here and two of the sites only ever saved, so folding
+  //               them apart is how one of those silently stops updating the button.
+  //   isReply()   polls are not offered on a reply
+  //   hasMedia()  a poll and attachments are one or the other
+  //   mediaBtn()  the button that stands down while a poll holds the draft
+  //   gif()       optional, the GIF picker, which stands down with it
+  //   devSelect() optional, the dev kind override to disable
+  //
+  // Returns the pieces the caller mounts: the editor itself, the button that starts one,
+  // and the two paints, since adding media has to re-run the either-or from outside.
+  // ---- saved drafts, listed ----
+  //
+  // One account holds a note draft and a reply draft per note it is answering. Both
+  // composers list the others the same way, from here: the tab under its Saved drafts tab,
+  // the panel behind the folder in its corner.
+  //
+  // ONLY DRAFTS WITH SOMETHING IN THEM. A reply keeps its slot while empty because the
+  // slot holds the target, but an empty slot is nothing to go back to.
+  function draftHasContent(d) {
+    return !!(d && ((d.text && d.text.trim()) || (d.media && d.media.length)
+      || (d.poll && d.poll.options && d.poll.options.some((o) => o && o.trim()))));
+  }
+  // Every draft of this account but the one on screen, the note first and then replies
+  // newest first. `replyId` is the note a reply answers, or null for the note draft.
+  // A note set aside (shelveNoteDraft) is listed with the notes, as `shelved`, and picking
+  // it brings it back into the note slot (unshelveNoteDraft) rather than opening it where it
+  // sits: the note slot is the one every route, Expand included, knows how to open.
+  function otherDraftEntries(all, pubkey, currentKey) {
+    return Object.keys(all || {})
+      .filter((k) => k !== currentKey
+        && (k === pubkey || k.startsWith(pubkey + '|r:') || k.startsWith(pubkey + '|n:'))
+        && draftHasContent(all[k]))
+      .map((k) => {
+        const reply = k.startsWith(pubkey + '|r:');
+        return {
+          key: k, draft: all[k], reply, shelved: k.startsWith(pubkey + '|n:'),
+          replyId: reply ? k.slice(k.indexOf('|r:') + 3) : null,
+        };
+      })
+      .sort((a, b) => (a.reply - b.reply) || ((b.draft.savedAt || 0) - (a.draft.savedAt || 0)));
+  }
+
+  // ---- a note set aside ----
+  //
+  // TAPPING QUOTE OVER A NOTE IN PROGRESS. The note you were writing may have nothing to do
+  // with the one you just chose, so it is set aside under Saved drafts and the quote opens
+  // in a fresh note. Only a draft with something of its own in it is kept: one holding
+  // nothing but an older quote is simply re-pointed (placeQuote), since there is nothing
+  // in it to lose. Shelved notes sit beside the reply slots, under `pubkey|n:` and a time.
+  const SHELVED_NOTE_MAX = 20;
+  function draftHasWork(d) {
+    return !!(d && ((d.text && d.text.trim()) || (d.media || []).some((m) => m && !m.quote)
+      || (d.poll && d.poll.options && d.poll.options.some((o) => o && o.trim()))));
+  }
+  // Moves the note slot's draft aside if it has content. Mutates `all`; returns the new
+  // key, or null when there was nothing to keep. A key already taken this millisecond
+  // (two taps at once) moves on rather than writing over it.
+  function shelveNoteDraft(all, pubkey, now) {
+    const d = all[pubkey];
+    if (!draftHasContent(d)) { delete all[pubkey]; return null; }
+    let t0 = now;
+    while (all[pubkey + '|n:' + t0]) t0++;
+    const key = pubkey + '|n:' + t0;
+    const kept = { ...d, savedAt: now };
+    delete kept.expandRelays; // the tab's relay set for one post, not part of the note
+    delete kept.replyTo;      // never set on the note slot; a note set aside stays a note
+    all[key] = kept;
+    delete all[pubkey];
+    const shelf = Object.keys(all).filter((k) => k.startsWith(pubkey + '|n:'));
+    if (shelf.length > SHELVED_NOTE_MAX) {
+      shelf.sort((a, b) => (all[b].savedAt || 0) - (all[a].savedAt || 0))
+        .slice(SHELVED_NOTE_MAX).forEach((k) => delete all[k]);
+    }
+    return key;
+  }
+  // Picking a note set aside: whatever is in the note slot goes aside in its place, and
+  // the picked one becomes the note. Mutates `all`; false if the key is not a shelved note.
+  function unshelveNoteDraft(all, pubkey, key, now) {
+    if (typeof key !== 'string' || !key.startsWith(pubkey + '|n:') || !all[key]) return false;
+    const picked = all[key];
+    delete all[key];
+    shelveNoteDraft(all, pubkey, now);
+    all[pubkey] = { ...picked, savedAt: now };
+    return true;
+  }
+  // THE ONE-LINE VIEW OF A DRAFT READS NOSTR REFERENCES AS A PERSON WOULD. A mention is
+  // stored as nostr:npub1… or nostr:nprofile1…, 63 characters or more of bech32 that filled
+  // the row and said nothing. A person is "@name", or a short npub until the name is known
+  // (`names` maps the bech32 to it), and a note, event or address is its first and last
+  // characters. Only the display changes: the draft keeps the full reference.
+  function draftRefsAsText(text, names) {
+    // The page's nip19; display only, so without it a reference is shortened whole.
+    const NT = (typeof window !== 'undefined' && window.NostrTools) || null;
+    return String(text || '').replace(/nostr:((?:npub|nprofile|note|nevent|naddr)1[02-9ac-hj-np-z]+)/g, (whole, run) => {
+      // A word joined onto the reference is kept as the word, not shortened with it.
+      const ref = NT ? readRef(run, NT) : null;
+      const code = ref ? ref.code : run;
+      const rest = run.slice(code.length);
+      return refAsText(code, names) + (rest ? ' ' + rest : '');
+    });
+  }
+  function refAsText(code, names) {
+    const person = code.startsWith('npub1') || code.startsWith('nprofile1');
+    const known = names && names[code];
+    if (person && known) return '@' + known;
+    const short = code.length > 20 ? code.slice(0, 10) + '\u2026' + code.slice(-4) : code;
+    return person ? '@' + short : short;
+  }
+  function draftSnippet(d, names) {
+    const text = draftRefsAsText(stripDraftMediaUrls(d.text || '', d.media), names).replace(/\s+/g, ' ').trim();
+    if (text) return text;
+    // A poll with its options typed and no question yet still says what it is.
+    const opts = (d.poll && d.poll.options || []).map((o) => (o || '').trim()).filter(Boolean);
+    if (opts.length) return opts.join(' · ');
+    const files = pictureCount(d.media);
+    if (files) return tn('{{count}} attachment', '{{count}} attachments', files);
+    return (d.media || []).some((m) => m && m.quote) ? t('A quoted note') : '';
+  }
+  // What a row is called: a reply, a poll, or the note.
+  function draftKindLabel(entry, name) {
+    if (entry.reply) return name ? t('Reply to {{name}}', { name }) : t('Reply');
+    return entry.draft.poll ? t('Your poll') : t('Your note');
+  }
+
+  // The list itself. d: { entries, nameFor(pubkey) -> Promise<name|null>, onPick(entry),
+  // onDelete(entry) -> Promise, onSave(entry) -> Promise and onCurrent(entry) (optional) }.
+  //
+  // THE TRASH CONFIRMS BY REWRITING ITS OWN ROW, the account switcher's two taps: the
+  // first turns the row into the question, the second, anywhere on it, deletes. A draft
+  // lives only in this browser, so there is nothing to recover it from, and the toast
+  // has no Undo to offer instead. The question goes back on its own after a few seconds.
+  //
+  // DRAFTS ON RELAYS (NIP-37) use the same row. Three kinds of entry, all optional:
+  //   entry.current    the draft on screen, listed so it can be saved to relays; no trash,
+  //                    since deleting what you are writing is what clearing it is for
+  //   entry.relayItem  a draft read back from the account's private relays; its trash
+  //                    blanks the relay copy, so its question says where it is deleting
+  //   d.onSave         a second icon, the cloud, on rows that can go to relays (not a
+  //                    poll: NIP-37 drafts here are kinds 1 and 1111 only)
+  // Two icons at most in the inline slot, never a word: AGENTS.md's row grammar.
+  // ARTICLES AND RECIPES IN SAVED DRAFTS. They keep their own store (longform.js), one of
+  // each per account, and are listed apart from the notes, under their own heading, in the
+  // note rows' own markup. Shared by the panel and the full-size composer so the two lists
+  // say the same thing. `mine` is the account's entry in that store; `current` names the
+  // kind on screen, which reads "Open now" and has no delete, as the note on screen does.
+  function longformDraftItems(mine, current) {
+    const out = [];
+    const a = mine && mine.article;
+    const r = mine && mine.recipe;
+    if (a) out.push({ kind: 'article', label: t('Article'), savedAt: a.savedAt, current: current === 'article',
+      snippet: (a.title || a.summary || String(a.body || '').slice(0, 140)).trim() });
+    if (r) out.push({ kind: 'recipe', label: t('Recipe'), savedAt: r.savedAt, current: current === 'recipe',
+      snippet: (r.title || r.summary || (r.ingredients || [])[0] || '').trim() });
+    // A thread's draft (kept for dev/threads) is not listed: this build has no Thread tab to open it in.
+    return out;
+  }
+  function buildLongformDraftList(items, opts) {
+    if (!items.length) return '';
+    const rows = items.map((it) => {
+      const label = h('span', { className: 'saved-draft-label', textContent: it.label });
+      const when = h('span', { className: 'saved-draft-when', textContent: it.current ? t('Open now') : (it.savedAt ? relTime(it.savedAt) : '') });
+      const open = h('button', { className: 'saved-draft-open', type: 'button' }, [
+        h('span', { className: 'saved-draft-top' }, [label, h('span', { className: 'saved-draft-meta' }, [when])]),
+        h('span', { className: 'saved-draft-snip', dir: 'auto', textContent: it.snippet || t('Untitled') }),
+      ]);
+      open.addEventListener('click', () => opts.onOpen(it.kind));
+      const row = h('div', { className: 'saved-draft' + (it.current ? ' saved-draft-current' : '') }, [open]);
+      // The one on screen only where the caller clears the form as it deletes (opts.discard):
+      // otherwise the form's next save would write it straight back.
+      const discard = it.current && opts.discard;
+      if ((!it.current || discard) && opts.onDelete) {
+        // Two taps, as the note rows ask: the first says what the second does.
+        const trash = h('button', { className: 'saved-draft-x', type: 'button', title: discard ? t('Discard draft') : t('Delete draft') }, [icon('trash')]);
+        trash.setAttribute('aria-label', trash.title);
+        trash.addEventListener('click', () => {
+          if (!row.classList.contains('confirming')) {
+            row.classList.add('confirming');
+            label.textContent = discard ? t('Tap again to discard') : t('Tap again to delete');
+            return;
+          }
+          opts.onDelete(it.kind);
+        });
+        row.append(trash);
+      }
+      return row;
+    });
+    return h('div', { className: 'lf-saved-drafts' }, [
+      h('h4', { className: 'lf-saved-head', textContent: t('Articles and recipes') }),
+      h('div', { className: 'saved-drafts' }, rows),
+    ]);
+  }
+
+  function buildSavedDraftList(d) {
+    const list = h('div', { className: 'saved-drafts' });
+    d.entries.forEach((entry) => {
+      const label = h('span', { className: 'saved-draft-label', textContent: draftKindLabel(entry, null) });
+      const whenText = () => (entry.current ? (entry.openLabel != null ? entry.openLabel : t('Open now'))
+        : entry.draft.savedAt ? relTime(entry.draft.savedAt) : '');
+      const when = h('span', { className: 'saved-draft-when', textContent: whenText() });
+      // The time and, when there is one, the mark beside it are ONE unit at the end of the
+      // line, on the same baseline: separate flex items drifted apart and sat at different
+      // heights from the title and each other.
+      const meta = h('span', { className: 'saved-draft-meta' });
+      const top = h('span', { className: 'saved-draft-top' }, [label, meta]);
+      // The mark: this one has a copy on the account's private relays.
+      if (entry.relayItem || (entry.draft.relay && entry.draft.relay.d)) {
+        const mark = h('span', { className: 'saved-draft-mark',
+          title: entry.relayItem ? t('On your relays') : t('Saved to your relays') });
+        mark.setAttribute('aria-label', mark.title);
+        mark.append(icon('cloud'));
+        meta.append(mark);
+      }
+      meta.append(when);
+      // The people named in the text: a short npub at once, their name when it arrives.
+      const names = {};
+      const NT = (typeof window !== 'undefined' && window.NostrTools) || null;
+      const people = new Map();
+      if (NT) {
+        for (const m of String(entry.draft.text || '').matchAll(/nostr:((?:npub|nprofile)1[02-9ac-hj-np-z]+)/g)) {
+          try {
+            const dec = NT.nip19.decode(m[1]);
+            const pk = dec.type === 'npub' ? dec.data : dec.data && dec.data.pubkey;
+            if (!pk) continue;
+            const npub = NT.nip19.npubEncode(pk);
+            names[m[1]] = npub.slice(0, 10) + '\u2026' + npub.slice(-4);
+            if (!people.has(pk)) people.set(pk, []);
+            people.get(pk).push(m[1]);
+          } catch (_) { /* a reference that does not decode stays as its short form */ }
+        }
+      }
+      const snipText = () => draftSnippet(entry.draft, names);
+      const snip = h('span', { className: 'saved-draft-snip', dir: 'auto', textContent: snipText() });
+      const open = h('button', { className: 'saved-draft-open', type: 'button' }, [top, snip]);
+      const kids = [open];
+      if (d.onSave && !entry.relayItem && !entry.draft.poll) {
+        const save = h('button', { className: 'saved-draft-x saved-draft-cloud', type: 'button', title: t('Save to relays') });
+        save.setAttribute('aria-label', save.title);
+        save.append(icon('upload-cloud'));
+        save.addEventListener('click', async () => {
+          if (save.disabled) return;
+          save.disabled = true;
+          try { await d.onSave(entry); } catch (_) { /* the caller says what went wrong */ }
+          save.disabled = false;
+        });
+        kids.push(save);
+      }
+      // THE DRAFT ON SCREEN IS DISCARDED, NOT DELETED: the editor still holds its text, and
+      // deleting only the saved copy would see the next autosave write it straight back. So
+      // it has a trash only where the caller can clear the editor too (d.onDiscard).
+      const discard = !!(entry.current && d.onDiscard);
+      let trash = null;
+      if (!entry.current || discard) {
+        trash = h('button', { className: 'saved-draft-x', type: 'button',
+          title: discard ? t('Discard draft') : entry.relayItem ? t('Delete from your relays') : t('Delete draft') });
+        trash.setAttribute('aria-label', trash.title);
+        trash.append(icon('trash'));
+        kids.push(trash);
+      }
+      const row = h('div', { className: 'saved-draft' + (entry.current ? ' saved-draft-current' : '') }, kids);
+
+      let name = null;
+      if (entry.reply && entry.draft.replyTo && entry.draft.replyTo.pubkey && d.nameFor) {
+        Promise.resolve(d.nameFor(entry.draft.replyTo.pubkey)).then((n) => {
+          if (!n || !label.isConnected) return;
+          name = n;
+          if (!row.classList.contains('confirming')) label.textContent = draftKindLabel(entry, name);
+        }).catch(() => {});
+      }
+
+      if (d.nameFor) {
+        people.forEach((codes, pk) => {
+          Promise.resolve(d.nameFor(pk)).then((n) => {
+            if (!n || !snip.isConnected) return;
+            codes.forEach((c) => { names[c] = n; });
+            if (!row.classList.contains('confirming')) snip.textContent = snipText();
+          }).catch(() => {});
+        });
+      }
+
+      let timer = null;
+      const settle = () => {
+        clearTimeout(timer);
+        row.classList.remove('confirming', 'deleting');
+        row.removeAttribute('aria-busy');
+        label.textContent = draftKindLabel(entry, name);
+        meta.classList.remove('hidden');
+        snip.textContent = snipText();
+      };
+      const confirmDelete = () => {
+        row.classList.add('confirming');
+        label.textContent = discard ? t('Discard this draft?')
+          : entry.relayItem ? t('Delete it from your relays?') : t('Delete this draft?');
+        meta.classList.add('hidden');
+        snip.textContent = discard ? t('Tap again to discard') : t('Tap again to delete');
+        timer = setTimeout(settle, 4000);
+      };
+      // The row says so the moment the second tap lands: deleting from relays is a round
+      // trip, and a row that sits unchanged reads as a tap that did nothing. Its buttons are
+      // off meanwhile, so a third tap cannot send a second delete. A failure puts it back.
+      const remove = async () => {
+        clearTimeout(timer);
+        const buttons = row.querySelectorAll('button');
+        buttons.forEach((b) => { b.disabled = true; });
+        row.classList.remove('confirming');
+        row.classList.add('deleting');
+        row.setAttribute('aria-busy', 'true');
+        label.textContent = discard ? t('Discarding…') : t('Deleting…');
+        meta.classList.add('hidden');
+        snip.textContent = snipText();
+        try { await (discard ? d.onDiscard : d.onDelete)(entry); } catch (_) { settle(); buttons.forEach((b) => { b.disabled = false; }); }
+      };
+      if (trash) trash.addEventListener('click', () => { if (row.classList.contains('confirming')) remove(); else confirmDelete(); });
+      open.addEventListener('click', () => {
+        if (row.classList.contains('confirming')) remove();
+        else if (entry.current) (d.onCurrent || d.onPick)(entry);
+        else d.onPick(entry);
+      });
+      list.append(row);
+    });
+    return list;
+  }
+
+  // ---- drafts on relays (NIP-37) ----
+  //
+  // Saved drafts live in this browser, encrypted in the worker's store. NIP-37 is how a
+  // draft is kept on relays instead, where another client (or this one on another
+  // machine) can pick it up: a kind 31234 whose content is the UNSIGNED event Post would
+  // build, NIP-44 encrypted to the account's own key, sent to the private relays the
+  // account lists in its kind 10013.
+  //
+  // EXPLICIT, NEVER AUTOMATIC. Autosave stays local: a signature and a relay write per
+  // keystroke pause would be slow, and it would tell a relay when and how often you draft
+  // even with the text encrypted. A draft goes to relays when Save to relays is tapped,
+  // and that is all that ever sends one.
+  //
+  // KINDS 1 AND 1111 ONLY, the two this composer writes: a note (or a reply to one) and
+  // a NIP-22 comment answering a comment. Long-form (30023) and polls (1068) are left
+  // out by RELAY_DRAFT_KINDS, and a draft of another kind found on the relays is counted
+  // rather than shown, so adding a kind later is a builder and this list.
+  const RELAY_DRAFT_KIND = 31234;
+  const PRIVATE_RELAYS_KIND = 10013;
+  const RELAY_DRAFT_KINDS = [1, WEB_COMMENT_KIND];
+  // NIP-40 expiration, which NIP-37 recommends: a draft nobody came back to for three
+  // months is let go by any relay that honors it.
+  const RELAY_DRAFT_TTL_SECS = 90 * 86400;
+  // NIP-44 v2 encrypts at most 65535 bytes of plaintext.
+  const NIP44_MAX_PLAINTEXT = 65535;
+  const HEX64_RE = /^[0-9a-f]{64}$/;
+
+  const tagValue = (tags, name) => {
+    const tg = (tags || []).find((x) => Array.isArray(x) && x[0] === name);
+    return tg ? tg[1] : undefined;
+  };
+
+  // The event Post would build from this draft, unsigned: the threading the composers
+  // build (replyTags), the client tag unless Settings turned it off, the p and q tags the
+  // text earns (noteBodyTags), and one imeta per described attachment, in the order both
+  // composers write them. What has no NIP-37 home stays local: proof of work (mined at
+  // Post, against the signing key), the tab's relay set, and the dev-build overrides.
+  // Null for a draft that is not a note or a comment (a poll) or has nothing in it.
+  // o: { selfPubkey, NT, clientTag (default on), videoImeta, now (unix seconds) }
+  function draftToEvent(draft, o) {
+    if (!draft || draft.poll) return null;
+    const text = linkBareRefs(String(draft.text || '').trim(), o.NT);
+    const media = Array.isArray(draft.media) ? draft.media.filter(Boolean) : [];
+    if (!text && !media.length) return null;
+    const reply = draft.replyTo && draft.replyTo.id ? replyTags(draft.replyTo, o.selfPubkey) : null;
+    const body = noteBodyTags(proseWithQuotes(text, media), o.NT, reply ? reply.tags : []);
+    return {
+      kind: reply ? reply.kind : 1,
+      created_at: o.now,
+      tags: [
+        ...(reply ? reply.tags : []),
+        ...(o.clientTag === false ? [] : [['client', 'Sidecar']]),
+        ...body.p,
+        ...body.q,
+        ...imetaTagsForMedia(media, { videoImeta: o.videoImeta }),
+      ],
+      content: composeNoteContent(text, media),
+    };
+  }
+
+  // An imeta tag's slots, keyed: ["imeta", "url …", "alt …"] → { url, alt }.
+  function imetaFields(tag) {
+    const out = {};
+    for (const slot of tag.slice(1)) {
+      if (typeof slot !== 'string') continue;
+      const at = slot.indexOf(' ');
+      if (at > 0 && !(slot.slice(0, at) in out)) out[slot.slice(0, at)] = slot.slice(at + 1);
+    }
+    return out;
+  }
+
+  // The content back into the editor's two halves: the words, and the strip (pictures and
+  // one quoted note) that composeNoteContent appended after them. Read from the end, a
+  // paragraph at a time, and only paragraphs that are wholly attachment lines: a URL the
+  // imeta tags describe or that names an image or video, or a lone nostr: quote. CHECKED
+  // BY REBUILDING: unless composeNoteContent gives back exactly the content it was handed,
+  // the whole content stays text, which is what any other client's draft would show.
+  function splitDraftContent(content, tags) {
+    const whole = String(content || '');
+    const metas = new Map();
+    for (const tg of tags || []) {
+      if (Array.isArray(tg) && tg[0] === 'imeta') {
+        const f = imetaFields(tg);
+        if (f.url) metas.set(f.url, f);
+      }
+    }
+    const urlLine = (l) => /^https?:\/\/\S+$/.test(l) && (metas.has(l) || IMG_EXT.test(l) || VID_EXT.test(l));
+    const quoteLine = (l) => /^nostr:(?:nevent|note|naddr)1[023456789acdefghjklmnpqrstuvwxyz]+$/.test(l);
+    const entryFor = (url) => {
+      const f = metas.get(url) || {};
+      const video = urlIsVideo(url) || /^video\//i.test(f.m || '');
+      const m = { url, isVideo: video };
+      if (f.alt) m.alt = f.alt;
+      if (f.m) m.mime = f.m;
+      if (f.x) m.x = f.x;
+      if (f.dim) m.dim = f.dim;
+      return m;
+    };
+    const paras = whole.split('\n\n');
+    const media = [];
+    let at = paras.length;
+    let prev = '';
+    while (at > 0) {
+      const lines = paras[at - 1].split('\n');
+      const kind = lines.every(urlLine) ? 'url' : lines.every(quoteLine) ? 'quote' : '';
+      if (!kind || kind === prev) break;
+      if (kind === 'quote' && (lines.length !== 1 || media.some((m) => m.quote))) break; // the strip holds one quote
+      media.unshift(...lines.map((l) => (kind === 'url' ? entryFor(l) : { quote: l })));
+      prev = kind;
+      at--;
+    }
+    const text = paras.slice(0, at).join('\n\n');
+    if (composeNoteContent(text, media) !== whole) return { text: whole, media: [] };
+    return { text, media };
+  }
+
+  // What a kind 1 reply answers, as the composer's replyTo: the e tag marked reply (or
+  // root, when it answers the root), with the deprecated positional form read as NIP-10
+  // says. The author is the e tag's fifth slot or the first p tag, which is where both
+  // composers put it; without one the draft cannot be continued here.
+  function noteTargetFrom(tags) {
+    const es = tags.filter((tg) => tg[0] === 'e' && HEX64_RE.test(tg[1] || '') && tg[3] !== 'mention');
+    if (!es.length) return { none: true };
+    const rootM = es.find((tg) => tg[3] === 'root');
+    const replyM = es.find((tg) => tg[3] === 'reply');
+    const root = rootM || replyM || es[0];
+    const parent = replyM || rootM || es[es.length - 1];
+    const people = tags.filter((tg) => tg[0] === 'p' && HEX64_RE.test(tg[1] || '')).map((tg) => ['p', tg[1]]);
+    const author = (HEX64_RE.test(parent[4] || '') && parent[4]) || (people[0] && people[0][1]) || '';
+    if (!author) return null;
+    const out = { id: parent[1], pubkey: author, kind: 1, tags: people.filter((p) => p[1] !== author), content: '' };
+    if (root[1] !== parent[1]) out.tags.unshift(['e', root[1], '', 'root']);
+    return out;
+  }
+
+  // What a kind 1111 comment answers. The composer continues a comment only where it
+  // answers another comment (an `e` parent of kind 1111): that is the one shape replyTags
+  // turns back into a 1111. The root scope (I, K, E, A, P) is carried VERBATIM, since
+  // NIP-22 reads it positionally and it is the thread the comment belongs to.
+  function commentTargetFrom(tags) {
+    const parent = tags.find((tg) => tg[0] === 'e' && HEX64_RE.test(tg[1] || ''));
+    const k = tagValue(tags, 'k');
+    if (!parent || Number(k) !== WEB_COMMENT_KIND) return null;
+    const scope = tags.filter((tg) => ['I', 'K', 'E', 'A', 'P'].includes(tg[0])).map((tg) => tg.slice());
+    const people = tags.filter((tg) => tg[0] === 'p' && HEX64_RE.test(tg[1] || '')).map((tg) => ['p', tg[1]]);
+    const author = (HEX64_RE.test(parent[3] || '') && parent[3]) || (people[0] && people[0][1]) || '';
+    if (!author) return null;
+    return {
+      id: parent[1], pubkey: author, kind: WEB_COMMENT_KIND,
+      tags: [...scope, ...people.filter((p) => p[1] !== author)], content: '',
+    };
+  }
+
+  // The inner draft event back into the composer's draft shape: { text, media, replyTo? }.
+  // Null when this composer cannot continue it faithfully. The test of faithful is that
+  // the target built here, handed to replyTags, publishes the same kind the draft was:
+  // a comment Sidecar would turn into a kind 1 reply is not opened as one.
+  function draftFromEvent(ev, selfPubkey) {
+    if (!ev || typeof ev !== 'object' || typeof ev.content !== 'string' || !Array.isArray(ev.tags)) return null;
+    const kind = Number(ev.kind);
+    if (!RELAY_DRAFT_KINDS.includes(kind)) return null;
+    const tags = ev.tags.filter((tg) => Array.isArray(tg) && tg.length && tg.every((x) => typeof x === 'string'));
+    let replyTo = null;
+    if (kind === WEB_COMMENT_KIND) {
+      replyTo = commentTargetFrom(tags);
+      if (!replyTo) return null;
+    } else {
+      const found = noteTargetFrom(tags);
+      if (!found) return null;
+      if (!found.none) replyTo = found;
+    }
+    if (replyTo && replyTags(replyTo, selfPubkey).kind !== kind) return null;
+    const { text, media } = splitDraftContent(ev.content, tags);
+    const out = { text, media };
+    if (replyTo) out.replyTo = replyTo;
+    return out;
+  }
+
+  // The wrap, and the wrap that deletes: the same d with nothing in it, newer.
+  function relayDraftWrap({ d, k, ciphertext, now }) {
+    return {
+      kind: RELAY_DRAFT_KIND, created_at: now, content: ciphertext,
+      tags: [['d', d], ['k', String(k)], ['expiration', String(now + RELAY_DRAFT_TTL_SECS)]],
+    };
+  }
+  function relayDraftBlank({ d, k, now }) {
+    return {
+      kind: RELAY_DRAFT_KIND, created_at: now, content: '',
+      tags: [['d', d], ['k', String(k)], ['expiration', String(now + RELAY_DRAFT_TTL_SECS)]],
+    };
+  }
+  // A fresh identifier. Other clients' d values are theirs and are accepted as they are.
+  function newRelayDraftId(now) {
+    let tail = '';
+    try {
+      const b = new Uint8Array(3);
+      crypto.getRandomValues(b);
+      tail = '-' + Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+    } catch (_) {}
+    return 'sidecar-' + now + tail;
+  }
+
+  // What was last saved to relays, as a short sum, so a local copy can tell whether it
+  // has been edited since: the save time alone cannot, because autosave rewrites it on
+  // every flush whether anything changed or not.
+  function draftSum(draft) {
+    const d = draft || {};
+    const src = JSON.stringify([
+      String(d.text || '').trim(),
+      (d.media || []).map((m) => (m && (m.url || m.quote || '')) + '|' + ((m && m.alt) || '')),
+      (d.replyTo && d.replyTo.id) || '',
+    ]);
+    let hsh = 0x811c9dc5;
+    for (let i = 0; i < src.length; i++) {
+      hsh ^= src.charCodeAt(i);
+      hsh = Math.imul(hsh, 0x01000193) >>> 0;
+    }
+    return hsh.toString(16);
+  }
+
+  // The kind 31234s that came back, down to the drafts that are live: the newest copy of
+  // each d (the event is addressable, and relays keep different copies), then dropping
+  // the blanked ones (deleted) and the expired ones (NIP-40). Newest FIRST, and the blank
+  // or the expiry judged on that newest copy, so an older copy on a slower relay cannot
+  // bring a deleted draft back. A kind outside RELAY_DRAFT_KINDS is counted, not listed.
+  function liveRelayDrafts(events, selfPubkey, now) {
+    const byD = new Map();
+    for (const ev of events || []) {
+      if (!ev || ev.kind !== RELAY_DRAFT_KIND || ev.pubkey !== selfPubkey || !Array.isArray(ev.tags)) continue;
+      const d = tagValue(ev.tags, 'd');
+      if (typeof d !== 'string') continue;
+      const cur = byD.get(d);
+      if (!cur || ev.created_at > cur.created_at || (ev.created_at === cur.created_at && ev.id > cur.id)) byD.set(d, ev);
+    }
+    const live = [];
+    let otherKinds = 0;
+    const otherKindCounts = {}; // kind -> how many, so a count can say which kinds
+    for (const ev of byD.values()) {
+      if (!ev.content) continue;
+      const exp = Number(tagValue(ev.tags, 'expiration'));
+      if (exp && exp <= now) continue;
+      const k = Number(tagValue(ev.tags, 'k'));
+      if (!RELAY_DRAFT_KINDS.includes(k)) { otherKinds++; const key = Number.isFinite(k) && k >= 0 ? String(k) : '?'; otherKindCounts[key] = (otherKindCounts[key] || 0) + 1; continue; }
+      live.push(ev);
+    }
+    live.sort((a, b) => b.created_at - a.created_at);
+    return { live, otherKinds, otherKindCounts };
+  }
+
+  // Each live wrap opened: decrypted to self, parsed, and mapped into the composer's
+  // shape. One that will not decrypt, does not parse, says a different kind inside than
+  // its k tag, or is a shape this composer cannot continue is counted as unopenable.
+  async function openRelayDrafts(live, decrypt, selfPubkey) {
+    const opened = await Promise.all(live.map(async (ev) => {
+      const d = tagValue(ev.tags, 'd');
+      const k = Number(tagValue(ev.tags, 'k'));
+      let inner = null;
+      let plain = null;
+      try { plain = await decrypt(ev.content); } catch (_) { plain = null; }
+      // Another client blanks a draft by encrypting nothing, which opens to an empty string:
+      // a deleted draft, not one that cannot be opened.
+      if (typeof plain === 'string' && !plain.trim()) return { blank: true };
+      try { inner = JSON.parse(plain); } catch (_) { inner = null; }
+      const draft = inner && Number(inner.kind) === k ? draftFromEvent(inner, selfPubkey) : null;
+      // Another client deletes by writing a wrap that still decrypts but holds an empty
+      // note: nothing to continue, and nothing the person would want listed.
+      if (draft && !draftHasContent(draft)) return { blank: true };
+      return draft ? { d, k, at: ev.created_at, draft: { ...draft, savedAt: ev.created_at * 1000 } } : null;
+    }));
+    const items = opened.filter((o) => o && !o.blank);
+    return { items, unopenable: opened.filter((o) => !o).length };
+  }
+
+  // The private relay list's content: a JSON array of tags, ["relay", "wss://…"] the
+  // ones that count. FAILS CLOSED: content that is not JSON, or not an array, throws,
+  // and a caller reads that as "could not read", never as "none" (which would offer to
+  // write a new list over one another client keeps).
+  //
+  // READ LENIENTLY, WRITTEN BY THE SPEC. The NIP's list is [["relay", url], …], and that is
+  // what this writes. Another client writes {"relays": [url, …]} and reads a plain array of
+  // urls, so a list it made is read here too instead of being called unreadable.
+  function parsePrivateRelayList(plaintext) {
+    let list = JSON.parse(plaintext);
+    if (list && !Array.isArray(list) && Array.isArray(list.relays)) list = list.relays;
+    if (!Array.isArray(list)) throw new Error('not a tag list');
+    const out = [];
+    for (const tg of list) {
+      const raw = typeof tg === 'string' ? tg
+        : (Array.isArray(tg) && tg[0] === 'relay' && typeof tg[1] === 'string' ? tg[1] : null);
+      if (raw === null) continue;
+      const url = raw.trim();
+      if (!/^wss?:\/\/[^\s]+$/i.test(url)) continue;
+      try { new URL(url); } catch (_) { continue; }
+      if (!out.includes(url)) out.push(url);
+    }
+    return out;
+  }
+
+  // A relay draft taken into the local store, the way a note set aside comes back
+  // (unshelveNoteDraft): whatever the note slot holds is set aside first, never written
+  // over. A reply goes to its own slot, and that slot is not taken over if it holds a
+  // different reply in progress. Another local copy pointing at the same relay draft is
+  // an older version of it: dropped when it has not been edited since it was saved there,
+  // kept without the pointer when it has, so one local draft speaks for each d.
+  // Mutates `all`. Returns { key, replyTo, shelved } or { refused: true }.
+  function adoptRelayDraft(all, pubkey, item, now) {
+    const replyTo = item.draft.replyTo || null;
+    const key = replyTo ? pubkey + '|r:' + replyTo.id : pubkey;
+    const unedited = (x) => !!(x && x.relay && x.relay.sum && draftSum(x) === x.relay.sum);
+    if (replyTo && draftHasWork(all[key]) && !(all[key].relay && all[key].relay.d === item.d && unedited(all[key]))) {
+      return { refused: true };
+    }
+    for (const k of Object.keys(all)) {
+      if (!(k === pubkey || k.startsWith(pubkey + '|'))) continue;
+      const cur = all[k];
+      if (!cur || !cur.relay || cur.relay.d !== item.d) continue;
+      if (unedited(cur)) delete all[k];
+      else { const { relay: _gone, ...rest } = cur; all[k] = rest; }
+    }
+    const shelved = replyTo ? null : shelveNoteDraft(all, pubkey, now);
+    all[key] = {
+      ...item.draft, savedAt: now,
+      relay: { d: item.d, k: item.k, at: item.at, sum: draftSum(item.draft), ...(item.wide ? { wide: true } : {}) },
+    };
+    return { key, replyTo, shelved };
+  }
+
+  // A relay draft already here: a local copy points at the same d and is as new.
+  function relayDraftIsLocal(all, pubkey, item) {
+    return Object.keys(all || {}).some((k) => (k === pubkey || k.startsWith(pubkey + '|'))
+      && all[k] && all[k].relay && all[k].relay.d === item.d && (all[k].relay.at || 0) >= item.at);
+  }
+
+  // A read that can say NOBODY ANSWERED, for a page with a bare SimplePool (the tab).
+  // The panel has its own, poolQueryAnswered, with the same rule: an event or a real EOSE
+  // is an answer, and an EOSE the pool made up after its timeout is not.
+  function queryAnswered(pool, relays, filter, params) {
+    const urls = [...new Set(relays || [])];
+    if (!urls.length) return Promise.resolve({ events: [], answered: false, complete: true });
+    const sub = Object.assign({}, params);
+    const capMs = sub.capMs || 8000;
+    delete sub.capMs;
+    const realBefore = sub.maxWait || 4400;
+    return new Promise((resolve) => {
+      const events = [];
+      const seen = new Set();
+      const subs = [];
+      const t0 = Date.now();
+      let answered = false;
+      let left = urls.length;
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve({ events, answered, complete: left === 0 });
+        for (const s of subs) { try { s.close(); } catch (_) {} }
+      };
+      const timer = setTimeout(finish, capMs);
+      for (const url of urls) {
+        subs.push(pool.subscribeEose([url], filter, Object.assign({}, sub, {
+          onevent: (ev) => {
+            answered = true;
+            if (ev && !seen.has(ev.id)) { seen.add(ev.id); events.push(ev); }
+          },
+          onclose: (reasons) => {
+            if ((reasons || [])[0] === 'closed automatically on eose' && Date.now() - t0 < realBefore) answered = true;
+            if (--left === 0) finish();
+          },
+        })));
+      }
+    });
+  }
+
+  // ---- the relay side, for whichever page installs it ----
+  //
+  // io: {
+  //   call             the page's worker messenger
+  //   NT               nostr-tools
+  //   query(relays, filter) -> { events, answered, complete }
+  //   publish(relays, signed) -> resolves when at least one relay took it, else throws
+  //   readRelays()     where the account's 10013 is looked for
+  //   writeRelays()    where a new 10013 is published: the account's write relays
+  //   setupRelays()    the relays offered as private ones when there are none
+  //   knownRelayList(pubkey)  optional: the NIP-65 list the page already holds for the
+  //                    account (even a stale one), or null. Counts as a list that exists.
+  //   relayListChanged(pubkey)  optional: a NIP-65 list was just published, drop what the
+  //                    page cached about it
+  //   trust(urls)      optional: let the page's pool answer these relays' AUTH
+  //   fetchEvent(id)   optional: the note a reply answers, to fill in what it says
+  //   warn(message)    a quiet word, for a relay copy that could not be blanked
+  // }
+  // Signing and encryption go through the worker as the owner: SIDECAR_OWNER_SIGN raises
+  // no approval card for the account's own draft, and SIDECAR_OWNER_ENCRYPT/DECRYPT keep
+  // the key there. Every call names the account it was started for (expectedPubkey), so
+  // a switch in the middle fails closed rather than saving under somebody else.
+  const RELAY_STATUS_TEXT = {
+    none: () => t('No private relays for drafts yet.'),
+    unreachable: () => t('Couldn’t reach your relays.'),
+    unreadable: () => t('Your private relay list could not be read.'),
+  };
+  function installRelayDrafts(io) {
+    const known = new Map();    // pubkey -> private relays, once read
+    const listed = new Map();   // pubkey -> the last list read back
+    const nowSecs = () => Math.floor(Date.now() / 1000);
+    const encrypt = (pubkey, plaintext) => io.call({ type: 'SIDECAR_OWNER_ENCRYPT', nip: 44, peer: pubkey, expectedPubkey: pubkey, plaintext });
+    const decrypt = (pubkey, ciphertext) => io.call({ type: 'SIDECAR_OWNER_DECRYPT', nip: 44, peer: pubkey, expectedPubkey: pubkey, ciphertext });
+    const sign = (event, pubkey) => io.call({ type: 'SIDECAR_OWNER_SIGN', event, expectedPubkey: pubkey });
+    const trust = (urls) => { try { if (io.trust) io.trust(urls); } catch (_) {} };
+    const statusError = (status) => {
+      const e = new Error((RELAY_STATUS_TEXT[status] || RELAY_STATUS_TEXT.unreachable)());
+      e.relayStatus = status;
+      return e;
+    };
+
+    // The account's private relays: { status: 'ok', relays } or none / unreachable /
+    // unreadable. "None" only when every relay asked has answered and none holds a list:
+    // set-up offers to publish one, and publishing over a list a slow relay was holding
+    // would replace somebody's private relays.
+    async function privateRelays(pubkey, fresh) {
+      if (!fresh && known.has(pubkey)) { trust(known.get(pubkey)); return { status: 'ok', relays: known.get(pubkey) }; }
+      let read;
+      try { read = await io.readRelays(); } catch (_) { return { status: 'unreachable' }; }
+      const { events, answered, complete } = await io.query(read, { kinds: [PRIVATE_RELAYS_KIND], authors: [pubkey] });
+      const ev = (events || []).filter((e) => e && e.pubkey === pubkey && e.kind === PRIVATE_RELAYS_KIND)
+        .sort((a, b) => (b.created_at - a.created_at) || (a.id < b.id ? 1 : -1))[0];
+      if (!ev) return answered && complete !== false ? { status: 'none' } : { status: 'unreachable' };
+      let relays;
+      try { relays = parsePrivateRelayList(await decrypt(pubkey, ev.content)); }
+      catch (_) { return { status: 'unreadable' }; }
+      if (!relays.length) return { status: 'none' };
+      known.set(pubkey, relays);
+      trust(relays);
+      return { status: 'ok', relays };
+    }
+
+    // WHERE DRAFTS ARE READ: the private relays the account lists AND its write relays. NIP-37
+    // sends drafts to the private relays, but other clients keep them on the write relays
+    // (and, with no private list, only there), so a read that stopped at the list never saw
+    // them. Reading is all this widens: a new draft still goes to the private relays only.
+    // Returns the private-list status as well, for a caller that needs to say it.
+    async function draftRelays(pubkey, fresh) {
+      const pr = await privateRelays(pubkey, fresh);
+      let writes = [];
+      try { writes = (await io.writeRelays()) || []; } catch (_) { writes = []; }
+      const seen = new Set();
+      const relays = [];
+      for (const u of [...(pr.status === 'ok' ? pr.relays : []), ...writes]) {
+        if (typeof u !== 'string' || !/^wss?:\/\//i.test(u)) continue;
+        const key = u.replace(/\/+$/, '').toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        relays.push(u);
+      }
+      return { pr, relays };
+    }
+
+    // Publish a 10013 listing `relays`, to the account's write relays (NIP-37 says there).
+    async function setUp(pubkey, relays) {
+      const list = [...new Set((relays || []).filter((u) => /^wss?:\/\//i.test(u)))];
+      if (!list.length) throw new Error(t('No relays configured (add some in Settings)'));
+      const content = await encrypt(pubkey, JSON.stringify(list.map((u) => ['relay', u])));
+      const signed = await sign({ kind: PRIVATE_RELAYS_KIND, created_at: nowSecs(), tags: [], content }, pubkey);
+      await io.publish(await io.writeRelays(), signed);
+      known.set(pubkey, list);
+      trust(list);
+      return list;
+    }
+
+    // THE ACCOUNT'S OWN NIP-65 LIST (kind 10002), asked before anything is offered and again
+    // before anything is published. It is a replaceable event, so publishing one over a list
+    // that only failed to answer in time would erase somebody's relays. "none" therefore means
+    // every relay asked answered and none holds one, and a list the page already remembers
+    // counts as one that exists.
+    async function relayListStatus(pubkey) {
+      if (io.knownRelayList) {
+        let known = null;
+        try { known = await io.knownRelayList(pubkey); } catch (_) { known = null; }
+        if (known) return { status: 'ok' };
+      }
+      let read;
+      try { read = await io.readRelays(); } catch (_) { return { status: 'unreachable' }; }
+      const { events, answered, complete } = await io.query(read, { kinds: [10002], authors: [pubkey] });
+      const got = events || [];
+      if (got.some((e) => e && e.pubkey === pubkey && e.kind === 10002)) return { status: 'ok' };
+      // A reply made only of other people's lists says nothing about this account.
+      if (got.length) return { status: 'unreachable' };
+      return answered && complete !== false ? { status: 'none' } : { status: 'unreachable' };
+    }
+
+    // What a first list would name: the relays the extension reads this account by when it has
+    // no list, which is the bootstrap set (and nothing for an account that turned it off).
+    async function relayListOffer(pubkey) {
+      let map = {};
+      try { map = (await io.call({ type: 'SIDECAR_GET_ACCOUNT_RELAYS', pubkey })) || {}; } catch (_) { map = {}; }
+      return Object.keys(map)
+        .filter((u) => /^wss?:\/\//i.test(u) && map[u] && (map[u].read !== false || map[u].write !== false))
+        .map((url) => ({ url, read: map[url].read !== false, write: map[url].write !== false }));
+    }
+
+    // Publish that first list. It looks for an existing one again right now rather than
+    // trusting the card that asked, and refuses when one is there or cannot be ruled out.
+    async function publishRelayList(pubkey) {
+      const st = await relayListStatus(pubkey);
+      if (st.status === 'ok') {
+        const e = new Error(t('You already have a relay list.'));
+        e.relayStatus = 'exists';
+        throw e;
+      }
+      if (st.status !== 'none') throw statusError(st.status);
+      const list = await relayListOffer(pubkey);
+      if (!list.some((r) => r.write)) throw new Error(t('No relays configured (add some in Settings)'));
+      const tags = list.map((r) => (r.read && r.write ? ['r', r.url] : ['r', r.url, r.write ? 'write' : 'read']));
+      const signed = await sign({ kind: 10002, created_at: nowSecs(), tags, content: '' }, pubkey);
+      await io.publish(list.map((r) => r.url), signed);
+      try { if (io.relayListChanged) io.relayListChanged(pubkey); } catch (_) {}
+      return { write: list.filter((r) => r.write).map((r) => r.url) };
+    }
+
+    // One draft to relays. `prior` is the pointer the local copy already carries, so a
+    // second save replaces the first (same d, newer) rather than adding another.
+    async function save(pubkey, draft, prior) {
+      const pr = await privateRelays(pubkey);
+      if (pr.status !== 'ok') throw statusError(pr.status);
+      let settings = {};
+      try { settings = (await io.call({ type: 'SIDECAR_GET_SETTINGS' })) || {}; } catch (_) {}
+      const at = Math.max(nowSecs(), prior && prior.at ? prior.at + 1 : 0);
+      const inner = draftToEvent(draft, {
+        selfPubkey: pubkey, NT: io.NT, now: at,
+        clientTag: settings.showClientTag !== false, videoImeta: settings.videoImeta,
+      });
+      if (!inner) throw new Error(t('Only notes and replies can be saved to relays.'));
+      const plaintext = JSON.stringify(inner);
+      if (new TextEncoder().encode(plaintext).length > NIP44_MAX_PLAINTEXT) {
+        throw new Error(t('This draft is too long to save to relays.'));
+      }
+      const d = (prior && prior.d) || newRelayDraftId(at);
+      const signed = await sign(relayDraftWrap({ d, k: inner.kind, ciphertext: await encrypt(pubkey, plaintext), now: at }), pubkey);
+      await io.publish(pr.relays, signed);
+      return { d, k: inner.kind, at, sum: draftSum(draft) };
+    }
+
+    // The relay copy blanked: the same d, newer, with nothing in it.
+    //
+    // A draft that was READ from the account's relays (ptr.wide) is blanked on the same wider
+    // set it was read from, since another client may be holding it on a write relay; one this
+    // composer saved goes back only to the private relays it was sent to.
+    async function blank(pubkey, ptr) {
+      if (!ptr || !ptr.d) return false;
+      let targets;
+      if (ptr.wide) {
+        const w = await draftRelays(pubkey);
+        if (!w.relays.length) throw statusError(w.pr.status === 'ok' ? 'unreachable' : w.pr.status);
+        targets = w.relays;
+      } else {
+        const pr = await privateRelays(pubkey);
+        if (pr.status !== 'ok') throw statusError(pr.status);
+        targets = pr.relays;
+      }
+      const at = Math.max(nowSecs(), (ptr.at || 0) + 1);
+      await io.publish(targets, await sign(relayDraftBlank({ d: ptr.d, k: ptr.k || 1, now: at }), pubkey));
+      const last = listed.get(pubkey);
+      if (last && last.items) last.items = last.items.filter((x) => x.d !== ptr.d);
+      return true;
+    }
+
+    // A local draft is gone, posted or deleted: its relay copy goes too. Best effort, and
+    // never in the way: a draft that was never saved there costs nothing, and one that
+    // cannot be blanked is a quiet word, not an error on top of a post that went out.
+    function forget(pubkey, removed) {
+      if (!removed || !removed.relay || !removed.relay.d) return Promise.resolve(false);
+      return blank(pubkey, removed.relay).catch(() => {
+        try { if (io.warn) io.warn(t('The copy on your relays could not be removed.')); } catch (_) {}
+        return false;
+      });
+    }
+
+    // Every kind 31234 of the account's on each relay, a page at a time, newest first.
+    //
+    // ONE PAGE IS NOT ENOUGH. A relay answers a limit with its newest events, and a deleted
+    // draft stays behind as an empty copy: an account that has been drafting for months holds
+    // hundreds. Cut the list short and the blanks that supersede older copies can fall off the
+    // end, so a draft that was deleted comes back as live. So each relay is asked on its own,
+    // and asked again for what came before the oldest event it sent, until a page comes back
+    // short or the ceiling is reached. A relay that has not answered is skipped, as before.
+    async function queryDraftWraps(relays, pubkey) {
+      const PAGE = 200;
+      const FULL = 50; // a page this size means there may be more; a relay's own cap can be under PAGE
+      const MAX_PAGES = 8;
+      const seen = new Set();
+      const events = [];
+      let answered = false;
+      await Promise.all(relays.map(async (url) => {
+        let until = null;
+        for (let page = 0; page < MAX_PAGES; page++) {
+          const filter = { kinds: [RELAY_DRAFT_KIND], authors: [pubkey], limit: PAGE };
+          if (until !== null) filter.until = until;
+          let res;
+          try { res = await io.query([url], filter); } catch (_) { break; }
+          if (!res || !res.answered) break;
+          answered = true;
+          const got = res.events || [];
+          let fresh = 0;
+          for (const ev of got) {
+            if (!ev || seen.has(ev.id)) continue;
+            seen.add(ev.id);
+            events.push(ev);
+            fresh++;
+          }
+          // Short, or nothing new (a boundary second held by more events than a page): done.
+          if (got.length < FULL || !fresh) break;
+          until = Math.min(...got.map((ev) => ev.created_at));
+        }
+      }));
+      return { events, answered };
+    }
+
+    // The drafts on the account's private relays, read on request. A list read fresh
+    // each time it is asked for, since that is the whole point of asking.
+    async function list(pubkey) {
+      const { pr, relays } = await draftRelays(pubkey, true);
+      // Nothing to read from: no private list and no write relays, or none that answered.
+      if (!relays.length) return { status: pr.status === 'ok' ? 'unreachable' : pr.status };
+      const { events, answered } = await queryDraftWraps(relays, pubkey);
+      if (!answered) return { status: 'unreachable', relays };
+      const { live, otherKinds, otherKindCounts } = liveRelayDrafts(events, pubkey, nowSecs());
+      const opened = await openRelayDrafts(live, (c) => decrypt(pubkey, c), pubkey);
+      // Marked as read from the account's relays, so it is blanked there too (see blank).
+      const items = opened.items.map((it) => ({ ...it, wide: true }));
+      const unopenable = opened.unopenable;
+      const out = { status: 'ok', relays, items, otherKinds, otherKindCounts, unopenable };
+      listed.set(pubkey, out);
+      return out;
+    }
+
+    async function readStore() { return (await io.call({ type: 'SIDECAR_SECRET_GET', store: 'drafts' })) || {}; }
+    const writeStore = (all) => io.call({ type: 'SIDECAR_SECRET_SET', store: 'drafts', value: all });
+
+    // Save a listed draft and remember where it went, on the slot it came from.
+    async function saveEntry(pubkey, entry) {
+      const ptr = await save(pubkey, entry.draft, entry.draft.relay);
+      const all = await readStore();
+      if (all[entry.key]) {
+        all[entry.key] = { ...all[entry.key], relay: ptr };
+        await writeStore(all);
+      }
+      return ptr;
+    }
+
+    // A relay draft into the store. The note it answers is looked up first, so the reply
+    // block shows what it says; when it cannot be found, or it would thread differently
+    // than the draft does, the target stays the one read from the draft's own tags.
+    async function adopt(pubkey, item) {
+      const target = item.draft.replyTo;
+      if (target && io.fetchEvent) {
+        try {
+          const ev = await io.fetchEvent(target.id);
+          if (ev && ev.id === target.id && replyTags(ev, pubkey).kind === item.k
+            && (!target.pubkey || ev.pubkey === target.pubkey)) {
+            item = { ...item, draft: { ...item.draft, replyTo: { id: ev.id, pubkey: ev.pubkey, kind: ev.kind, tags: ev.tags, content: ev.content } } };
+          }
+        } catch (_) { /* the draft's own tags still thread it */ }
+      }
+      const all = await readStore();
+      const res = adoptRelayDraft(all, pubkey, item, Date.now());
+      if (res.refused) throw new Error(t('You already have a reply to this note in Saved drafts. Post or delete it first.'));
+      await writeStore(all);
+      return res;
+    }
+
+    return {
+      privateRelays, draftRelays, setUp, relayListStatus, relayListOffer, publishRelayList, save, saveEntry, blank, forget, list, adopt,
+      lastList: (pubkey) => listed.get(pubkey) || null,
+    };
+  }
+
+  // The "On your relays" part of Saved drafts, for both composers.
+  // d: {
+  //   relays       an installRelayDrafts instance
+  //   pubkey       the account the list is for
+  //   localDrafts  the store's drafts, so a relay draft already here is not listed twice
+  //   nameFor      as buildSavedDraftList
+  //   canOpen(item) optional: a reason not to open it now, or null
+  //   onOpen(res)  a relay draft was taken into the store ({ key, replyTo }); open it
+  //   onChanged()  the local list changed (a save marked a row); repaint it
+  //   setupRelays() the relays to offer when there are no private ones
+  //   notify(message, kind)  the page's toast
+  // }
+  // Returns { el, saveEntry }, saveEntry being what the local list's cloud calls.
+  //
+  // NOTHING IS READ UNTIL ASKED. Opening Saved drafts makes no relay request: the button
+  // does. The set-up offer is its own full-width block with its words and its button
+  // stacked (AGENTS.md: a confirm with words takes its own row).
+  function buildRelayDraftsPane(d) {
+    const el = h('div', { className: 'relay-drafts' });
+    const head = h('h4', { className: 'relay-drafts-title', textContent: t('On your relays') });
+    const body = h('div', { className: 'relay-drafts-body' });
+    el.append(head, body);
+    const hint = (text) => h('p', { className: 'hint relay-drafts-hint', textContent: text });
+    // An icon goes in front of the word when one is given: a bare word on a bare button read as plain.
+    const wide = (text, cls, iconName) => {
+      const b = h('button', { className: (cls || 'ghost') + ' relay-drafts-btn', type: 'button' });
+      if (iconName) b.append(icon(iconName));
+      b.append(document.createTextNode(text));
+      return b;
+    };
+    // How many drafts the list shows at a time. A long-lived account holds dozens, and a list
+    // that long buries the buttons under it. Reset by each check; kept while drafts are deleted.
+    const PAGE = 10;
+    let shown = PAGE;
+
+    function paintIdle() {
+      const go = wide(t('Check your relays'), null, 'download-cloud');
+      go.addEventListener('click', () => check());
+      body.replaceChildren(hint(t('Encrypted drafts from any client that keeps them on relays.')), go);
+    }
+    function paintStatus(status, retry) {
+      if (status === 'none') { offerSetup(retry); return; }
+      const parts = [hint((RELAY_STATUS_TEXT[status] || RELAY_STATUS_TEXT.unreachable)())];
+      if (status !== 'unreadable') {
+        const again = wide(t('Try again'));
+        again.addEventListener('click', () => (retry || check)());
+        parts.push(again);
+      }
+      body.replaceChildren(...parts);
+    }
+    function paintList(res) {
+      const all = d.localDrafts || {};
+      const items = res.items.filter((it) => !relayDraftIsLocal(all, d.pubkey, it));
+      const parts = [];
+      if (!items.length) parts.push(hint(res.items.length ? t('All of them are already here.') : t('No drafts found on your relays.')));
+      else {
+        parts.push(buildSavedDraftList({
+          entries: items.slice(0, shown).map((it) => ({
+            key: 'relay:' + it.d, draft: it.draft, relayItem: it,
+            reply: !!it.draft.replyTo, replyId: it.draft.replyTo ? it.draft.replyTo.id : null,
+          })),
+          nameFor: d.nameFor,
+          onPick: (entry) => open(entry.relayItem),
+          onDelete: async (entry) => {
+            await d.relays.blank(d.pubkey, entry.relayItem);
+            d.notify(t('Draft deleted.'), 'success');
+            const last = d.relays.lastList(d.pubkey);
+            if (last) paintList(last);
+          },
+        }));
+      }
+      if (items.length > shown) {
+        const rest = items.length - shown;
+        const more = wide(t('Show {{count}} more', { count: Math.min(PAGE, rest) }), null);
+        more.addEventListener('click', () => { shown += PAGE; paintList(res); });
+        parts.push(more);
+      }
+      if (res.otherKinds) {
+        const note = hint(tn('{{count}} draft of a kind Sidecar does not draft yet.',
+          '{{count}} drafts of kinds Sidecar does not draft yet.', res.otherKinds));
+        // Which kinds, for anyone who hovers: numbers and counts only, most first.
+        const counts = res.otherKindCounts || {};
+        const list = Object.keys(counts).sort((a, b) => counts[b] - counts[a]).map((k) => k + ' ×' + counts[k]).join(', ');
+        if (list) note.title = t('Kinds: {{list}}', { list });
+        parts.push(note);
+      }
+      if (res.unopenable) {
+        parts.push(hint(tn('{{count}} draft Sidecar cannot open yet.', '{{count}} drafts Sidecar cannot open yet.', res.unopenable)));
+      }
+      const again = wide(t('Check again'), null, 'download-cloud');
+      again.addEventListener('click', () => check());
+      parts.push(again);
+      body.replaceChildren(...parts);
+    }
+
+    async function check() {
+      shown = PAGE;
+      body.replaceChildren(hint(t('Checking your relays…')));
+      let res;
+      try { res = await d.relays.list(d.pubkey); }
+      catch (e) {
+        body.replaceChildren(hint((e && e.message) || RELAY_STATUS_TEXT.unreachable()));
+        return;
+      }
+      if (res.status !== 'ok') paintStatus(res.status);
+      else paintList(res);
+    }
+
+    async function open(item) {
+      // The page may refuse first: the other composer is writing that slot.
+      if (d.canOpen) {
+        const why = await Promise.resolve(d.canOpen(item)).catch(() => null);
+        if (why) { d.notify(why, 'info'); return; }
+      }
+      try { d.onOpen(await d.relays.adopt(d.pubkey, item)); }
+      catch (e) { d.notify((e && e.message) || t('Could not open this draft.'), 'error'); }
+    }
+
+    // NO PRIVATE RELAYS. Said, and an offer to list the account's write relays as its
+    // private ones, NAMED: which relays, and that they are not private relays in the
+    // NIP's sense (they serve anyone who asks for the encrypted event).
+    //
+    // An account with no NIP-65 list is offered one first. Without it nothing says where
+    // its relays are, so no other client could find the private relay list either. The
+    // list is only offered when every relay answered and none holds one.
+    async function offerSetup(then) {
+      body.replaceChildren(hint(t('Checking your relays…')));
+      const found = await d.relays.relayListStatus(d.pubkey).catch(() => ({ status: 'unreachable' }));
+      if (found.status === 'unreachable') { paintStatus('unreachable', () => offerSetup(then)); return; }
+      if (found.status === 'none') {
+        const offer = await d.relays.relayListOffer(d.pubkey).catch(() => []);
+        if (offer.some((r) => r.write)) { offerRelayList(offer, then); return; }
+      }
+      let urls = [];
+      try { urls = (await d.setupRelays()) || []; } catch (_) { urls = []; }
+      offerPrivate(urls, then);
+    }
+
+    function offerRelayList(offer, then) {
+      const hosts = offer.map((r) => r.url.replace(/^wss?:\/\//i, '').replace(/\/$/, ''));
+      const publish = wide(t('Publish relay list'), 'primary');
+      publish.addEventListener('click', async () => {
+        publish.disabled = true;
+        try {
+          const res = await d.relays.publishRelayList(d.pubkey);
+          d.notify(t('Relay list published'), 'success');
+          offerPrivate(res.write, then);
+        } catch (e) {
+          if (e && e.relayStatus === 'exists') { d.notify(e.message, 'info'); offerSetup(then); return; }
+          publish.disabled = false;
+          d.notify((e && e.message) || t('Could not publish your relay list.'), 'error');
+        }
+      });
+      body.replaceChildren(
+        hint(t('You have no relay list yet, so other clients can’t tell where your drafts are.')),
+        hint(tn('Publish one with your relay: {{hosts}}.', 'Publish one with your {{count}} relays: {{hosts}}.', hosts.length,
+          { hosts: hosts.join(', ') })),
+        publish,
+      );
+      if (el.scrollIntoView) { try { el.scrollIntoView({ block: 'nearest' }); } catch (_) {} }
+    }
+
+    function offerPrivate(urls, then) {
+      const hosts = urls.map((u) => u.replace(/^wss?:\/\//i, '').replace(/\/$/, ''));
+      if (!hosts.length) { body.replaceChildren(hint(RELAY_STATUS_TEXT.none())); return; }
+      const use = wide(t('Use these relays'), 'primary');
+      use.addEventListener('click', async () => {
+        use.disabled = true;
+        try {
+          await d.relays.setUp(d.pubkey, urls);
+          d.notify(t('Private relays set up.'), 'success');
+          await (then || check)();
+        } catch (e) {
+          use.disabled = false;
+          d.notify((e && e.message) || t('Could not set up private relays.'), 'error');
+        }
+      });
+      body.replaceChildren(
+        hint(RELAY_STATUS_TEXT.none()),
+        hint(tn('Use your write relay for them: {{hosts}}. Drafts stay encrypted.',
+          'Use your {{count}} write relays for them: {{hosts}}. Drafts stay encrypted.', hosts.length,
+          { hosts: hosts.join(', ') })),
+        use,
+      );
+      if (el.scrollIntoView) { try { el.scrollIntoView({ block: 'nearest' }); } catch (_) {} }
+    }
+
+    async function saveEntry(entry) {
+      try {
+        await d.relays.saveEntry(d.pubkey, entry);
+        d.notify(t('Saved to your relays.'), 'success');
+        d.onChanged();
+      } catch (e) {
+        if (e && e.relayStatus === 'none') { offerSetup(() => saveEntry(entry)); return; }
+        d.notify((e && e.message) || t('Could not save to your relays.'), 'error');
+      }
+    }
+
+    const last = d.relays.lastList(d.pubkey);
+    if (last) paintList(last); else paintIdle();
+    return { el, saveEntry, check };
+  }
+
+  // THE TOOLBAR'S BUTTONS ARE GLYPHS, NOT WORDS. Media, GIF, Emoji, Poll and proof of work
+  // share one row in a 300px sheet, and five worded buttons took two lines of it, with the
+  // longest translation deciding where the break fell. The icon is the control and the name
+  // is its title and its accessible name, which is still a string a translator sees.
+  function composeToolBtn(iconName, label) {
+    const b = h('button', { className: 'mini compose-add compose-add-icon', type: 'button', title: label });
+    b.setAttribute('aria-label', label);
+    b.append(icon(iconName));
+    return b;
+  }
+
+  // The proof-of-work button, for both composers: a pickaxe with its bits as a badge while
+  // it is on, and a small X in the same place while it is off. The badge is what a label
+  // used to be, the state on screen rather than in a tooltip, since one more tap changes
+  // what the post costs. The X is drawn, not typed, so it is the same in every theme's
+  // font. paint(lvl) takes a level from powLevelFor, or null for off.
+  function buildPowButton() {
+    const btn = composeToolBtn('pickaxe', t('Proof of work: off'));
+    const bits = h('span', { className: 'compose-pow-bits' });
+    btn.append(bits);
+    function paint(lvl) {
+      if (lvl) bits.textContent = I18N.fmtNum(lvl.bits);
+      else bits.replaceChildren(icon('x'));
+      bits.classList.toggle('off', !lvl);
+      btn.setAttribute('aria-label', lvl ? t('Proof of work: {{bits}} bits', { bits: lvl.bits }) : t('Proof of work: off'));
+      btn.title = lvl ? lvl.cost() : t('Off. Tap to mine one into this post.');
+      btn.classList.toggle('compose-add-on', !!lvl);
+    }
+    return { btn, paint };
+  }
+
+  function buildPollEditor(d) {
+    const pollWrap = h('div', { className: 'poll-editor hidden' });
+    const pollAdd = composeToolBtn('check-square', t('Poll'));
+    pollAdd.addEventListener('click', () => {
+      d.setPoll(newPollDraft());
+      paintPoll();
+      // Turning a note into a poll RAISES the bar for posting: a note needs text or an
+      // image, a poll needs its question and two filled options. Post was already enabled
+      // under the note rule, and without this it stayed that way, so typing a question,
+      // tapping here and tapping Post published a kind:1068 carrying no options at all.
+      // Nothing downstream re-checks; the click handler only asks whether Post is
+      // disabled. Remove poll has always done this, which is the tell.
+      d.changed();
+      const first = pollWrap.querySelector('.poll-option-input');
+      if (first) first.focus();
+    });
+
+    // Rebuilt wholesale on add/remove. The rows carry an index in their own handlers,
+    // and patching a list in place while indices shift underneath is how a remove
+    // button ends up deleting the row below the one it sits on.
+    function paintPollOptions(list) {
+      list.innerHTML = '';
+      const opts = d.poll().options;
+      opts.forEach((value, i) => {
+        const row = h('div', { className: 'poll-option' });
+        row.append(h('span', { className: 'poll-option-num', textContent: String(i + 1) + '.' }));
+        const input = h('input', {
+          className: 'poll-option-input',
+          type: 'text',
+          value,
+          maxLength: 200,
+          placeholder: t('Option {{number}}', { number: i + 1 }),
+        });
+        input.addEventListener('input', () => {
+          d.poll().options[i] = input.value;
+          d.changed();
+        });
+        row.append(input);
+        // TWO IS THE FLOOR, so below that there is nothing to remove and the button
+        // would only ever be disabled. An icon-only control in the inline slot, per
+        // the panel's row rules: a worded button here would leave the input no width.
+        if (opts.length > 2) {
+          const rm = h('button', { className: 'poll-option-x', title: t('Remove option {{number}}', { number: i + 1 }) });
+          rm.append(icon('x'));
+          rm.addEventListener('click', () => {
+            d.poll().options.splice(i, 1);
+            paintPollOptions(list);
+            d.changed();
+          });
+          row.append(rm);
+        }
+        list.append(row);
+      });
+    }
+
+    // A POLL AND ATTACHMENTS ARE ONE OR THE OTHER. A kind:1068 carrying appended
+    // image URLs and imeta tags is a shape no NIP-88 client renders, and the tag
+    // push in doPublish long claimed it could not arrive. Each side's button
+    // stands down while the other holds the draft, so the pair is decided by what
+    // refuses to appear rather than by what publishes.
+    function paintEitherOr() {
+      pollAdd.classList.toggle('hidden', !!d.poll() || d.isReply() || d.hasMedia());
+      d.mediaBtn().classList.toggle('hidden', !!d.poll());
+      // A GIF is an attachment like any other, so it follows Media off the row, and an
+      // open picker closes rather than sitting under a poll it can no longer add to.
+      const gif = d.gif && d.gif();
+      if (gif) {
+        gif.addBtn.classList.toggle('hidden', !!d.poll() || !gif.available);
+        if (d.poll()) gif.close();
+      }
+    }
+    function paintPoll() {
+      pollWrap.innerHTML = '';
+      pollWrap.classList.toggle('hidden', !d.poll());
+      paintEitherOr();
+      const devSelect = d.devSelect && d.devSelect();
+      if (devSelect) devSelect.disabled = !!d.poll();
+      if (!d.poll()) return;
+
+      const list = h('div', { className: 'poll-options' });
+      paintPollOptions(list);
+
+      const addOpt = h('button', { className: 'poll-add-option' });
+      addOpt.append(icon('plus'), h('span', { textContent: t('Add option') }));
+      addOpt.addEventListener('click', () => {
+        d.poll().options.push('');
+        paintPollOptions(list);
+        d.changed();
+        const inputs = list.querySelectorAll('.poll-option-input');
+        if (inputs.length) inputs[inputs.length - 1].focus();
+      });
+
+      const multi = h('input', { type: 'checkbox', checked: d.poll().multiple });
+      multi.addEventListener('change', () => {
+        d.poll().multiple = multi.checked;
+        d.changed();
+      });
+      const multiRow = h('label', { className: 'toggle-row' }, [
+        multi,
+        h('span', { textContent: t('Allow multiple choices') }),
+      ]);
+
+      // Durations, plus the two ends of the range: a specific moment, and none at all.
+      const sel = h('select', { className: 'poll-ends-select' });
+      POLL_DURATIONS.forEach((d) => {
+        sel.append(h('option', { value: 'in:' + d.secs, textContent: pollDurationLabel(d.secs) }));
+      });
+      sel.append(h('option', { value: 'at', textContent: t('Custom date and time…') }));
+      sel.append(h('option', { value: 'none', textContent: t('No end date') }));
+      sel.value =
+        d.poll().ends.kind === 'in' ? 'in:' + d.poll().ends.secs : d.poll().ends.kind;
+
+      const custom = h('input', { className: 'poll-ends-custom', type: 'datetime-local' });
+      if (d.poll().ends.kind === 'at' && d.poll().ends.at) {
+        // datetime-local wants local wall time with no zone, which is what an author
+        // picked in the first place; toISOString would shift it by the offset.
+        const d = new Date(d.poll().ends.at * 1000);
+        const pad = (n) => String(n).padStart(2, '0');
+        custom.value =
+          d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+          'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+      }
+      custom.addEventListener('change', () => {
+        const at = custom.value ? Math.floor(new Date(custom.value).getTime() / 1000) : 0;
+        d.poll().ends = { kind: 'at', at };
+        paintEndsNote();
+        d.changed();
+      });
+
+      const endsNote = h('p', { className: 'hint poll-ends-note' });
+      function paintEndsNote() {
+        const k = d.poll().ends.kind;
+        custom.classList.toggle('hidden', k !== 'at');
+        endsNote.classList.toggle('warn', k === 'none');
+        if (k === 'none') {
+          // Said plainly rather than blocked. It is the author's poll, and there are
+          // real uses for one that never closes, but a running total is not a result:
+          // there is no moment the number means anything, and nothing stops a late
+          // arrival moving it a year from now.
+          endsNote.textContent = t('Not recommended: the count never settles, so the poll has no final result.');
+        } else if (k === 'at' && !(d.poll().ends.at > 0)) {
+          endsNote.textContent = t('Pick the date and time the poll should close.');
+        } else {
+          const at = pollEndsAtFor(d.poll(), Math.floor(Date.now() / 1000));
+          endsNote.textContent = at && at <= Math.floor(Date.now() / 1000)
+            ? t('That time has already passed, so the poll would close on posting.')
+            : t('Votes stop counting when the poll closes.');
+        }
+      }
+      sel.addEventListener('change', () => {
+        const v = sel.value;
+        if (v === 'none') d.poll().ends = { kind: 'none' };
+        else if (v === 'at') d.poll().ends = { kind: 'at', at: d.poll().ends.at || 0 };
+        else d.poll().ends = { kind: 'in', secs: parseInt(v.slice(3), 10) };
+        paintEndsNote();
+        d.changed();
+      });
+      paintEndsNote();
+
+      // WHAT POSTING A POLL ACTUALLY COSTS, said where it can still change the decision.
+      // A 1068 is not a kind:1, so a client that has not implemented NIP-88 does not render
+      // it at all: it never appears in a feed filtered to notes, and the author gets no
+      // signal. Silence from the other side is indistinguishable from nobody caring.
+      //
+      // A box rather than a second amber line, because the ends note directly above is
+      // already amber text on the no-end-date case and two of those read as one sentence.
+      // No glyph: .kind-warn is bordered and filled, so the warning is not carried by
+      // color alone (the point made above .destructive-warn).
+      const clientWarn = h('div', {
+        className: 'kind-warn',
+        textContent: t('Some clients cannot show polls. On those, this will not appear at all.'),
+      });
+
+      const remove = h('button', { className: 'poll-remove' });
+      remove.append(icon('trash'), h('span', { textContent: t('Remove poll') }));
+      remove.addEventListener('click', () => {
+        d.setPoll(null);
+        paintPoll();
+        d.changed();
+      });
+
+      pollWrap.append(
+        list,
+        addOpt,
+        h('div', { className: 'poll-editor-sep' }),
+        multiRow,
+        h('label', { className: 'poll-ends-label', textContent: t('Runs for') }),
+        sel,
+        custom,
+        endsNote,
+        h('div', { className: 'poll-editor-sep' }),
+        clientWarn,
+        remove
+      );
+    }
+
+    paintPoll();
+    return { wrap: pollWrap, addBtn: pollAdd, paint: paintPoll, paintEitherOr };
+  }
+
+  // ---- GIF search, from nostr.build ----
+  //
+  // gifs.nostr.build indexes the GIFs in nostr.build's free public upload pool, so every
+  // result is already on a Nostr media host: picking one attaches its URL the way a
+  // pasted image URL is attached, and nothing is uploaded.
+  //
+  // The API answers registered clients only, and Sidecar is one (the client "sidecar" on
+  // the gifs.nostr.build dashboard). It knows a web app by its Origin and anything else by
+  // a key. A key is the one way in for an extension: Firefox gives every install its own
+  // moz-extension:// origin, and an extension cannot set its own User-Agent. Whatever
+  // key goes here ships inside the extension, where anyone can read it, so it identifies
+  // Sidecar rather than proving anything. If one is ever abused, revoke it on the
+  // dashboard and ship a new one. Empty, the picker still opens and says search is
+  // unavailable.
+  //
+  // Registering came with a promise: "GIFs from nostr.build", linked to nostr.build,
+  // wherever these GIFs appear. That is the picker's header, and it stays there.
+  const GIF_API = 'https://gifs.nostr.build/api/v1';
+  const GIF_API_KEY = 'gnb_czDUdII67HX2eq_6g3lH2QHk_wmpNZhu0ZXn532gDTg';
+  const GIF_PAGE_SIZE = 24;
+  // A query's list is at most 200 long, and the API rejects an offset past 199.
+  const GIF_LAST_OFFSET = 199;
+  const GIF_QUERY_MAX = 500;
+  const GIF_SUGGEST_LIMIT = 6;
+  // There is no trending list to open on, so the picker opens on a search for a Nostr
+  // staple and offers a few more as chips. Search terms, not interface text: they are
+  // what the index is tagged with, and translating them would find nothing.
+  const GIF_TOPICS = ['gm', 'gn', 'pv', 'zap', 'bitcoin', 'coffee', 'lfg', 'wow'];
+  // The chips in the order the picker offers them: gm first through the day, gn first in
+  // the evening and overnight, by the device's own clock. Nothing is searched until one
+  // is tapped, so the clock only decides which comes first.
+  function gifTopicsFor(now) {
+    const hour = (now || new Date()).getHours();
+    const first = hour >= 4 && hour < 18 ? 'gm' : 'gn';
+    return [first, ...GIF_TOPICS.filter((t) => t !== first)];
+  }
+  const GIF_FORMATS = { gif: 'image/gif', webp: 'image/webp' };
+
+  // safe=1 is the API's default, spelled out: adult GIFs stay out of a picker anyone
+  // can open.
+  function gifSearchUrl(query, offset) {
+    const params = new URLSearchParams({
+      q: String(query || '').trim().slice(0, GIF_QUERY_MAX),
+      limit: String(GIF_PAGE_SIZE),
+      offset: String(offset || 0),
+      safe: '1',
+    });
+    return GIF_API + '/search?' + params;
+  }
+  function gifSuggestUrl(query) {
+    const params = new URLSearchParams({
+      q: String(query || '').trim().slice(0, GIF_QUERY_MAX),
+      limit: String(GIF_SUGGEST_LIMIT),
+      safe: '1',
+    });
+    return GIF_API + '/suggest?' + params;
+  }
+
+  const isHttps = (u) => typeof u === 'string' && /^https:\/\/\S+$/.test(u);
+
+  // One result, or null when it cannot be shown and posted as it is. The URL goes into a
+  // published note, so it has to be an https link in one of the two formats the index
+  // serves. The grid shows the w240 preview, the size the API documents for column
+  // grids, animated when it can be and its first frame when the GIF is too big to animate.
+  function gifFromItem(item) {
+    if (!item || typeof item !== 'object') return null;
+    if (!isHttps(item.url) || !GIF_FORMATS[item.format]) return null;
+    const pv = item.previews && (item.previews.w240 || item.previews.medium);
+    const preview = pv && [pv.animated, pv.still].find(isHttps);
+    const width = Number(item.width);
+    const height = Number(item.height);
+    if (!preview || !(width > 0) || !(height > 0)) return null;
+    return {
+      url: item.url,
+      preview,
+      width,
+      height,
+      title: typeof item.title === 'string' ? item.title.trim() : '',
+    };
+  }
+
+  // A page of results, and the offset of the next page or null at the end. `count` is
+  // the length of the query's whole list, so paging stops there or at the API's last
+  // offset, whichever comes first.
+  function parseGifPage(body) {
+    const items = Array.isArray(body && body.items) ? body.items : [];
+    const offset = Number(body && body.offset) || 0;
+    const count = Number(body && body.count) || 0;
+    const gifs = items.map(gifFromItem).filter(Boolean);
+    const next = offset + items.length;
+    return { gifs, next: items.length && next < count && next <= GIF_LAST_OFFSET ? next : null };
+  }
+
+  function parseGifSuggestions(body) {
+    const terms = Array.isArray(body && body.terms) ? body.terms : [];
+    const out = [];
+    for (const entry of terms) {
+      const term = entry && typeof entry.term === 'string' ? entry.term.trim() : '';
+      if (term && !out.includes(term)) out.push(term);
+    }
+    return out.slice(0, GIF_SUGGEST_LIMIT);
+  }
+
+  // What the picker says when a request fails. 401 and 403 are the API refusing the key,
+  // which nobody at the keyboard can fix, so it says so rather than suggesting a retry.
+  function gifErrorMessage(status) {
+    if (status === 401 || status === 403) return t('GIF search isn’t available right now.');
+    if (status === 429) return t('Too many searches. Try again in a minute.');
+    return t('Couldn’t load GIFs. Check your connection and try again.');
+  }
+
+  // No cookies and no referrer: the query is all nostr.build needs to answer it.
+  async function gifRequest(url, signal) {
+    let res;
+    try {
+      const headers = { Accept: 'application/json' };
+      if (GIF_API_KEY) headers.Authorization = 'Bearer ' + GIF_API_KEY;
+      res = await fetch(url, {
+        headers,
+        credentials: 'omit',
+        referrerPolicy: 'no-referrer',
+        signal,
+      });
+      if (!res.ok) throw new Error(gifErrorMessage(res.status));
+      return await res.json();
+    } catch (e) {
+      if (e && e.name === 'AbortError') throw e;
+      throw new Error(res && !res.ok ? gifErrorMessage(res.status) : gifErrorMessage(0));
+    }
+  }
+
+  // ---- the emoji table, indexed for searching ----
+  //
+  // 1,914 emoji in nine groups, from the vendored table (emoji-data.js, self.SidecarEmoji).
+  // The reaction picker in the panel and the composers' Emoji button search the one index,
+  // so a word that finds something in one finds it in the other.
+
+  const EMOJI_SEARCH_MAX = 120;
+  const emojiHit = (hay, q) => hay.includes(' ' + q);
+  const emojiQuery = (raw) => raw.trim().toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+
+  // Words no emoji dataset carries, because they are associations rather than
+  // descriptions. Checked before writing this: emojibase tags 🇮🇹 as "IT, flag", 🍝 as
+  // "pasta, meatballs, restaurant" and 🤌 as "gesture, sarcastic, huh" — nothing ties any
+  // of them to Italy, and nothing anywhere says "spock" or "llap". iOS has them because
+  // Apple curates them by hand, and so do we.
+  //
+  // Each line is a decision somebody made, not a claim about what an emoji means. Add a
+  // word the moment you notice yourself typing it and getting nothing.
+  const EMOJI_ALIASES = {
+    spock: ['🖖'],
+    llap: ['🖖'],
+    italian: ['🇮🇹', '🍕', '🍝', '🤌'],
+  };
+
+  // The table, prepared once for searching: name lowercased, aliases folded in.
+  //
+  // THE NAMES ARE NOT ALL LOWERCASE. 338 of the 1,914 carry a capital — every flag is
+  // "flag Italy", "flag Japan" — and the search lowercased only the query, so "ital"
+  // matched nothing while "Ital" matched. Every flag in the picker was unreachable by the
+  // way anyone would actually type it.
+  //
+  // Done at index time rather than per keystroke: the search already runs across the
+  // whole table on a debounce, and lowercasing 1,914 strings on every one of those was
+  // the reason not to fix it in the comparison.
+  // The nine group names, as each tab's tooltip and screen-reader label. Written out so the
+  // key extractor sees every one; the table's own English names are the keys, and a name the
+  // table gains later shows in English until it is added here.
+  function emojiGroupLabel(name) {
+    const labels = {
+      'Smileys & Emotion': t('Smileys & Emotion'),
+      'People & Body': t('People & Body'),
+      'Animals & Nature': t('Animals & Nature'),
+      'Food & Drink': t('Food & Drink'),
+      'Travel & Places': t('Travel & Places'),
+      'Activities': t('Activities'),
+      'Objects': t('Objects'),
+      'Symbols': t('Symbols'),
+      'Flags': t('Flags'),
+    };
+    return labels[name] || name;
+  }
+
+  let _emojiIndex = null;
+  function emojiGroups() {
+    if (_emojiIndex) return _emojiIndex;
+    const table = self.SidecarEmoji;
+    if (!Array.isArray(table) || !table.length) return null;
+    const extra = new Map();
+    for (const [term, chars] of Object.entries(EMOJI_ALIASES)) {
+      for (const ch of chars) extra.set(ch, (extra.get(ch) || []) + ' ' + term);
+    }
+    // [char, name, haystack] — paintGrid reads the first two and ignores the rest.
+    //
+    // The haystack is the name, the vendored CLDR keywords and any alias, lowercased,
+    // with every run of punctuation flattened to a space and a space in front. That last
+    // detail lets the search match at word starts without a regex per row, and the
+    // punctuation pass is why "eyes" still finds "smiling face with heart-eyes".
+    // Unicode-aware, because "Åland Islands" and "Côte d'Ivoire" are in this table.
+    _emojiIndex = table.map(([group, rows]) => [
+      group,
+      rows.map(([ch, name, keywords]) => [
+        ch,
+        name,
+        ' ' + (name + ' ' + (keywords || '') + (extra.get(ch) || ''))
+          .toLowerCase()
+          .replace(/[^\p{L}\p{N}]+/gu, ' '),
+      ]),
+    ]);
+    return _emojiIndex;
+  }
+
+  // THE EMOJI BUTTON'S PICKER, built here so both composers have one, the way the GIF
+  // picker is. It opens under the toolbar like that one does, and for the same reason:
+  // the panel's composer is already a sheet, and a sheet over a sheet would hide the note
+  // the emoji is for.
+  //
+  // One group at a time, for the reason the reaction picker gives: every cell is a real
+  // button, and 1,914 of them is a visible hitch on open. Search reads across all nine.
+  // A pick goes in at the caret and the picker closes.
+  //
+  //   onPick(char)  put it in the editor; the picker closes itself after
+  //
+  // Returns the button for the toolbar, the picker to mount below it, and open/close.
+  function buildEmojiPicker(d) {
+    const groups = emojiGroups();
+    // WITHOUT THE TABLE THERE IS NO BUTTON, the GIF picker's rule: a control that can
+    // only open onto an apology is a control shown to everyone for nothing.
+    const available = !!groups;
+    const addBtn = composeToolBtn('smile', t('Emoji'));
+    addBtn.classList.toggle('hidden', !available);
+    addBtn.setAttribute('aria-expanded', 'false');
+
+    const wrap = h('div', { className: 'emoji-picker hidden' });
+    const closeBtn = h('button', { className: 'emoji-picker-x', type: 'button', title: t('Close emoji search') });
+    closeBtn.setAttribute('aria-label', t('Close emoji search'));
+    closeBtn.append(icon('x'));
+    const input = h('input', {
+      className: 'emoji-picker-search',
+      type: 'search',
+      placeholder: t('Search emoji'),
+      autocomplete: 'off',
+      spellcheck: false,
+    });
+    input.setAttribute('aria-label', t('Search emoji'));
+    const tabs = h('div', { className: 'emoji-tabs' });
+    const grid = h('div', { className: 'emoji-grid' });
+    const scroll = h('div', { className: 'emoji-scroll' }, [grid]);
+    wrap.append(h('div', { className: 'emoji-picker-head' }, [input, closeBtn]), tabs, scroll);
+
+    const pick = (ch) => {
+      d.onPick(ch);
+      close();
+    };
+    function paintGrid(rows) {
+      // A fragment, because appending 388 buttons one at a time reflows 388 times.
+      const frag = document.createDocumentFragment();
+      rows.forEach(([ch, name]) => {
+        const b = h('button', { className: 'emoji-cell', type: 'button', textContent: ch, title: name });
+        b.setAttribute('aria-label', name);
+        // Held on mousedown so the editor's caret is not what the tap takes away.
+        b.addEventListener('mousedown', (e) => e.preventDefault());
+        b.addEventListener('click', () => pick(ch));
+        frag.append(b);
+      });
+      grid.replaceChildren(frag);
+      scroll.scrollTop = 0;
+    }
+    let active = 0;
+    function showGroup(i) {
+      active = i;
+      [...tabs.children].forEach((tab, n) => tab.classList.toggle('active', n === i));
+      paintGrid(groups[i][1]);
+    }
+    if (groups) {
+      // Each tab is its group's own first emoji, so nine glyphs never have to be chosen
+      // and kept in step with the table when it is regenerated.
+      groups.forEach((g, i) => {
+        const tab = h('button', {
+          className: 'emoji-tab',
+          type: 'button',
+          textContent: g[1][0] ? g[1][0][0] : '•',
+          title: emojiGroupLabel(g[0]),
+        });
+        tab.setAttribute('aria-label', emojiGroupLabel(g[0]));
+        tab.addEventListener('click', () => { input.value = ''; showGroup(i); });
+        tabs.append(tab);
+      });
+    }
+
+    let searchTimer = null;
+    input.addEventListener('input', () => {
+      clearTimeout(searchTimer);
+      // Debounced: a query runs over every name in the table, and doing that per
+      // keystroke while someone types "party" is five passes for one answer.
+      searchTimer = setTimeout(() => {
+        const q = emojiQuery(input.value);
+        if (!q) { showGroup(active); return; }
+        [...tabs.children].forEach((tab) => tab.classList.remove('active'));
+        const hits = [];
+        for (const [, rows] of groups) {
+          for (const row of rows) {
+            if (emojiHit(row[2], q)) {
+              hits.push(row);
+              if (hits.length >= EMOJI_SEARCH_MAX) break;
+            }
+          }
+          if (hits.length >= EMOJI_SEARCH_MAX) break;
+        }
+        paintGrid(hits);
+        if (!hits.length) grid.append(h('p', { className: 'hint emoji-none', textContent: t('No emoji matches that.') }));
+      }, 120);
+    });
+    wrap.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      // The picker, not the sheet around it: Escape in the panel closes the composer.
+      e.preventDefault();
+      e.stopPropagation();
+      close();
+      d.onClose && d.onClose();
+    });
+
+    const isOpen = () => !wrap.classList.contains('hidden');
+    function open() {
+      if (!available) return;
+      wrap.classList.remove('hidden');
+      addBtn.classList.add('compose-add-on');
+      addBtn.setAttribute('aria-expanded', 'true');
+      // Painted on the first open, not at build: the table is only worth a thousand
+      // buttons to someone who asks for it. After a search the grid was emptied on close,
+      // so this is also what puts the group you were on back.
+      if (!grid.childElementCount) showGroup(active);
+      input.focus();
+    }
+    function close() {
+      clearTimeout(searchTimer);
+      // A SEARCH IS FOR ONE PICK. Left in the field it greeted the next open with the same
+      // word and the same hits, and the person who wanted a different emoji had to delete it
+      // first. The grid goes with it, since it is showing that search's hits; open() paints
+      // the group again. Emptying the grid only when there was a search keeps the group you
+      // were browsing, and spares a 388-button repaint on every plain close.
+      if (input.value) {
+        input.value = '';
+        grid.replaceChildren();
+      }
+      wrap.classList.add('hidden');
+      addBtn.classList.remove('compose-add-on');
+      addBtn.setAttribute('aria-expanded', 'false');
+    }
+    addBtn.addEventListener('click', () => (isOpen() ? close() : open()));
+    closeBtn.addEventListener('click', () => {
+      close();
+      addBtn.focus();
+    });
+
+    return { addBtn, wrap, open, close, isOpen, available };
+  }
+
+  // THE GIF PICKER, built here so both composers have one, the way the poll editor is.
+  //
+  // It opens under the toolbar rather than over the composer: the panel's composer is
+  // already a sheet, and a sheet over a sheet would hide the note the GIF is for. Search
+  // on top, chips under it (topics while the field is empty, suggestions while typing),
+  // then two columns of previews that load more as they scroll. Tapping one attaches it
+  // and closes the picker.
+  //
+  //   onPick(gif)  attach { url, width, height, title }; the picker closes itself after
+  //
+  // Returns the button for the toolbar, the picker to mount below it, and open/close.
+  function buildGifPicker(d) {
+    // WITHOUT A KEY THERE IS NO BUTTON. The API refuses every request then, so a GIF
+    // button would open a picker that can only say search is unavailable: a control that
+    // does nothing, shown to everyone. The callers that show and hide it with the poll
+    // and the preview check this too, so nothing brings it back.
+    const available = !!GIF_API_KEY;
+    const addBtn = composeToolBtn('gif', t('GIF'));
+    addBtn.classList.toggle('hidden', !available);
+    addBtn.setAttribute('aria-expanded', 'false');
+
+    const wrap = h('div', { className: 'gif-picker hidden' });
+    const link = h('a', {
+      href: 'https://nostr.build',
+      target: '_blank',
+      rel: 'noopener noreferrer',
+      textContent: 'nostr.build',
+    });
+    const credit = h('span', { className: 'gif-credit' }, I18N.fill(t('GIFs from {{source}}'), { source: link }));
+    const closeBtn = h('button', { className: 'gif-x', type: 'button', title: t('Close GIF search') });
+    closeBtn.setAttribute('aria-label', t('Close GIF search'));
+    closeBtn.append(icon('x'));
+    const input = h('input', {
+      className: 'gif-search',
+      type: 'search',
+      placeholder: t('Search GIFs'),
+      maxLength: GIF_QUERY_MAX,
+      autocomplete: 'off',
+      spellcheck: false,
+    });
+    input.setAttribute('aria-label', t('Search GIFs'));
+    const chips = h('div', { className: 'gif-chips' });
+    // Columns filled shortest first, so GIFs of every shape pack without cropping. CSS
+    // columns would do the packing, but reflow every earlier GIF on each new page.
+    //
+    // AS MANY AS THE WIDTH TAKES, about 170px each, two to five: two in the panel, more
+    // in the expanded composer, where two columns made every GIF some 340px wide.
+    const grid = h('div', { className: 'gif-grid' });
+    let cols = [];
+    const status = h('p', { className: 'hint gif-status hidden' });
+    wrap.append(h('div', { className: 'gif-head' }, [credit, closeBtn]), input, chips, grid, status);
+
+    let query = '';
+    let next = null;
+    let loading = false;
+    let pageCtrl = null;
+    let suggestCtrl = null;
+    let typingTimer = null;
+    let heights = [];
+    let placed = [];
+    const seen = new Set();
+    const GIF_COL_WIDTH = 170;
+    const columnsFor = () => Math.max(2, Math.min(5, Math.round((grid.clientWidth || wrap.clientWidth || 0) / GIF_COL_WIDTH) || 2));
+    // Rebuild the columns and lay out what is already showing again, in its order.
+    function layout(n) {
+      const items = placed;
+      cols = Array.from({ length: n }, () => h('div', { className: 'gif-col' }));
+      grid.replaceChildren(...cols);
+      heights = cols.map(() => 0);
+      placed = [];
+      seen.clear();
+      place(items);
+    }
+
+    function setStatus(text, isError) {
+      status.textContent = text || '';
+      status.classList.toggle('hidden', !text);
+      status.classList.toggle('error', !!isError);
+    }
+
+    function paintChips(terms) {
+      chips.innerHTML = '';
+      for (const term of terms) {
+        const chip = h('button', { className: 'gif-chip', type: 'button', textContent: term });
+        chip.addEventListener('click', () => {
+          input.value = term;
+          paintChips(gifTopicsFor());
+          search(term);
+        });
+        chips.append(chip);
+      }
+      chips.classList.toggle('hidden', !terms.length);
+    }
+
+    function cellFor(gif) {
+      const name = gif.title || t('GIF');
+      const cell = h('button', { className: 'gif-cell', type: 'button', title: name });
+      cell.setAttribute('aria-label', name);
+      const img = h('img', { alt: '', loading: 'lazy', decoding: 'async' });
+      img.referrerPolicy = 'no-referrer';
+      // Sized before it loads, so the columns hold their shape and the scroll position
+      // does not jump as previews arrive.
+      img.style.aspectRatio = gif.width + ' / ' + gif.height;
+      img.src = gif.preview;
+      cell.append(img);
+      cell.addEventListener('click', () => {
+        d.onPick(gif);
+        close();
+      });
+      return cell;
+    }
+
+    function place(gifs) {
+      for (const gif of gifs) {
+        if (seen.has(gif.url)) continue;
+        seen.add(gif.url);
+        placed.push(gif);
+        const col = heights.indexOf(Math.min(...heights));
+        heights[col] += gif.height / gif.width;
+        cols[col].append(cellFor(gif));
+      }
+    }
+
+    async function load(offset) {
+      if (pageCtrl) pageCtrl.abort();
+      const mine = new AbortController();
+      pageCtrl = mine;
+      loading = true;
+      if (!offset) setStatus(t('Loading GIFs…'));
+      try {
+        const page = parseGifPage(await gifRequest(gifSearchUrl(query, offset), mine.signal));
+        if (pageCtrl !== mine) return;
+        place(page.gifs);
+        next = page.next;
+        setStatus(!offset && !page.gifs.length ? t('No GIFs found for “{{query}}”.', { query }) : '');
+      } catch (e) {
+        if (pageCtrl !== mine || (e && e.name === 'AbortError')) return;
+        setStatus(e.message, true);
+      } finally {
+        if (pageCtrl === mine) {
+          pageCtrl = null;
+          loading = false;
+        }
+      }
+    }
+
+    // NOTHING LOADS UNTIL SOMETHING IS ASKED FOR. An empty query clears the grid and
+    // says what to do, rather than searching for a default nobody chose.
+    function search(q) {
+      clearTimeout(typingTimer);
+      query = String(q || '').trim();
+      if (pageCtrl) { pageCtrl.abort(); pageCtrl = null; loading = false; }
+      placed = [];
+      layout(columnsFor());
+      next = null;
+      grid.scrollTop = 0;
+      if (!query) { setStatus(t('Search or pick a topic.')); return; }
+      load(0);
+    }
+
+    async function suggest(q) {
+      if (suggestCtrl) suggestCtrl.abort();
+      const mine = new AbortController();
+      suggestCtrl = mine;
+      try {
+        const terms = parseGifSuggestions(await gifRequest(gifSuggestUrl(q), mine.signal));
+        if (suggestCtrl === mine && input.value.trim() === q) paintChips(terms);
+      } catch (_) {
+        // Suggestions are a nicety: a failure leaves the chips as they were.
+      }
+    }
+
+    input.addEventListener('input', () => {
+      clearTimeout(typingTimer);
+      const q = input.value.trim();
+      if (!q) paintChips(gifTopicsFor());
+      // Searched once typing pauses, not per keystroke: each search is a request to
+      // nostr.build and each one replaces the grid.
+      typingTimer = setTimeout(() => {
+        search(q);
+        if (q) suggest(q);
+      }, 350);
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        search(input.value);
+      } else if (e.key === 'Escape') {
+        // The picker, not the sheet around it: Escape in the panel closes the composer.
+        e.preventDefault();
+        e.stopPropagation();
+        close();
+        addBtn.focus();
+      }
+    });
+    grid.addEventListener('scroll', () => {
+      if (loading || next == null) return;
+      if (grid.scrollTop + grid.clientHeight >= grid.scrollHeight - 160) load(next);
+    });
+
+    function open() {
+      wrap.classList.remove('hidden');
+      // Measured once it is showing: a hidden picker has no width to divide.
+      if (cols.length !== columnsFor()) layout(columnsFor());
+      addBtn.classList.add('compose-add-on');
+      addBtn.setAttribute('aria-expanded', 'true');
+      if (!seen.size && !pageCtrl) {
+        paintChips(gifTopicsFor());
+        search(input.value);
+      }
+      input.focus();
+    }
+    function close() {
+      clearTimeout(typingTimer);
+      if (pageCtrl) { pageCtrl.abort(); pageCtrl = null; loading = false; }
+      if (suggestCtrl) { suggestCtrl.abort(); suggestCtrl = null; }
+      // A search cut off by closing is run again on the next open.
+      if (!seen.size) setStatus('');
+      wrap.classList.add('hidden');
+      addBtn.classList.remove('compose-add-on');
+      addBtn.setAttribute('aria-expanded', 'false');
+    }
+    const isOpen = () => !wrap.classList.contains('hidden');
+    // A window resized while the picker is open gets the column count for its new width.
+    if (typeof ResizeObserver === 'function') {
+      new ResizeObserver(() => {
+        if (isOpen() && cols.length !== columnsFor()) layout(columnsFor());
+      }).observe(grid);
+    }
+
+    addBtn.addEventListener('click', () => (isOpen() ? close() : open()));
+    closeBtn.addEventListener('click', () => {
+      close();
+      addBtn.focus();
+    });
+
+    return { addBtn, wrap, open, close, isOpen, available };
+  }
+
+  // A PHOTO IN A QUOTED NOTE OPENS AT FULL SIZE.
+  //
+  // Not inline. The quote block is capped so the editor stays on screen, and growing the
+  // image inside it only trades a 108px window for a 320px one: still a window, still
+  // not the picture. In a 360px column "full size" can only mean taking the viewport,
+  // so it takes the viewport.
+  //
+  // Self-contained rather than routed through the panel's openModal, because this runs
+  // in two documents and the expanded page has no such thing. It owns its overlay, its
+  // key handler and its teardown.
+  function openMediaLightbox(src, isVideo) {
+    const back = h('div', { className: 'media-lightbox' });
+    const el = isVideo
+      ? h('video', { className: 'media-lightbox-item', controls: true, autoplay: false })
+      : h('img', { className: 'media-lightbox-item', alt: '' });
+    el.referrerPolicy = 'no-referrer';
+    el.src = src;
+
+    const close = h('button', { className: 'media-lightbox-x', type: 'button', title: t('Close') });
+    close.append(icon('x'));
+
+    let gone = false;
+    const shut = () => {
+      if (gone) return;
+      gone = true;
+      document.removeEventListener('keydown', onKey, true);
+      back.remove();
+    };
+    function onKey(e) { if (e.key === 'Escape') { e.stopPropagation(); shut(); } }
+    // Capture, so Escape closes THIS and not whatever sheet is open behind it: the panel
+    // has its own Escape handler and the quote is usually inside one of its modals.
+    document.addEventListener('keydown', onKey, true);
+
+    close.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); shut(); });
+    // The backdrop closes, the media does not. Clicking a video means using its controls.
+    back.addEventListener('click', (e) => { if (e.target === back) shut(); });
+
+    back.append(el, close);
+    document.body.append(back);
+    return shut;
+  }
+
+  // The corner control on each piece of media in a quoted note.
+  //
+  // A BUTTON, NOT A CLICK ON THE MEDIA. A <video> carries its own controls and a click
+  // there means play; overloading that would make one gesture mean two things depending
+  // on where in the frame it landed. Same corner control the code block uses, so the
+  // quote has one idiom rather than two.
+  function makeMediaExpandable(block, body) {
+    body.querySelectorAll('.note-media').forEach((el) => {
+      if (el.parentNode && el.parentNode.classList.contains('note-media-wrap')) return;
+      const wrap = h('div', { className: 'note-media-wrap' });
+      el.replaceWith(wrap);
+      wrap.append(el);
+
+      const btn = h('button', { className: 'note-media-zoom', type: 'button', title: t('Show the full image') });
+      btn.append(icon('arrow-up-right'));
+      btn.addEventListener('click', (e) => {
+        // The quote sits inside a sheet that closes on an outside click, and can sit
+        // inside a link to the note.
+        e.preventDefault();
+        e.stopPropagation();
+        openMediaLightbox(el.getAttribute('src') || el.src, el.tagName === 'VIDEO');
+      });
+      wrap.append(btn);
+    });
+  }
+
+  // Text with code in it, and nothing else rendered. The notification list wants the
+  // code boxes without the images, videos and quote cards renderNoteText also draws: a
+  // row there is a snippet beside two dozen others, not a note.
+  function renderTextWithCode(container, text) {
+    const RE = /(```[\s\S]*?```)|(`[^`\n]+`)/g;
+    let last = 0;
+    let m;
+    RE.lastIndex = 0;
+    // The newlines an author puts around a fence are padding on top of the block's own
+    // margin, and the containers this draws into are pre-wrap, so each one renders as a
+    // full empty line. Trimmed either side of a BLOCK only; inline code stays in its
+    // sentence and must not lose the spaces around it. Same rule as pushBlock.
+    let skipLead = false;
+    const pushText = (str) => {
+      let t = str;
+      if (skipLead) { t = t.replace(/^\s+/, ''); skipLead = false; }
+      if (t) container.append(document.createTextNode(t));
+    };
+    while ((m = RE.exec(text)) !== null) {
+      if (m.index > last) pushText(text.slice(last, m.index));
+      if (m[1]) {
+        const tail = container.lastChild;
+        if (tail && tail.nodeType === Node.TEXT_NODE) {
+          tail.textContent = tail.textContent.replace(/\s+$/, '');
+        }
+        container.append(codeBlockEl(m[1]));
+        skipLead = true;
+      } else {
+        container.append(codeInlineEl(m[2]));
+      }
+      last = RE.lastIndex;
+    }
+    if (last < text.length) pushText(text.slice(last));
+  }
+
+  function codeInlineEl(raw) {
+    return h('code', { className: 'note-code-inline', textContent: String(raw).slice(1, -1) });
+  }
+
+  function renderNotePreview(container, text) {
+    const mentions = [];
+    const embeds = [];
+    let last = 0;
+    let skipLead = false; // see pushBlock in renderNoteText
+    let m;
+    PREVIEW_RE.lastIndex = 0;
+    const flushText = (s) => {
+      if (!s) return;
+      if (skipLead) { s = s.replace(/^\s+/, ''); skipLead = false; if (!s) return; }
+      container.append(document.createTextNode(s));
+    };
+    // Same pre-wrap blank-line problem as renderNoteText, for this pane's own
+    // block items: embed cards, link cards, media.
+    const pushBlock = (el) => {
+      const tail = container.lastChild;
+      if (tail && tail.nodeType === Node.TEXT_NODE) tail.textContent = tail.textContent.replace(/\s+$/, '');
+      container.append(el);
+      skipLead = true;
+    };
+    while ((m = PREVIEW_RE.exec(text)) !== null) {
+      if (m.index > last) flushText(text.slice(last, m.index));
+      if (m[1]) {
+        const url = m[1];
+        if (IMG_EXT.test(url)) {
+          const im = document.createElement('img');
+          im.className = 'note-media';
+          im.referrerPolicy = 'no-referrer';
+          im.src = url;
+          pushBlock(im);
+        } else if (VID_EXT.test(url)) {
+          const v = document.createElement('video');
+          v.className = 'note-media';
+          v.controls = true;
+          // Same host-privacy reason the img branch gives: no referrer to media hosts.
+          v.referrerPolicy = 'no-referrer';
+          v.src = url;
+          pushBlock(v);
+        } else {
+          const a = document.createElement('a');
+          a.href = url; a.target = '_blank'; a.rel = 'noreferrer noopener';
+          a.textContent = url;
+          container.append(a);
+          if (url.startsWith('https://')) {
+            const card = document.createElement('a');
+            card.className = 'link-card loading';
+            card.textContent = t('Loading preview…');
+            pushBlock(card);
+            fetchOgMeta(url).then((meta) => renderLinkCard(card, url, meta));
+          }
+        }
+      } else if (m[2]) {
+        const bech = m[2];
+        let d = null;
+        try { d = deps.NT.nip19.decode(bech); } catch (_) {}
+        if (d && (d.type === 'npub' || d.type === 'nprofile')) {
+          const pubkey = d.type === 'npub' ? d.data : d.data.pubkey;
+          const a = h('span', { className: 'mention', textContent: '@' + bech.slice(0, 10) + '…' });
+          if (pubkey) mentions.push({ el: a, pubkey });
+          container.append(a);
+        } else if (d && (d.type === 'note' || d.type === 'nevent' || d.type === 'naddr')) {
+          const card = h('div', { className: 'note-embed loading', textContent: t('Loading nostr event…') });
+          embeds.push({ el: card, ref: embedRef(d) });
+          pushBlock(card);
+        } else {
+          flushText(bech);
+        }
+      } else if (m[3]) {
+        // No cap in the preview: this pane is what the note will look like, so a fence
+        // shows whole or the preview is not one.
+        pushBlock(codeBlockEl(m[3]));
+      } else if (m[4]) {
+        container.append(codeInlineEl(m[4]));
+      }
+      last = PREVIEW_RE.lastIndex;
+    }
+    flushText(text.slice(last));
+    resolveMentions(mentions);
+    resolveEmbeds(embeds);
+  }
+
+  function embedRef(d) {
+    if (d.type === 'note') return { filter: { ids: [d.data] } };
+    if (d.type === 'nevent') return { filter: { ids: [d.data.id] }, relays: d.data.relays || [] };
+    return {
+      filter: { kinds: [d.data.kind], authors: [d.data.pubkey], '#d': [d.data.identifier] },
+      relays: d.data.relays || [],
+    };
+  }
+
+  // WHERE A LINKED NOTE IS LOOKED FOR. A nevent or note link usually carries no relay hint
+  // and no author, so the only relays to ask are the account's own, and a note that lives
+  // elsewhere read as "not found" while every other client showed it. The configured relays
+  // and the link's hints are asked first; only a miss goes on to these large public ones, so
+  // an id that the account's relays hold never leaves them.
+  const LOOKUP_FALLBACK_RELAYS = ['wss://relay.damus.io', 'wss://nostr.wine', 'wss://relay.ditto.pub'];
+  const LOOKUP_STAGE_MS = 4000;
+
+  // REMEMBERED FOR THE LIFE OF THE PAGE, found notes only. The preview pane redraws on every
+  // change to the strip (moving the quote is one), and each redraw would go back to the relays
+  // for a note that had not changed; the quote block reads the same cache. A miss is dropped as
+  // soon as it lands: the relay may answer next time. A lookup already in flight is shared, but
+  // only between callers with the same relay hints, so a hinted ask is never answered by an
+  // unhinted one that is still looking.
+  const foundEvents = new Map();   // filter key -> event
+  const pendingLookups = new Map(); // filter key + relay hints -> Promise<event | null>
+  const peekEvent = (ref) => foundEvents.get(JSON.stringify(ref.filter)) || null;
+  function findEvent(ref) {
+    const key = JSON.stringify(ref.filter);
+    if (foundEvents.has(key)) return Promise.resolve(foundEvents.get(key));
+    const pendingKey = key + JSON.stringify(ref.relays || []);
+    if (!pendingLookups.has(pendingKey)) {
+      const p = askRelaysFor(ref).catch(() => null).then((ev) => {
+        pendingLookups.delete(pendingKey);
+        if (ev) foundEvents.set(key, ev);
+        return ev;
+      });
+      pendingLookups.set(pendingKey, p);
+    }
+    return pendingLookups.get(pendingKey);
+  }
+
+  async function askRelaysFor(ref) {
+    const wanted = ref.filter && ref.filter.ids && ref.filter.ids[0];
+    const ask = async (relays) => {
+      let ev = null;
+      try {
+        ev = await Promise.race([
+          deps.poolGet(relays, ref.filter),
+          new Promise((r) => setTimeout(() => r(null), LOOKUP_STAGE_MS)),
+        ]);
+      } catch (_) {}
+      // A relay that answers an id lookup with some other event has not found this one.
+      return ev && (!wanted || ev.id === wanted) ? ev : null;
+    };
+    let own = [];
+    try { own = await deps.relayUrls(false); } catch (_) {}
+    const first = [...new Set([...own, ...(ref.relays || [])])];
+    const ev = first.length ? await ask(first) : null;
+    if (ev) return ev;
+    const rest = LOOKUP_FALLBACK_RELAYS.filter((u) => !first.includes(u));
+    return rest.length ? ask(rest) : null;
+  }
+
+  async function resolveEmbeds(embeds) {
+    for (const { el, ref } of embeds) {
+      const ev = await findEvent(ref);
+      if (!ev) {
+        el.classList.remove('loading');
+        el.classList.add('embed-missing');
+        el.textContent = t('nostr event (not found)');
+        continue;
+      }
+      renderEmbedCard(el, ev);
+    }
+  }
+
+  function renderEmbedCard(el, ev) {
+    el.classList.remove('loading');
+    el.textContent = '';
+    const av = h('span', { className: 'embed-av' });
+    deps.applyAvatar(av, {});
+    const name = h('span', { className: 'embed-name', textContent: deps.shortNpub(deps.NT.nip19.npubEncode(ev.pubkey)) });
+    const head = h('div', { className: 'embed-head' }, [
+      av,
+      h('div', { className: 'embed-who' }, [
+        name,
+        h('span', { className: 'embed-time', textContent: relTime((ev.created_at || 0) * 1000) }),
+      ]),
+    ]);
+    const titleTag = (ev.tags || []).find((t) => t[0] === 'title');
+    const text = (titleTag && titleTag[1]) || ev.content || '';
+    const body = h('div', { className: 'embed-body' });
+    renderNoteText(body, text, 280);
+    el.append(head, body);
+    deps.fetchPreviewProfile(ev.pubkey).then((p) => {
+      if (!p) return;
+      if (p.picture) deps.applyAvatar(av, { picture: p.picture });
+      if (p.name) name.textContent = '@' + p.name;
+    });
+  }
+
+  // ---- the quoted note, as a block under the text field ----
+  //
+  // A quote in the strip is shown as the note it quotes, so there is something to check
+  // it against: the same block the composer draws for a reply (the gold rule, the label, the
+  // author and the text), clipped at 240 characters with Show more. Looked up once per
+  // reference for the life of the page, because every change to the strip redraws it
+  // and a block that blinked back to "Loading" on each would be unreadable.
+  //
+  // It is a REFERENCE: what is published is the nostr: line the entry holds, whether or not
+  // the note could be found, so a lookup that fails says so and the quote still goes out.
+  // `ctl`: { canUp, canDown, onUp, onDown, onRemove }, the page's say over the order.
+  const quoteOpen = new Set(); // refs whose block was opened with Show more
+  function quotedRef(ref) {
+    try { return embedRef(deps.NT.nip19.decode(ref.replace(/^nostr:/, ''))); } catch (_) { return null; }
+  }
+  function lookUpQuoted(ref) {
+    const r = quotedRef(ref);
+    return r ? findEvent(r) : Promise.resolve(null);
+  }
+
+  // A PASTED REFERENCE MUST BE A NOTE WE CAN SEE. The paste makes the block at once (a lookup can
+  // take several seconds, and a paste that seems to do nothing is worse), and this runs the
+  // check behind it: on a miss `onMiss` undoes the block and the page puts the reference back
+  // as text, so a note that no relay shows us never becomes an empty quote block. The ref is
+  // remembered as missed, so the drawer does not offer to move it into the strip either.
+  // Only for a paste: a draft restored from storage or the Quote button's prefill names a note
+  // that exists, and a relay missing it right now is no reason to take the block away.
+  const quoteMissed = new Set(); // nostr: refs that were looked for and not found
+  function checkPastedQuote(entry, onMiss) {
+    const ref = entry && entry.quote;
+    if (!ref) return;
+    lookUpQuoted(ref).then((ev) => {
+      if (ev) return;
+      quoteMissed.add(ref);
+      onMiss();
+    });
+  }
+
+  const QUOTE_BLOCK_CAP = 240;
+  function buildQuoteBlock(ref, ctl) {
+    const c = ctl || {};
+    const block = h('div', { className: 'reply-target quote-block' });
+    const actions = h('span', { className: 'quote-block-actions' });
+    // COPY, REMOVE, MOVE, in that order: the move arrow ends the row, in the same column as the
+    // pictures' own arrow, and the destructive button sits one step away from the edge a thumb
+    // lands on. The reference leaves the text field when it is pasted, so this is how it comes back.
+    const copy = blockIconBtn('copy', t('Copy the note link'), () => copyWithCheck(copy, ref));
+    actions.append(copy);
+    // TWO TAPS TO REMOVE. The block holds a reference and nothing else, so once it is gone the
+    // only way back is to paste the note again, and a tap meant for the arrow beside it is
+    // easy to land. The first tap arms the button (red, and the tooltip says so); it stands
+    // down after three seconds. The same two-tap the account switcher uses: no words added
+    // to the row, which has no room for them.
+    const trash = blockIconBtn('trash', t('Remove the quote'), () => {
+      if (!trash.classList.contains('is-armed')) {
+        trash.classList.add('is-armed');
+        trash.title = t('Tap again to remove the quote');
+        trash.setAttribute('aria-label', trash.title);
+        setTimeout(() => {
+          trash.classList.remove('is-armed');
+          trash.title = t('Remove the quote');
+          trash.setAttribute('aria-label', trash.title);
+        }, 3000);
+        return;
+      }
+      if (c.onRemove) c.onRemove();
+    });
+    actions.append(trash);
+    if (c.canUp) actions.append(blockIconBtn('arrow-up', t('Move above the pictures'), c.onUp));
+    if (c.canDown) actions.append(blockIconBtn('arrow-down', t('Move below the pictures'), c.onDown));
+    // The label row carries the quoted event's kind, the way the reply view
+    // does — REPLYING TO … KIND 1 — so the developer selector and the reader
+    // can both see what shape of thing the quote embeds. Empty until the
+    // quoted note lands; a failed lookup leaves it empty too.
+    const kindEl = h('span', { className: 'reply-target-kind quote-block-kind' });
+    block.append(h('div', { className: 'reply-target-label' }, [h('span', { textContent: t('Quoting') }), kindEl, actions]));
+
+    const av = h('span', { className: 'avatar reply-target-av' });
+    deps.applyAvatar(av, null);
+    const name = h('span', { className: 'reply-target-name', textContent: t('Loading…') });
+    block.append(h('div', { className: 'reply-target-who' }, [av, name]));
+    const body = h('div', { className: 'reply-target-body' });
+    block.append(body);
+
+    const paintQuoted = (ev) => {
+      if (!ev) {
+        name.textContent = t('Quoted note');
+        body.textContent = t('Couldn’t load this note. It will still be quoted.');
+        kindEl.textContent = '';
+        return;
+      }
+      kindEl.textContent = t('kind {{kind}}', { kind: ev.kind });
+      const titleTag = (ev.tags || []).find((tg) => tg[0] === 'title');
+      const full = (titleTag && titleTag[1]) || ev.content || '';
+      let open = quoteOpen.has(ref);
+      let clipped = false;
+      const toggle = h('button', { className: 'show-toggle', type: 'button' });
+      const paint = () => {
+        body.innerHTML = '';
+        renderNoteText(body, full, open ? Infinity : QUOTE_BLOCK_CAP);
+        makeMediaExpandable(block, body);
+        block.classList.toggle('is-open', open);
+        block.classList.toggle('is-clipped', !open && clipped);
+        toggle.textContent = open ? t('Show less') : t('Show more');
+        if (!open) body.scrollTop = 0;
+      };
+      toggle.addEventListener('click', () => {
+        open = !open;
+        if (open) quoteOpen.add(ref); else quoteOpen.delete(ref);
+        paint();
+      });
+      paint();
+      // The control and the fade only when something was cut, after layout, because
+      // scrollHeight is 0 until it has one.
+      requestAnimationFrame(() => {
+        clipped = body.scrollHeight > body.clientHeight + 1 || full.length > QUOTE_BLOCK_CAP;
+        if (!clipped && !open) return;
+        block.classList.toggle('is-clipped', !open && clipped);
+        block.append(toggle);
+      });
+      name.textContent = deps.shortNpub(deps.NT.nip19.npubEncode(ev.pubkey));
+      deps.fetchPreviewProfile(ev.pubkey).then((p) => {
+        if (!block.isConnected || !p) return;
+        if (p.name) name.textContent = p.name;
+        if (p.picture) deps.applyAvatar(av, p);
+      }).catch(() => {});
+    };
+
+    const r = quotedRef(ref);
+    const cached = r && peekEvent(r);
+    if (cached) paintQuoted(cached);
+    else {
+      body.textContent = t('Loading the quoted note…');
+      lookUpQuoted(ref).then(paintQuoted);
+    }
+    return block;
+  }
+
+  const ogCache = new Map(); // url → { title, description, image, site } | null
+
+  async function fetchOgMeta(url) {
+    if (ogCache.has(url)) return ogCache.get(url);
+    ogCache.set(url, null); // mark in-flight so parallel calls don't double-fetch
+    try {
+      const meta = await deps.call({ type: 'SIDECAR_FETCH_OG', url });
+      ogCache.set(url, meta);
+      return meta;
+    } catch (_) { return null; }
+  }
+
+  function decodeHtml(s) {
+    if (!s) return s;
+    const t = document.createElement('textarea');
+    t.innerHTML = s;
+    return t.value;
+  }
+
+  function renderLinkCard(container, url, meta) {
+    container.classList.remove('loading');
+    if (!meta) { container.remove(); return; }
+    container.innerHTML = '';
+    const body = h('div', { className: 'link-card-body' });
+    if (meta.site) body.append(h('div', { className: 'link-card-site', textContent: decodeHtml(meta.site) }));
+    if (meta.title) body.append(h('div', { className: 'link-card-title', textContent: decodeHtml(meta.title) }));
+    if (meta.description) body.append(h('div', { className: 'link-card-desc', textContent: decodeHtml(meta.description) }));
+    const isHttps = (s) => typeof s === 'string' && s.startsWith('https://');
+    if (isHttps(meta.image)) {
+      const img = document.createElement('img');
+      img.className = 'link-card-img';
+      img.referrerPolicy = 'no-referrer';
+      img.src = meta.image;
+      img.onerror = () => img.remove();
+      container.append(img);
+    }
+    container.append(body);
+    container.href = url;
+    container.target = '_blank';
+    container.rel = 'noreferrer noopener';
+  }
+
+  let powWorker = null;
+  let powSeq = 0;
+  const powPending = new Map();
+
+  function powWorkerSettleAll(err) {
+    for (const [id, p] of powPending) {
+      powPending.delete(id);
+      p.reject(err);
+    }
+  }
+
+  function powCancel() {
+    // Nothing in flight: leave the warm worker alone. Called unconditionally when the
+    // composer closes, and terminating an idle one there would make the next Low mine pay
+    // to load nostr-tools again for no reason.
+    if (!powPending.size) return;
+    if (powWorker) {
+      powWorker.terminate();
+      powWorker = null;
+    }
+    // Flagged rather than matched on its message: stopping a mine is a decision, and the
+    // composer has to be able to tell it apart from a mine that broke, which reads the
+    // same way through a rejected promise.
+    const stopped = new Error(t('Mining canceled'));
+    stopped.canceled = true;
+    powWorkerSettleAll(stopped);
+  }
+
+  function minePow(event, bits, onProgress) {
+    if (typeof Worker !== 'function') {
+      return Promise.reject(new Error(t('This browser cannot mine in the background')));
+    }
+    if (!powWorker) {
+      powWorker = new Worker(chrome.runtime.getURL('pow-worker.js'));
+      powWorker.onmessage = (e) => {
+        const { id, ok, event: mined, error, progress, attempts, best, difficulty } = e.data || {};
+        const p = powPending.get(id);
+        if (!p) return;
+        if (progress) { if (p.onProgress) p.onProgress({ attempts, best }); return; }
+        powPending.delete(id);
+        if (ok) p.resolve({ event: mined, attempts, difficulty });
+        else p.reject(new Error(error || t('Mining failed')));
+      };
+      powWorker.onerror = () => {
+        // A packaging miss or a load failure. Settle everything waiting rather than
+        // leaving a promise that never resolves and a composer stuck on "Mining".
+        powWorker = null;
+        powWorkerSettleAll(new Error(t('Mining failed to start')));
+      };
+    }
+    return new Promise((resolve, reject) => {
+      const id = ++powSeq;
+      powPending.set(id, { resolve, reject, onProgress });
+      powWorker.postMessage({ id, event, bits });
+    });
+  }
+
+  // ---- where a note can be read ----
+  //
+  // Sidecar is a companion, not a client, so every note it publishes needs somewhere to
+  // hand you off to. The directory is pure data and a url builder each, and both pages
+  // need it: the panel's post banner and the expanded composer's confirmation are the
+  // same question asked twice.
+  function razrEntity(entity) {
+    try {
+      const d = deps.NT.nip19.decode(entity);
+      if (d.type === 'nevent') return deps.NT.nip19.noteEncode(d.data.id);
+    } catch (_) { /* not bech32 we know, so hand it over unchanged */ }
+    return entity;
+  }
+
+  const VIEW_CLIENTS = {
+    // DEFAULT_CLIENT leads the list; the rest are in the order they were added.
+    jumble: { label: 'Jumble', hashtag: (tag) => 'https://jumble.social/notes?' + new URLSearchParams({t:tag.toLowerCase()}), url: (ne) => 'https://jumble.social/notes/' + ne, profile: (np) => 'https://jumble.social/users/' + np },
+    primal: { label: 'Primal', hashtag: (tag) => 'https://primal.net/search/' + encodeURIComponent('#' + tag), url: (ne) => 'https://primal.net/e/' + ne, profile: (np) => 'https://primal.net/p/' + np },
+    yakihonne: { label: 'YakiHonne', url: (ne) => 'https://yakihonne.com/note/' + ne, profile: (np) => 'https://yakihonne.com/profile/' + np },
+    iris: { label: 'Iris', url: (ne) => 'https://iris.to/' + ne, profile: (np) => 'https://iris.to/' + np },
+    snort: { label: 'Snort', url: (ne) => 'https://snort.social/' + ne, profile: (np) => 'https://snort.social/' + np },
+    nostrudel: { label: 'noStrudel', url: (ne) => 'https://nostrudel.ninja/#/n/' + ne, profile: (np) => 'https://nostrudel.ninja/#/u/' + np },
+    zapcooking: { label: 'Zap Cooking', url: (ne) => 'https://zap.cooking/' + ne, profile: (np) => 'https://zap.cooking/user/' + np },
+    noornote: { label: 'NoorNote', url: (ne) => 'https://noornote.app/note/' + ne, profile: (np) => 'https://noornote.app/profile/' + np },
+    jank: { label: 'JANK', url: (ne) => 'https://jank.army/notes/' + ne, profile: (np) => 'https://jank.army/users/' + np },
+    nostrvault: { label: 'Nostr Vault', url: (ne) => 'https://nostrvault.app/thread/' + ne, profile: (np) => 'https://nostrvault.app/p/' + np },
+    ditto: { label: 'Ditto', url: (ne) => 'https://ditto.pub/' + ne, profile: (np) => 'https://ditto.pub/' + np },
+    // ROUTES, not a catch-all: /e/ for an event and /p/ for a profile. Its own links are
+    // /e/note1… and /e/naddr…, built with encodeNote, so /e/ is known to take a note1
+    // and a naddr, and an nevent is reduced to the note1 Razr writes for itself rather
+    // than handed over on the assumption it decodes one. See razrEntity.
+    razr: { label: 'Razr', url: (ne) => 'https://razr.social/e/' + razrEntity(ne), profile: (np) => 'https://razr.social/p/' + np },
+    // A COMMAND LINE, not routes. `open <bech32>` resolves note, nevent and naddr into
+    // the same viewer, since all three are cases in its own decoder, and a profile has its
+    // own verb, which is what Grimoire builds for itself (`profile <npub>`).
+    grimoire: {
+      label: 'Grimoire',
+      url: (ne) => 'https://grimoire.rocks/run?cmd=' + encodeURIComponent('open ' + ne),
+      profile: (np) => 'https://grimoire.rocks/run?cmd=' + encodeURIComponent('profile ' + np),
+    },
+    coracle: { label: 'Coracle', url: (ne) => 'https://coracle.social/' + ne, profile: (np) => 'https://coracle.social/' + np },
+    njump: { label: 'njump', url: (ne) => 'https://njump.me/' + ne, profile: (np) => 'https://njump.me/' + np },
+  };
+  const DEFAULT_CLIENT = 'jumble';
+
+  // ---- a client of the user's own -----------------------------------------------------
+  //
+  // VIEW_CLIENTS is a curated directory: every entry's routes were read out of the
+  // client itself, and clients leave it on purpose (nostrich did). A user who wants a
+  // client the directory does not carry brings one link that works in it, and Sidecar
+  // works the rest out FROM that link.
+  //
+  // Two things vary between clients and they are not the same thing. The ROUTE is the
+  // part around the address (/thread/, /e/, /notes/). The FORM is how the address
+  // itself is written: a bare hex id, a note1, a short nevent (the id alone), or a full
+  // nevent (id, author, relays). Clients differ on both, nothing declares which a
+  // client takes, and a typed template can only guess the second. A link the user has
+  // seen open is the one reliable source for both, so that is what we read.
+  //
+  // Stored as settings.customClients[key] = { label, url, profile, urlForm, profileForm }
+  // with {ne} and {np} marking where the address goes. The key is namespaced off the
+  // note link's host so a custom entry can never collide with — or shadow — a built-in
+  // key, and adding a second client on a host that already has one is an edit. (The
+  // background derives the key; the forms it will keep are listed there.)
+
+  // Every candidate address in a link: a 64-character hex string, or a bech32 entity.
+  // Hex must stand alone (not part of a longer hex run), and a bech32 must not trail a
+  // letter, so "denote1…" is not a note — but "%20nevent1…" (a percent-escaped space in
+  // a query) still is one.
+  const ENTITY_RE = /(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])|(?<![a-z])(?:note|nevent|npub|nprofile|naddr)1[02-9ac-hj-np-z]{6,}/g;
+
+  // A note address in the form a client takes, from whatever the call site built. The
+  // call sites hand over a nevent (or an naddr for an article), and a form that cannot
+  // carry the thing — an naddr as hex — is passed through rather than mangled.
+  function noteEntityFor(form, entity) {
+    const { nip19 } = deps.NT;
+    let d;
+    try { d = nip19.decode(entity); } catch (_) { return entity; }
+    let id;
+    if (d.type === 'nevent') id = d.data.id;
+    else if (d.type === 'note') id = d.data;
+    else return entity;
+    if (form === 'hex') return id;
+    if (form === 'note') return nip19.noteEncode(id);
+    if (form === 'nevent-short') return nip19.neventEncode({ id });
+    return entity; // 'nevent': what the call site built, author and all
+  }
+
+  function profileEntityFor(form, entity) {
+    const { nip19 } = deps.NT;
+    let d;
+    try { d = nip19.decode(entity); } catch (_) { return entity; }
+    let pubkey;
+    if (d.type === 'npub') pubkey = d.data;
+    else if (d.type === 'nprofile') pubkey = d.data.pubkey;
+    else return entity;
+    if (form === 'hex') return pubkey;
+    if (form === 'npub') return nip19.npubEncode(pubkey);
+    if (form === 'nprofile') return nip19.nprofileEncode({ pubkey });
+    return entity;
+  }
+
+  // Reads one pasted link. kind is 'note' or 'profile'. Returns { template, form } —
+  // the link with its address swapped for {ne}/{np}, and how that address was written —
+  // or { error } naming what is wrong, for the panel to say in words:
+  //   parse     not a full https link        none     no address in it
+  //   many      more than one address        kind     an address of another sort
+  //   mismatch  rebuilding it does not give back what was pasted
+  // and a good result may carry `extra`: the names of query parameters that are not the
+  // address and will be kept on every link.
+  // The last is the check that matters: the stored pair must reproduce a link the user
+  // knows works, or Save stays shut.
+  function parseClientLink(link, kind) {
+    const text = String(link || '').trim();
+    let url;
+    try { url = new URL(text); } catch (_) { return { error: 'parse' }; }
+    if (url.protocol !== 'https:') return { error: 'parse' };
+    const found = [...text.matchAll(ENTITY_RE)];
+    if (!found.length) return { error: 'none' };
+    if (found.length > 1) return { error: 'many' };
+    const token = found[0][0];
+    let form;
+    if (/^[0-9a-f]{64}$/.test(token)) {
+      form = 'hex';
+    } else {
+      let d;
+      try { d = deps.NT.nip19.decode(token); } catch (_) { return { error: 'none' }; }
+      if (kind === 'note' && d.type === 'note') form = 'note';
+      else if (kind === 'note' && d.type === 'nevent') {
+        const { author, kind: k, relays } = d.data;
+        form = author || k !== undefined || (relays && relays.length) ? 'nevent' : 'nevent-short';
+      }
+      else if (kind === 'profile' && d.type === 'npub') form = 'npub';
+      else if (kind === 'profile' && d.type === 'nprofile') form = 'nprofile';
+      else return { error: 'kind' };
+    }
+    const mark = kind === 'note' ? '{ne}' : '{np}';
+    const template = text.slice(0, found[0].index) + mark + text.slice(found[0].index + token.length);
+    const make = kind === 'note' ? noteEntityFor : profileEntityFor;
+    // Rebuilt the way resolution will build it, from the token the way a call site
+    // would hand it over. Hex has no bech32 to hand over, so it goes through as itself.
+    const rebuilt = template.replace(mark, () => make(form, token));
+    // An nprofile's relay hints are a courtesy the client may or may not read; we have
+    // none of the person's to send, so the form is the pubkey alone and the comparison
+    // is made without them.
+    const expected = form === 'nprofile'
+      ? template.replace(mark, () => deps.NT.nip19.nprofileEncode({ pubkey: deps.NT.nip19.decode(token).data.pubkey }))
+      : text;
+    if (rebuilt !== expected) return { error: 'mismatch' };
+    // Everything around the address is stored as typed, so a query parameter that came
+    // along (a share tag, a session token) would ride on every link opened from now on.
+    // Not an error — some clients need one — but the user is told which. A parameter
+    // that CARRIES the address (?nostr={ne}, ?cmd=open {ne}) is the route, not a rider.
+    const extra = [];
+    for (const [k, v] of new URL(template).searchParams) {
+      if (!k.includes(mark) && !v.includes(mark) && k && !extra.includes(k)) extra.push(k);
+    }
+    return extra.length ? { template, form, extra } : { template, form };
+  }
+
+  // The stored entry is data; the address is a parameter filled in at open time, the
+  // same rule the i18n rules apply to text. The Settings preview is built with THIS,
+  // and resolveClient resolves through it too.
+  function customClient(entry) {
+    return {
+      label: entry.label,
+      url: (ne) => entry.url.replace('{ne}', () => noteEntityFor(entry.urlForm, ne)),
+      profile: (np) => entry.profile.replace('{np}', () => profileEntityFor(entry.profileForm, np)),
+    };
+  }
+
+  function resolveClient(settings, pubkey) {
+    const by = (settings && settings.defaultClientBy) || null;
+    const key = (by && pubkey && by[pubkey]) || (settings && settings.defaultClient) || DEFAULT_CLIENT;
+    const custom = settings && settings.customClients && settings.customClients[key];
+    if (custom && custom.url && custom.profile) return customClient(custom);
+    return VIEW_CLIENTS[key] || VIEW_CLIENTS[DEFAULT_CLIENT];
+  }
+
+  // ---- the review window before something irreversible goes out ----
+  //
+  // Already parameterized on its container and its preview, because the note composer
+  // and the page-comment sheet had different things worth a second look. The expanded
+  // composer is the third caller, and the only thing left that knew which document it
+  // was drawing into was the identity strip, which is now passed in like the rest.
+  function showPostCountdown(opts) {
+    const { modal, secs, title, hint, preview, confirmLabel, cancelLabel, onFire, onCancel } = opts;
+    // No seconds: a review with no timer, which goes out only when its button is pressed (an
+    // article or a recipe, too long to take in against a clock).
+    // WHO IS POSTING, supplied rather than looked up. It was read off the panel's own
+    // state here, which is the one thing in this function that knew which document it was
+    // drawing into. The expanded composer asks the same question of a different page.
+    const author = opts.author || null;
+    modal.innerHTML = '';
+    let remaining = secs;
+    let timer = null;
+
+    const R = 30;
+    const C = 2 * Math.PI * R;
+    const ring = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    ring.setAttribute('viewBox', '0 0 72 72');
+    ring.setAttribute('class', 'countdown-ring');
+    ring.innerHTML =
+      '<circle cx="36" cy="36" r="' + R + '" class="ring-track"/>' +
+      '<circle cx="36" cy="36" r="' + R + '" class="ring-fill" ' +
+      'stroke-dasharray="' + C + '" stroke-dashoffset="0" transform="rotate(-90 36 36)"/>';
+    const num = h('div', { className: 'countdown-num' });
+    paintCountdownNum(num, remaining);
+    const ringWrap = h('div', { className: 'countdown-wrap' }, [ring, num]);
+
+
+    const stop = () => { if (timer) { clearInterval(timer); timer = null; } };
+    const now = h('button', { className: 'primary', textContent: confirmLabel || 'Post now' });
+    const cancel = h('button', { className: 'ghost', textContent: cancelLabel || t('Cancel') });
+
+    async function fire() {
+      stop();
+      now.disabled = true;
+      now.textContent = t('Posting…');
+      await onFire();
+    }
+    now.addEventListener('click', fire);
+    cancel.addEventListener('click', () => { stop(); onCancel(); });
+
+    modal.append(
+      h('h3', { textContent: title }),
+      ...(author ? [author] : []),
+      h('p', { className: 'hint', textContent: hint || 'Review before it posts.' }),
+      preview,
+      ...(secs ? [ringWrap] : []),
+      h('div', { className: 'actions' }, [now, cancel])
+    );
+    if (!secs) return { stop };
+
+    const fill = ring.querySelector('.ring-fill');
+    timer = setInterval(() => {
+      remaining -= 1;
+      paintCountdownNum(num, remaining);
+      fill.setAttribute('stroke-dashoffset', String(C * (1 - remaining / secs)));
+      if (remaining <= 0) fire();
+    }, 1000);
+
+    return { stop };
+  }
+
+  // The strike dice, dealt wherever they are needed. The limits are tight on
+  // purpose — rotation within +-3deg, slippage within +-0.035em sideways, seat
+  // height within +-0.03em up or down — enough that no two strikes of the same
+  // figure ever land alike (a hand-held stamp is never twice in the same place)
+  // without threatening legibility even at 9px. Emitted for every theme; the
+  // cast-iron rules are the only consumers.
+  //
+  // Here because splitGlyphs calls it on every character it deals. Left behind in the
+  // panel it was a ReferenceError inside the review countdown's own digits, thrown after
+  // the editor had been hidden to make room for the countdown, so the card went blank and
+  // the note looked lost. The panel's balance figures strike through the same call.
+  function ironDiceStyle() {
+    return '--iron-rot:' + ((Math.random() * 6) - 3).toFixed(2) + 'deg'
+      + ';--iron-dx:' + ((Math.random() * 0.07) - 0.035).toFixed(3) + 'em'
+      + ';--iron-dy:' + ((Math.random() * 0.06) - 0.03).toFixed(3) + 'em';
+  }
+
+  function splitGlyphs(el, text, strike) {
+    el.textContent = '';
+    const glyphs = Array.from(text);
+    // Fresh dice at every split (see ironDiceStyle) — not seeded off --i or the
+    // glyph itself, because re-rendering the same balance should land differently.
+    glyphs.forEach((ch, i) => {
+      const { delay, duration } = glyphBeat(i, glyphs.length);
+      el.append(h('span', {
+        className: 'bal-glyph' + (/[0-9]/.test(ch) ? '' : ' bal-sep')
+          + (i % 2 ? ' bal-alt' : '') + (strike(i) ? ' bal-in' : ''),
+        textContent: ch,
+        style: `--i:${i};--n:${glyphs.length};--strike-delay:${delay}ms;--strike-dur:${duration}ms`
+          + ';' + ironDiceStyle(),
+      }));
+    });
+  }
+
+  function paintCountdownNum(el, n) {
+    const text = String(Math.max(n, 0));
+    const fresh = !el.querySelector('.bal-glyph');
+    const prev = el.textContent;
+    const off = prev.length - text.length;
+    splitGlyphs(el, text, (i) =>
+      !deps.reduceBalanceMotion() && (fresh || prev.charAt(off + i) !== text.charAt(i)));
+  }
+
+
+  function quoteSnippet(text) {
+    const s = String(text || '')
+      .replace(/(?:nostr:)?(?:npub1|nprofile1|note1|nevent1|naddr1)[0-9a-z]+/gi, '')
+      .replace(/ln(?:bc|tb)[0-9a-z]+/gi, '')
+      .replace(/https?:\/\/\S+/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!s) return '';
+    return s.length > 140 ? s.slice(0, 140).trimEnd() + '…' : s;
+  }
+
+  function firstQuoteImage(text) {
+    const urls = String(text || '').match(/https?:\/\/[^\s]+/g) || [];
+    return urls.find((u) => IMG_EXT.test(u)) || null;
+  }
+  // WHAT THIS ACCOUNT'S PROOF OF WORK IS, seeded into a composer and never written back:
+  // the button in the editor is a decision about this note, not about the account.
+  //
+  // Shared because the expanded composer was starting every note at off regardless, so
+  // an account that had asked for 20 bits in Settings got none of them in a tab. Two
+  // readings of one setting is one too many.
+  async function powSetting(pubkey) {
+    let s = {};
+    try { s = (await deps.call({ type: 'SIDECAR_GET_SETTINGS' })) || {}; } catch (_) {}
+    const bits = ((s && s.powBy) || {})[pubkey];
+    return POW_LEVELS.some((l) => l.bits === bits)
+      ? { on: true, bits }
+      : { on: false, bits: POW_DEFAULT_BITS }; // default OFF: this spends the user's time
+  }
+
+  // THE REVIEW WINDOW, as the account set it. Shared for the reason the last two were:
+  // the expanded composer read the setting for itself and defaulted to five seconds
+  // where the panel defaults to fifteen, so the same account got three times less time
+  // to catch a mistake depending on which composer it was in. The presets are a list
+  // rather than a range because a stored value outside them is a hand-edited settings
+  // file, not a choice, and falling back to the default beats honoring it.
+  const NOTE_COUNTDOWN_PRESETS = [5, 10, 15, 25, 30];
+  const NOTE_COUNTDOWN_DEFAULT = 15;
+  async function postCountdownSetting() {
+    let s = {};
+    try { s = (await deps.call({ type: 'SIDECAR_GET_SETTINGS' })) || {}; } catch (_) {}
+    const secs = NOTE_COUNTDOWN_PRESETS.includes(s.noteCountdownSecs)
+      ? s.noteCountdownSecs
+      : NOTE_COUNTDOWN_DEFAULT;
+    return { on: s.noteCountdown !== false, secs }; // default on
+  }
+
+  // ---- the tail the first pass missed ----
+  //
+  // Each of these is called by something that already moved here and was left behind in
+  // the panel, which is a ReferenceError in whichever document runs the caller first.
+  // Found together rather than one screen at a time, because the guard in
+  // composer-core.test.js reads calls and member bases through a tokenizer now instead
+  // of trying to strip strings and comments with a regex.
+  function relTime(ts) {
+    const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+    if (s < 45) return t('just now');
+    // Intl's narrow style is word for word what this wrote by hand in English ("5m ago"),
+    // and every other language gets its own. numeric: 'always', or one day reads
+    // "yesterday" where this has always said "1d ago".
+    const rel = (v, unit) => I18N.fmtRelative(-v, unit, { numeric: 'always' });
+    if (s < 3600) return rel(Math.round(s / 60), 'minute');
+    if (s < 86400) return rel(Math.round(s / 3600), 'hour');
+    if (s < 604800) return rel(Math.round(s / 86400), 'day');
+    return I18N.fmtDate(ts);
+  }
+
+  async function resolveQuotePreviews(quotes) {
+    for (const { el, bech } of quotes) {
+      let d = null;
+      try { d = deps.NT.nip19.decode(bech); } catch (_) {}
+      const ref = d ? embedRef(d) : null;
+      const ev = ref ? await findEvent(ref) : null;
+      el.classList.remove('loading');
+      if (!ev) {
+        el.textContent = t('quoted note'); // not found — today's plain link-out
+        continue;
+      }
+      const who = h('span', {
+        className: 'mention',
+        textContent: '@' + deps.shortNpub(deps.NT.nip19.npubEncode(ev.pubkey)),
+      });
+      // The text lives in its own clamped element (the <a> can't clamp once it
+      // also holds a thumbnail), media gets a small thumb below it, and an
+      // invoice becomes a quiet caption under everything — it's metadata about
+      // the note, not prose, and inline it read as a sentence placed above the
+      // image it follows in the content (zap receipts are image + invoice and
+      // nothing else).
+      const content = String(ev.content || '');
+      const hasInvoice = /\bln(?:bc|tb)[0-9a-z]+\b/i.test(content);
+      const text = h('div', { className: 'quote-inline-text' }, [who]);
+      const snip = quoteSnippet(content);
+      const img = firstQuoteImage(content);
+      if (snip) text.append(document.createTextNode(' ' + snip));
+      else if (!img && !hasInvoice) text.append(document.createTextNode(' (no text)'));
+      const kids = [text];
+      if (img) {
+        const im = document.createElement('img');
+        im.className = 'quote-inline-thumb';
+        im.referrerPolicy = 'no-referrer';
+        im.src = img;
+        im.onerror = () => im.remove();
+        kids.push(im);
+      }
+      if (hasInvoice) kids.push(h('div', { className: 'quote-inline-meta', textContent: t('⚡ invoice') }));
+      el.replaceChildren(...kids);
+      deps.fetchPreviewProfile(ev.pubkey).then((p) => {
+        if (p && p.name) who.textContent = '@' + p.name;
+      });
+    }
+  }
+
+  const BLOSSOM_SERVER_LIST_KIND = 10063;
+  const BLOSSOM_AUTH_KIND = 24242;
+  const BLOSSOM_UPLOAD_TIMEOUT = 30000;
+  const BLOSSOM_CACHE_TTL = 5 * 60 * 1000;
+  // A list that was good and has expired is still better than none when the refresh fails.
+  const BLOSSOM_STALE_TTL = 60 * 60 * 1000;
+
+  // THE TIME A SERVER GETS DEPENDS ON THE FILE. One flat 30 seconds for the whole PUT
+  // aborted any image that could not cross a modest uplink in that time, a phone photo of
+  // several megabytes, and each abort ran the list out and fell through to nostr.build, which
+  // never times out. So the small images went to the person's own server and the big ones
+  // did not. Thirty seconds to start, ten more for every megabyte, and never more than five
+  // minutes: a stuck server is still given up on.
+  const BLOSSOM_MS_PER_MB = 10000;
+  const BLOSSOM_TIMEOUT_MAX = 5 * 60 * 1000;
+  function blossomTimeoutFor(file) {
+    const mb = Math.ceil((file && file.size ? file.size : 0) / (1024 * 1024));
+    return Math.min(BLOSSOM_UPLOAD_TIMEOUT + mb * BLOSSOM_MS_PER_MB, BLOSSOM_TIMEOUT_MAX);
+  }
+
+  const _blossomServerCache = new Map(); // pubkey -> { servers, expiresAt, staleUntil }
+
+  // ---- the same note, twice ----
+  //
+  // A note can go out without the person who wrote it knowing: a minimized mine posts
+  // when it finds, and the toast that says so is easy to miss. If the same words are
+  // still in a composer afterwards, Post would publish them again. So each composer
+  // remembers a fingerprint of what this account posted in the last fifteen minutes,
+  // and an identical note asks once before it goes.
+  //
+  // The fingerprint is the account, the text, the attachments, what it answers and a
+  // poll's options, hashed: the store holds no note text. The pages keep the store
+  // (session storage, so it forgets with the browser), since settings and storage belong
+  // to the page that reads them; this module only says what a fingerprint is and when one
+  // has gone stale.
+  const RECENT_POSTS_KEY = 'sidecar_recent_posts';
+  const RECENT_POST_MS = 15 * 60 * 1000;
+  async function postFingerprint(pubkey, draft, replyTo) {
+    const d = draft || {};
+    const poll = d.poll ? (d.poll.options || []).map((o) => String(o || '').trim()) : null;
+    const shape = JSON.stringify([
+      pubkey || '', String(d.text || '').trim(), (d.media || []).map((m) => m && (m.url || m.quote)),
+      (replyTo && replyTo.id) || '', poll,
+    ]);
+    return sha256Hex(new TextEncoder().encode(shape));
+  }
+  // The stored map with anything older than the window dropped.
+  function freshRecentPosts(all, now) {
+    const out = {};
+    for (const [k, at] of Object.entries(all || {})) if (now - at < RECENT_POST_MS) out[k] = at;
+    return out;
+  }
+
+  async function sha256Hex(buffer) {
+    const digest = await crypto.subtle.digest('SHA-256', buffer);
+    return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  const STRIKE_DELAY_MOD_MS = 300;
+  const STRIKE_DELAY_WINDOW_MS = 111;
+  const STRIKE_DUR_BASE_MS = 900;
+  const STRIKE_DUR_STEPS = 5;
+  const STRIKE_DUR_STEP_MS = 90;
+  const rawStrikeDelay = (i) => (i * 37) % STRIKE_DELAY_MOD_MS;
+  const glyphBeat = (i, n) => {
+    // The widest raw delay this many glyphs actually reaches — not the modulus, which
+    // only a long figure gets near.
+    let span = 0;
+    for (let k = 0; k < n; k++) span = Math.max(span, rawStrikeDelay(k));
+    const squeeze = span > STRIKE_DELAY_WINDOW_MS ? STRIKE_DELAY_WINDOW_MS / span : 1;
+    return {
+      delay: Math.round(rawStrikeDelay(i) * squeeze),
+      duration: STRIKE_DUR_BASE_MS + ((i * 53) % STRIKE_DUR_STEPS) * STRIKE_DUR_STEP_MS,
+    };
+  };
+
+  // ---- publishing: who took the note, and who did not ---------------------------------
+  //
+  // THE SAME RULE AS sidepanel.js publishToRelays, for the pages that are not the panel.
+  // The tab composer and the highlight popup counted every relay that did not hard-reject
+  // as a success, and SimplePool.publish() RESOLVES, with the text "connection failure:
+  // …", for a relay it could not reach. A note reached one relay out of nine and read
+  // "Published to 9 relays." test/publish-parity.test.js holds the two copies to the same
+  // answer; change one, change the other.
+  const PUBLISH_CAP_MS = 12000;
+  const publishFailed = (r) =>
+    r.status === 'rejected' ||
+    (typeof r.value === 'string' && r.value.startsWith('connection failure:'));
+
+  // A relay that never answers cannot hold the post hostage: counted as failed after the cap.
+  function capPublish(p, ms) {
+    let timer;
+    return Promise.race([
+      p,
+      new Promise((res) => { timer = setTimeout(() => res('connection failure: no answer within ' + Math.round(ms / 1000) + 's'), ms); }),
+    ]).finally(() => clearTimeout(timer));
+  }
+
+  // Why a relay did not take it, as a CODE the page words in the reader's language, plus the
+  // relay's own text when nothing here names the reason. Order matters: a refusal that
+  // mentions payment is a payment refusal even though it also says "restricted".
+  function publishRefusal(r) {
+    const raw = r.status === 'rejected'
+      ? (r.reason && r.reason.message) || String(r.reason || 'rejected')
+      : String(r.value || 'refused');
+    const text = raw.replace(/^connection failure:\s*/i, '').trim();
+    if (/timed?\s*out|no answer/i.test(raw)) return { code: 'timeout', text };
+    if (/connection failure|failed to connect|websocket/i.test(raw)) return { code: 'connect', text };
+    if (/pay|paid|subscri|invoice|member/i.test(raw)) return { code: 'payment', text };
+    if (/auth/i.test(raw)) return { code: 'auth', text };
+    if (/rate|too many|slow down/i.test(raw)) return { code: 'rate', text };
+    if (/blocked|restricted|not allowed|forbidden|denied|banned|whitelist|allowlist/i.test(raw)) return { code: 'refused', text };
+    return { code: 'other', text: text.slice(0, 60) };
+  }
+
+  // Publish to every relay, then say which took it. Like the panel: each relay answers in time
+  // or counts as failed, and when NOTHING took it the sockets are dropped and it is tried
+  // once more (nothing landed, so nothing can be duplicated). A partial success resets only
+  // the relays that failed, so a wedged one does not poison the next post.
+  //   pool     a SimplePool
+  //   relays   the URLs to publish to
+  //   params   passed to pool.publish (an onauth, so a relay that wants a signed AUTH gets one)
+  //   normalize  URL normalizer; the pool rejects a second spelling of one relay as a duplicate
+  // Returns { accepted: [url], failed: [{ url, code, text }], total }.
+  async function publishToRelays({ pool, relays, signed, params, capMs = PUBLISH_CAP_MS, normalize = (u) => u }) {
+    const targets = [...new Set(relays.map((u) => { try { return normalize(u); } catch (_) { return u; } }))];
+    const run = async () => Promise.allSettled(pool.publish(targets, signed, params).map((p) => capPublish(p, capMs)));
+    let results = await run();
+    let ok = results.filter((r) => !publishFailed(r)).length;
+    if (!ok) {
+      try { pool.close(targets); } catch (_) {}
+      results = await run();
+      ok = results.filter((r) => !publishFailed(r)).length;
+    } else if (results.some(publishFailed)) {
+      try { pool.close(targets.filter((_, i) => publishFailed(results[i]))); } catch (_) {}
+    }
+    const accepted = [];
+    const failed = [];
+    results.forEach((r, i) => {
+      if (publishFailed(r)) failed.push({ url: targets[i], ...publishRefusal(r) });
+      else accepted.push(targets[i]);
+    });
+    return { accepted, failed, total: targets.length };
+  }
+
+  // The failed relays grouped by reason, biggest group first: [{ code, text, hosts: [host] }].
+  function groupRefusals(failed) {
+    const hostOf = (u) => { try { return new URL(u).host; } catch (_) { return String(u).replace(/^wss?:\/\//, '').replace(/\/$/, ''); } };
+    const groups = new Map();
+    for (const f of failed) {
+      // A refusal we cannot name more precisely keeps the relay's own words, and relays that said
+      // different things are different groups.
+      const keepsText = f.code === 'other' || f.code === 'refused';
+      const key = keepsText ? f.code + ':' + f.text : f.code;
+      if (!groups.has(key)) groups.set(key, { code: f.code, text: keepsText ? f.text : '', hosts: [] });
+      groups.get(key).hosts.push(hostOf(f.url));
+    }
+    return [...groups.values()].sort((a, b) => b.hosts.length - a.hosts.length);
+  }
+
+  // ---- the relay answer after a post, in words: one copy for the tab's receipt and the panel's
+  // banner, so the two cannot describe the same publish differently ----
+  //
+// The relays that did not take it, one sentence per reason, the biggest group first and no
+  // more than three. One template per sentence so a translation can order the words; the hosts
+  // and the relay's own words go in as values.
+  function refusalLines(failed) {
+    const sentence = {
+      timeout: (v) => t('{{hosts}} timed out.', v),
+      connect: (v) => t('Could not reach {{hosts}}.', v),
+      payment: (v) => t('{{hosts}} asked for payment.', v),
+      auth: (v) => t('{{hosts}} asked for sign-in.', v),
+      rate: (v) => t('{{hosts}} rate-limited the post.', v),
+      refused: (v) => (v.text ? t('Refused by {{hosts}}: {{text}}', v) : t('Refused by {{hosts}}.', v)),
+      other: (v) => t('{{hosts}} refused: {{text}}', v),
+    };
+    return groupRefusals(failed).slice(0, 3).map((g) => {
+      const shown = g.hosts.slice(0, 3).join(', ') + (g.hosts.length > 3 ? ' +' + (g.hosts.length - 3) : '');
+      return (sentence[g.code] || sentence.other)({ hosts: shown, text: (g.text || '').slice(0, 80) });
+    });
+  }
+
+  // The same, for the relays that DID take it, said once, so the row opens onto the whole answer.
+  function acceptedLine(accepted) {
+    const hosts = (accepted || []).map((u) => { try { return new URL(u).host; } catch (_) { return String(u); } });
+    const shown = hosts.slice(0, 4).join(', ') + (hosts.length > 4 ? ' +' + (hosts.length - 4) : '');
+    return t('Accepted it: {{hosts}}.', { hosts: shown });
+  }
+
+
+  // "Published to N relays." When every relay accepted it, that line alone (plainClass names its
+  // style in the page that asked). When one did not, the same line is the summary of a row that
+  // opens onto which relays accepted it and why the others did not. ONE ROW THAT OPENS, not a
+  // line per refusal: three sentences of relay trouble under "Your reply is live." read as an
+  // alarm, and a native details element is one the keyboard and screen readers already open.
+  function relayReportNode(report, plainClass) {
+    const summary = tn('Published to {{count}} relay.', 'Published to {{count}} relays.', report.accepted.length);
+    if (!report.failed.length) return h('p', { className: plainClass || '', textContent: summary });
+    const lines = [acceptedLine(report.accepted), ...refusalLines(report.failed)];
+    return h('details', { className: 'compose-done-relays' }, [
+      h('summary', { textContent: summary }),
+      ...lines.map((line) => h('p', { textContent: line })),
+    ]);
+  }
+
+  return {
+    show, hide, ICONS, FILLED_ICONS, icon, h,
+    NB_PLANS_URL, uploadErrorParts,
+    paintSavedState,
+    TRACKING_PARAMS, TRACKING_PREFIXES, HOST_TRACKING_PARAMS, isTrackingParam,
+    hostTrackingParams, cleanTrackedUrl, trimUrlTail, findTrackedUrls,
+    LIGHT_THEMES, COMPOSE_DARK_BAR_THEMES, PANEL_DARK_BAR_THEMES, logoSrcFor, avatarPhSrc, buildUrlRow, relTime, longformDraftItems, buildLongformDraftList,
+    installComposer,
+    // Furniture: the same three things every composer needs, wired through installComposer
+    // so they read their relays and their profile cache from whichever page installed it.
+    POW_LEVELS, POW_DEFAULT_BITS, powLevelFor,
+    NOTE_COUNTDOWN_PRESETS, NOTE_COUNTDOWN_DEFAULT,
+    VIEW_CLIENTS, DEFAULT_CLIENT, resolveClient, renderLinkCard,
+    customClient, parseClientLink,
+    IMG_EXT, VID_EXT, urlIsVideo,
+    // The imeta write side and its editor row: pure of deps, so both pages take them
+    // straight off the global like IMG_EXT rather than through installComposer.
+    ALT_MAX, normalizeAltBreaks, capAltText, buildImetaTag, imetaTagsForMedia, readVideoMeta, buildAltEditorRow,
+    splitTrailingQuote, takeTrailingQuote, proseWithQuotes, quoteEntriesFromPaste, placeQuote, moveQuoteEntry, buildAttachmentsLabel,
+    movePicture, canMovePicture, pictureCount, addMedia, replaceMedia, draftSnippet,
+    composeNoteContent, stripDraftMediaUrls, buildMediaDrawer, videoThumbCover, primeVideoThumb,
+    replyTags, replyKind, WEB_COMMENT_KIND, readRef, serializeEditor, textFromHtml, markdownFromHtml, transferText, mentionPTags, quoteTags, noteBodyTags, hashtagTags, linkBareRefs,
+    parseSilentTags, parseEventRef, fetchEventRef, devReplyTags,
+    renderTextWithCode, makeMediaExpandable, openMediaLightbox,
+    POLL_KIND, POLL_SINGLE, POLL_MULTIPLE, POLL_DEFAULT_SECS, POLL_DURATIONS,
+    pollOptionId, newPollDraft, pollEndsAtFor, pollDraftOptions, pollDraftIsPostable, buildPollTags,
+    buildPollEditor,
+    emojiGroups, emojiQuery, emojiHit, EMOJI_SEARCH_MAX, buildEmojiPicker, composeToolBtn, buildPowButton,
+    recompressImage, stripPrivateMetadata, pngHdrInfo, pqToSdrTable, emojiGroupLabel,
+    GIF_TOPICS, gifTopicsFor, gifSearchUrl, gifSuggestUrl, gifFromItem, parseGifPage, parseGifSuggestions, buildGifPicker,
+    loneMediaUrl, removeUrlFromEditor, urlOnBoundary,
+    postFingerprint, freshRecentPosts, RECENT_POSTS_KEY,
+    draftHasContent, otherDraftEntries, buildSavedDraftList,
+    draftHasWork, shelveNoteDraft, unshelveNoteDraft, SHELVED_NOTE_MAX,
+    RELAY_DRAFT_KIND, PRIVATE_RELAYS_KIND, RELAY_DRAFT_KINDS, RELAY_DRAFT_TTL_SECS,
+    draftToEvent, draftFromEvent, splitDraftContent, relayDraftWrap, relayDraftBlank, newRelayDraftId,
+    draftSum, liveRelayDrafts, openRelayDrafts, parsePrivateRelayList, adoptRelayDraft, relayDraftIsLocal,
+    queryAnswered, installRelayDrafts, buildRelayDraftsPane,
+    publishFailed, publishRefusal, publishToRelays, groupRefusals, PUBLISH_CAP_MS,
+    refusalLines, acceptedLine, relayReportNode,
+  };
+})();

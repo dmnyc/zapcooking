@@ -1,17 +1,17 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { goto } from '$app/navigation';
+  import { openMonoComposer, openMonoComposerDrafts, monoDraftCount } from '$lib/monoComposerStore';
   import { page } from '$app/stores';
   import { requireAuth } from '$lib/auth/requireAuth';
   import { clickOutside } from '$lib/clickOutside';
-  import { postComposerOpen } from '$lib/postComposerStore';
   import { miningOp } from '$lib/stores/miningOp';
-  import { openNewDraft } from './reads/articleDraftStore';
   import AddIcon from 'phosphor-svelte/lib/Plus';
   import ForkKnifeIcon from 'phosphor-svelte/lib/ForkKnife';
   import PencilSimpleIcon from 'phosphor-svelte/lib/PencilSimple';
   import NewspaperIcon from 'phosphor-svelte/lib/Newspaper';
   import BroadcastIcon from 'phosphor-svelte/lib/Broadcast';
+  import FolderSimpleIcon from 'phosphor-svelte/lib/FolderSimple';
   import { userPublickey } from '$lib/nostr';
   import { goLiveAccess, LIVE_MEMBERSHIP_PATH } from '$lib/live/config';
   import { membershipStatusMap, queueMembershipLookup } from '$lib/stores/membershipStatus';
@@ -45,6 +45,11 @@
   $: if (livePk) queueMembershipLookup(livePk);
   $: liveAccess = goLiveAccess(livePk ? $membershipStatusMap[livePk] : undefined);
 
+  // Read each time the menu opens: drafts are saved as you type, so a count
+  // taken once at load would be stale by the next visit.
+  let draftCount = 0;
+  $: if (showMenu) draftCount = monoDraftCount();
+
   $: if (isMining) closeMenu();
 
   $: if (isCancelMode) {
@@ -57,19 +62,25 @@
   async function openRecipe() {
     closeMenu();
     if (!(await requireAuth({ kind: 'post', reason: 'Sign in to share a recipe' }))) return;
-    goto('/create');
+    openMonoComposer('recipes');
   }
 
   async function openPost() {
     closeMenu();
     if (!(await requireAuth({ kind: 'post', reason: 'Sign in to post' }))) return;
-    postComposerOpen.set(true);
+    openMonoComposer('notes');
   }
 
   async function openRead() {
     closeMenu();
     if (!(await requireAuth({ kind: 'post', reason: 'Sign in to write an article' }))) return;
-    openNewDraft();
+    openMonoComposer('reads');
+  }
+
+  async function openDrafts() {
+    closeMenu();
+    if (!(await requireAuth({ kind: 'post', reason: 'Sign in to see your drafts' }))) return;
+    openMonoComposerDrafts();
   }
 
   async function openLive() {
@@ -240,7 +251,7 @@
 <div
   class={`create-menu ${variant === 'floating' ? 'create-menu-floating' : 'create-menu-header'} ${className}`}
   class:create-menu-open={showMenu && !isCancelMode}
-  class:create-menu-four={true}
+  class:create-menu-full={true}
   role="presentation"
   on:mouseenter={handleMouseEnter}
   on:mouseleave={handleMouseLeave}
@@ -287,10 +298,6 @@
     {/if}
   </button>
 
-  {#if variant === 'floating'}
-    <span class="create-surface-label" aria-hidden="true">Create</span>
-  {/if}
-
   <div
     class={`create-menu-panel ${
       variant === 'floating' ? 'create-menu-panel-floating' : 'create-menu-panel-header'
@@ -299,6 +306,12 @@
     aria-label="Create options"
     aria-hidden={!showMenu || isCancelMode}
   >
+    <!-- What the menu is, said once at its head (the floating button has no
+         label of its own), so each item can be just the thing: Post, not
+         "New post". The header button already says Create. -->
+    {#if variant === 'floating'}
+      <span class="create-menu-heading" aria-hidden="true">Create</span>
+    {/if}
     <button
       type="button"
       class="create-menu-item"
@@ -306,7 +319,7 @@
       on:click={openPost}
     >
       <span class="create-menu-item-icon"><PencilSimpleIcon size={20} /></span>
-      <span>New post</span>
+      <span>Post</span>
     </button>
     <button
       type="button"
@@ -315,7 +328,7 @@
       on:click={openRecipe}
     >
       <span class="create-menu-item-icon"><ForkKnifeIcon size={20} /></span>
-      <span>New recipe</span>
+      <span>Recipe</span>
     </button>
     <button
       type="button"
@@ -324,7 +337,7 @@
       on:click={openRead}
     >
       <span class="create-menu-item-icon"><NewspaperIcon size={20} /></span>
-      <span>New read</span>
+      <span>Article</span>
     </button>
     <button
       type="button"
@@ -335,6 +348,18 @@
       <span class="create-menu-item-icon"><BroadcastIcon size={20} /></span>
       <span>Go live</span>
       {#if liveAccess === 'non_member'}<span class="create-menu-cookplus">Cook+</span>{/if}
+    </button>
+    <!-- Drafts is where you go back to, not a new thing: set apart. -->
+    <hr class="create-menu-divider" aria-hidden="true" />
+    <button
+      type="button"
+      class="create-menu-item"
+      tabindex={showMenu && !isCancelMode ? 0 : -1}
+      on:click={openDrafts}
+    >
+      <span class="create-menu-item-icon"><FolderSimpleIcon size={20} /></span>
+      <span>Drafts</span>
+      {#if draftCount > 0}<span class="create-menu-count" aria-label="{draftCount} saved">{draftCount}</span>{/if}
     </button>
   </div>
 </div>
@@ -369,9 +394,23 @@
     pointer-events: none;
   }
 
-  /* A fourth item (Go live, allowlisted hosts only) needs one more row. */
-  .create-menu-floating.create-menu-four {
-    height: 296px;
+  /* The Create heading (28px), five 52px rows (Post, Recipe, Article, Go
+     live, Drafts) and the divider before Drafts (9px), ending 8px above
+     the button. */
+  .create-menu-floating.create-menu-full {
+    height: 385px;
+  }
+  /* The saved-draft count: the composer folder's capsule, in the row. */
+  .create-menu-count {
+    margin-left: auto;
+    min-width: 1.25rem;
+    padding: 0.05rem 0.4rem;
+    border-radius: 9999px;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    text-align: center;
+    color: var(--color-on-action);
+    background: var(--color-action);
   }
   /* Go live for a confirmed non-member: it leads to the membership page. */
   .create-menu-cookplus {
@@ -620,14 +659,15 @@
     transition-delay: 135ms;
   }
 
-  .create-surface-label {
-    position: absolute;
-    left: 20px;
-    bottom: 31px;
-    z-index: 1;
+  /* The menu's name at its head, faded: it says what the list is without
+     competing with the items. Fades up with the panel. */
+  .create-menu-heading {
+    padding: 0.4rem 0.75rem 0.2rem;
     color: var(--color-caption);
-    font-size: 0.875rem;
-    font-weight: 500;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
     opacity: 0;
     transform: translateY(4px);
     transition:
@@ -635,10 +675,16 @@
       transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
   }
 
-  .create-menu-open .create-surface-label {
-    opacity: 1;
+  .create-menu-open .create-menu-heading {
+    opacity: 0.7;
     transform: translateY(0);
     transition-delay: 100ms;
+  }
+
+  .create-menu-divider {
+    margin: 0.25rem 0.75rem;
+    border: none;
+    border-top: 1px solid var(--color-input-border);
   }
 
   .create-trigger-icon {
@@ -690,7 +736,7 @@
     .create-menu-floating::before,
     .create-trigger-floating,
     .create-menu-panel-floating .create-menu-item,
-    .create-surface-label,
+    .create-menu-heading,
     .create-trigger-icon {
       transition-duration: 0.01ms;
       transition-delay: 0s;

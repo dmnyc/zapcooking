@@ -138,6 +138,44 @@ function isMediaUrl(url: string): boolean {
 }
 
 /**
+ * A nostr note reference a paste can carry: bech32 `nevent1…` or `note1…`,
+ * optionally with the `nostr:` prefix. Same charset as the mention rules —
+ * bech32's data alphabet, no `1` inside the data part.
+ */
+const NOSTR_NOTE_REF = /^(?:nostr:)?(?:nevent1|note1)[023456789acdefghjklmnpqrstuvwxyz]+$/;
+
+export function isNoteReference(token: string): boolean {
+  return NOSTR_NOTE_REF.test(token);
+}
+
+/** Strip the `nostr:` prefix a reference may carry; `nevent1…` is what the
+ * publish path and nip19 want. */
+export function bareNoteReference(ref: string): string {
+  return ref.replace(/^nostr:/, '');
+}
+
+/** Shared removal behind [removeBareUrlOccurrence]: first occurrence of
+ * [token] as a whitespace-delimited token on a qualifying line. */
+function removeTokenOccurrence(
+  text: string,
+  token: string,
+  lineQualifies: (t: string) => boolean
+): string {
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const tokens = lines[i].trim().split(/\s+/).filter(Boolean);
+    if (!tokens.length || !tokens.every(lineQualifies)) continue;
+    const at = tokens.indexOf(token);
+    if (at === -1) continue;
+    tokens.splice(at, 1);
+    if (tokens.length) lines[i] = tokens.join(' ');
+    else lines.splice(i, 1);
+    return lines.join('\n');
+  }
+  return text;
+}
+
+/**
  * Remove the FIRST occurrence of [url] as a whitespace-delimited token on a
  * URL-only line — the counterpart of accepting one offer. An emptied line
  * is removed entirely so no blank line lingers; other tokens on the line
@@ -146,16 +184,5 @@ function isMediaUrl(url: string): boolean {
  * consume (stale offer, fast double-tap).
  */
 export function removeBareUrlOccurrence(text: string, url: string): string {
-  const lines = text.split('\n');
-  for (let i = 0; i < lines.length; i++) {
-    const tokens = lines[i].trim().split(/\s+/).filter(Boolean);
-    if (!tokens.length || !tokens.every((t) => BARE_URL_TOKEN.test(t))) continue;
-    const at = tokens.indexOf(url);
-    if (at === -1) continue;
-    tokens.splice(at, 1);
-    if (tokens.length) lines[i] = tokens.join(' ');
-    else lines.splice(i, 1);
-    return lines.join('\n');
-  }
-  return text;
+  return removeTokenOccurrence(text, url, (t) => BARE_URL_TOKEN.test(t));
 }
