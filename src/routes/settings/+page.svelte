@@ -149,6 +149,14 @@
     wotRelay = provider.relay;
   }
 
+  const DEFAULT_WOT_PROVIDER = KNOWN_WOT_PROVIDERS[0];
+
+  async function restoreDefaultWotProvider() {
+    if (!DEFAULT_WOT_PROVIDER || wotSaving) return;
+    selectWotProvider(DEFAULT_WOT_PROVIDER);
+    await saveWotProvider();
+  }
+
   async function saveWotProvider() {
     wotSaving = true;
     wotMessage = null;
@@ -1595,6 +1603,20 @@
               >
             {/if}
           </div>
+
+          <!-- A custom provider can be restored to the default in one click; hidden
+               when the default (or no) provider is already active. -->
+          {#if wotProvider?.servicePubkey && wotProvider.servicePubkey !== DEFAULT_WOT_PROVIDER?.pubkey}
+            <button
+              type="button"
+              class="text-xs font-medium underline-offset-2 hover:underline text-left w-full"
+              style="color: var(--color-accent); background: none; border: none; cursor: pointer; padding: 0;"
+              on:click={restoreDefaultWotProvider}
+              disabled={wotSaving}
+            >
+              {wotSaving ? 'Restoring…' : 'Restore default provider (Brainstorm)'}
+            </button>
+          {/if}
 
           <!-- Mode selection -->
           <div class="flex flex-col gap-2">

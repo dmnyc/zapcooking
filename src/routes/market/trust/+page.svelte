@@ -88,6 +88,14 @@
 		customRelay = provider.relay;
 	}
 
+	const DEFAULT_PROVIDER = KNOWN_PROVIDERS[0];
+
+	async function restoreDefaultProvider() {
+		if (!DEFAULT_PROVIDER || saving) return;
+		selectKnownProvider(DEFAULT_PROVIDER);
+		await saveProvider();
+	}
+
 	async function saveProvider() {
 		saving = true;
 		saveMessage = null;
@@ -329,6 +337,18 @@
 							<br />Relay: <code>{currentProvider.relayHint}</code>
 						{/if}
 					</p>
+					<!-- A custom provider can be restored to the default in one click; hidden
+					     when the default (or no) provider is already active. -->
+					{#if currentProvider.servicePubkey !== DEFAULT_PROVIDER?.pubkey}
+						<button
+							type="button"
+							class="restore-default mt-2"
+							on:click={restoreDefaultProvider}
+							disabled={saving}
+						>
+							{saving ? 'Restoring…' : 'Restore default provider (Brainstorm)'}
+						</button>
+					{/if}
 				{:else}
 					<p class="text-xs" style="color: var(--color-text-secondary)">
 						Scores are the same for everyone. Choose a provider below to personalize.
@@ -629,6 +649,25 @@
 	.known-provider.active {
 		border-color: var(--color-primary);
 		background-color: color-mix(in srgb, var(--color-primary) 5%, transparent);
+	}
+
+	.restore-default {
+		@apply text-xs font-medium text-left;
+		color: var(--color-primary);
+		background: none;
+		border: none;
+		padding: 0;
+		cursor: pointer;
+	}
+
+	.restore-default:hover {
+		text-decoration: underline;
+		text-underline-offset: 2px;
+	}
+
+	.restore-default:disabled {
+		opacity: 0.6;
+		cursor: default;
 	}
 
 	/* Custom fields */
