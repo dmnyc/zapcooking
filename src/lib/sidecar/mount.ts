@@ -401,6 +401,9 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
     .mono-draft-snip { font-size: 13px; color: var(--text-2); line-height: 1.45;
       display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
     .mono-draft-del { border: none; background: none; flex-shrink: 0; padding: 0 12px; }
+    .mono-draft-meta[hidden] { display: none; }
+    .mono-draft.confirming, .mono-draft.confirming:hover { border-color: var(--red); }
+    .mono-draft.confirming .mono-draft-kind, .mono-draft.confirming .mono-draft-del { color: var(--red); }
     .mono-toolbar { display: flex; gap: 4px; border: 1px solid var(--border); border-radius: 10px; padding: 6px; margin-bottom: 6px; }
     .mono-toolbar .tool-btn { padding: 6px 9px; }
     /* Sidecar's compose page owns a whole browser tab and centers the
@@ -752,6 +755,11 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
     paintDraftsPane();
   }
 
+  // The row asking "Delete this draft?", by key, and until when. Kept out
+  // here because a sync landing between the two taps repaints the list,
+  // and the second tap must still find the row asking.
+  let armedDelete: { key: string; until: number } | null = null;
+
   function paintDraftsPane() {
     let pane = page.querySelector('.compose-drafts-pane') as HTMLElement | null;
     if (!pane) {
@@ -811,7 +819,7 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
     list.className = 'mono-drafts-list';
     const row = (
       label: string, snippet: string, at: number, state: 'synced' | 'pending' | 'device',
-      onOpen: () => void, onDelete: () => void, current: boolean
+      key: string, onOpen: () => void, onDelete: () => void, current: boolean, onRelays = false
     ) => {
       const item = document.createElement('div');
       item.className = 'mono-draft' + (current ? ' is-current' : '');
@@ -842,10 +850,41 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
       snip.className = 'mono-draft-snip';
       snip.textContent = snippet.trim() || 'Pictures only';
       open.append(top, snip);
-      open.addEventListener('click', onOpen);
-      const del = iconButton(TrashIcon, 'Delete this draft');
+      const del = iconButton(TrashIcon, onRelays ? 'Delete from your relays' : 'Delete this draft');
       del.classList.add('mono-draft-del');
-      del.addEventListener('click', onDelete);
+      // Two taps to delete, as Sidecar's list asks: the first turns the row
+      // into the question, the second (on the trash or the row) deletes, and
+      // it settles back on its own after a few seconds. One tap used to
+      // delete outright, relay copy and all, a slip away from opening it.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const settle = () => {
+        clearTimeout(timer);
+        if (armedDelete?.key === key) armedDelete = null;
+        item.classList.remove('confirming');
+        kind.textContent = current ? `${label} · writing now` : label;
+        meta.hidden = false;
+        snip.textContent = snippet.trim() || 'Pictures only';
+      };
+      const ask = (ms: number) => {
+        item.classList.add('confirming');
+        kind.textContent = onRelays ? 'Delete it from your relays?' : 'Delete this draft?';
+        meta.hidden = true;
+        snip.textContent = 'Tap again to delete';
+        timer = setTimeout(settle, ms);
+      };
+      const confirming = () => item.classList.contains('confirming');
+      const remove = () => {
+        clearTimeout(timer);
+        armedDelete = null;
+        onDelete();
+      };
+      del.addEventListener('click', () => {
+        if (confirming()) return remove();
+        armedDelete = { key, until: Date.now() + 4000 };
+        ask(4000);
+      });
+      open.addEventListener('click', () => (confirming() ? remove() : onOpen()));
+      if (armedDelete?.key === key && armedDelete.until > Date.now()) ask(armedDelete.until - Date.now());
       item.append(open, del);
       list.appendChild(item);
     };
@@ -854,7 +893,7 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
       const state = !me() ? 'device' : d.relay && d.relay.sum === contentSum(d) ? 'synced' : 'pending';
       row(
         d.kind === 'poll' ? 'Poll' : 'Note', d.text || (d.poll ? d.poll.options.filter(Boolean).join(' / ') : ''),
-        d.updatedAt, state,
+        d.updatedAt, state, d.id,
         () => { openDraft(d); closeDraftsPane(); },
         () => {
           const r = removeDraft(loadDrafts(), loadBlanks(), d.id);
@@ -869,11 +908,12 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
           paintDraftsPane();
           if (me()) void syncDrafts(); // the relay copy goes now, not at close
         },
-        d.id === activeId
+        d.id === activeId,
+        !!me() && !!d.relay
       );
     }
     for (const l of locals) {
-      row(l.label, l.snippet, l.at, 'device',
+      row(l.label, l.snippet, l.at, 'device', `local:${l.tab}`,
         () => { setPane(l.tab); closeDraftsPane(); },
         () => {
           writeLocal(l.tab === 'recipes' ? RECIPE_DRAFT_KEY : ARTICLE_DRAFT_KEY, null);
