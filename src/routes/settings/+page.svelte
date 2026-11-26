@@ -1760,46 +1760,68 @@
                and everyone ten of your follows follow). Separate from the provider
                above: this is built locally, not fetched from a service. -->
           <div
-            class="flex items-center gap-3 px-3 py-2 rounded-lg"
+            class="flex flex-col gap-3 px-3 py-3 rounded-lg"
             style="border: 1px solid var(--color-input-border);"
           >
-            <div class="flex-1 min-w-0">
-              <p class="text-sm" style="color: var(--color-text-primary)">
-                Web of trust (spam filter)
-              </p>
-              <label class="flex items-center gap-2 mt-1 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={$wotEnabled}
-                  on:change={() => setWotEnabled(!$wotEnabled)}
-                  style="accent-color: var(--color-accent);"
-                />
-                <span class="text-xs" style="color: var(--color-text-secondary)">
-                  Hide spam using your web of trust
-                </span>
-              </label>
-              <p class="text-xs mt-1" style="color: var(--color-text-secondary)">
-                {#if !$wotEnabled}
-                  Off — spammers are hidden outside your direct follows
-                {:else if $wotState === 'building'}
-                  Building…
-                {:else if $wotState === 'ready'}
-                  Ready · {$wotSet.size.toLocaleString()} accounts in your network
-                {:else}
-                  Not built yet — builds in the background after you sign in
-                {/if}
-              </p>
-            </div>
-            {#if $wotEnabled}
+            <!-- Title + switch, the settings-row pattern the countdown toggle uses -->
+            <div class="flex items-center justify-between gap-3">
+              <div class="min-w-0">
+                <p class="text-sm font-medium" style="color: var(--color-text-primary)">
+                  Web of trust (spam filter)
+                </p>
+                <p class="text-xs mt-0.5" style="color: var(--color-text-secondary)">
+                  Hide known spammers outside your network
+                </p>
+              </div>
               <button
                 type="button"
-                class="px-3 py-1.5 bg-secondary hover:bg-accent-gray rounded-lg text-xs font-medium transition-colors whitespace-nowrap"
-                style="color: var(--color-text-primary)"
-                disabled={$wotState === 'building'}
-                on:click={() => buildWot($ndk, $userPublickey, { force: true }).catch(() => {})}
+                role="switch"
+                aria-checked={$wotEnabled}
+                aria-label="Hide spam using your web of trust"
+                class="relative w-12 h-7 rounded-full transition-colors cursor-pointer flex-shrink-0 {$wotEnabled
+                  ? 'bg-action'
+                  : 'bg-[var(--color-input-border)]'}"
+                on:click={() => setWotEnabled(!$wotEnabled)}
               >
-                {$wotState === 'building' ? 'Building…' : 'Rebuild'}
+                <span
+                  class="absolute top-1 left-1 w-5 h-5 bg-on-action rounded-full shadow transition-transform {$wotEnabled
+                    ? 'translate-x-5'
+                    : ''}"
+                ></span>
               </button>
+            </div>
+
+            {#if $wotEnabled}
+              <div
+                class="flex items-center justify-between gap-3 pt-3 border-t"
+                style="border-color: var(--color-input-border);"
+              >
+                <p class="text-xs min-w-0" style="color: var(--color-text-secondary)">
+                  {#if $wotState === 'building'}
+                    Building…
+                  {:else if $wotState === 'ready'}
+                    Ready · {$wotSet.size.toLocaleString()} accounts in your network
+                  {:else}
+                    Not built yet — builds in the background after you sign in
+                  {/if}
+                </p>
+                <button
+                  type="button"
+                  class="px-3 py-1.5 bg-secondary hover:bg-accent-gray rounded-lg text-xs font-medium transition-colors whitespace-nowrap"
+                  style="color: var(--color-text-primary)"
+                  disabled={$wotState === 'building'}
+                  on:click={() => buildWot($ndk, $userPublickey, { force: true }).catch(() => {})}
+                >
+                  {$wotState === 'building' ? 'Building…' : 'Rebuild'}
+                </button>
+              </div>
+            {:else}
+              <p
+                class="text-xs pt-3 border-t"
+                style="border-color: var(--color-input-border); color: var(--color-text-secondary);"
+              >
+                Off — spammers are still hidden outside your direct follows
+              </p>
             {/if}
           </div>
         {/if}
