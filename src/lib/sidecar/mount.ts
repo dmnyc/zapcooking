@@ -31,7 +31,7 @@ import { timerSettings, loadTimerSettings, saveTimerSettings } from '$lib/timerS
 // then the core — the same order compose.html loads them in. The core is a
 // dynamic, client-only import: it reads window at its top level, and the
 // route never renders on the server.
-import { applyAvatar, buildSidecarDeps, composerPool } from './host';
+import { applyAvatar, buildSidecarDeps, composerPool, routeGifSearchThroughApp } from './host';
 import { isScrollbarStyling, scopeStylesheet } from './scopeCss';
 import { MONO_DRAFTS_LIST_KEY } from '$lib/monoComposerStore';
 import {
@@ -46,6 +46,7 @@ import {
   type ComposerDraft,
   type CoreHelpers,
   type DraftFields,
+  type DraftKind,
   type DraftMedia,
   type PollDraft
 } from '$lib/composerDrafts';
@@ -222,6 +223,8 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
     };
   }).SidecarCore;
   const composer = SidecarCore.installComposer(deps) as ComposerController;
+  // GIF search goes through the app's proxy and key, as the old picker's did.
+  const releaseGifRoute = routeGifSearchThroughApp();
 
   // ── skeleton ─────────────────────────────────────────────────
   const styleEl = document.createElement('style');
@@ -240,6 +243,25 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
     .mono-icon-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; color: var(--muted); }
     .mono-icon-btn:not(:disabled):hover, .mono-icon-btn.on { color: var(--orange); }
     .mono-seg { flex: 1 1 0; padding: 9px 6px; }
+    .gif-picker, .emoji-picker { scroll-margin-bottom: calc(96px + var(--mono-pad-b, 2rem)); }
+    /* The poll's "some clients cannot show polls" line: a footnote, not a
+       warning box. */
+    .poll-editor .kind-warn {
+      margin-top: 6px; padding: 0; background: none; border: 0;
+      color: var(--muted); opacity: 0.8; font-size: 11.5px;
+    }
+    /* No "Remove poll": a poll is its own tab and its own draft here, and
+       leaving the tab is how one stops writing it. */
+    .poll-editor .poll-remove { display: none; }
+    /* Checkboxes as Sidecar draws them: the platform's own box in the
+       accent. A wider input rule set appearance: none and padded them into
+       an empty field, so checked and unchecked looked the same. */
+    input[type="checkbox"] {
+      appearance: auto; -webkit-appearance: checkbox;
+      width: 17px; height: 17px; min-height: 0; padding: 0; margin: 0;
+      border: 0; background: none; box-shadow: none;
+      accent-color: var(--orange); cursor: pointer; flex-shrink: 0;
+    }
     .mono-seg.hidden { display: none; }
     /* An upload in progress stripes the Media button (Sidecar's
        .compose-add.is-uploading); each file holds its place in the strip
@@ -557,16 +579,26 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
   // content. Kept while the editor is emptied, so typing again continues the
   // same draft rather than starting another.
   let activeId: string | null = null;
+  // NOTES AND POLLS ARE SEPARATE DRAFTS. They share the editor, so it holds
+  // one tab's draft at a time: editorTab says whose, and the other tab's
+  // draft id waits in parked until its tab is opened again. Switching tabs
+  // saves the one being left and brings back the other's own draft (or a
+  // blank one); nothing written on one tab follows to the other.
+  type EditorTab = 'notes' | 'polls';
+  let editorTab: EditorTab = 'notes';
+  const parked: Record<EditorTab, string | null> = { notes: null, polls: null };
+  const kindOfTab = (tab: EditorTab): DraftKind => (tab === 'polls' ? 'poll' : 'note');
   const me = () => (deps.activePubkey() as string) || '';
   useDraftScope(me());
   const draftSync = composerDraftSync(SidecarCore as unknown as CoreHelpers, deps.NT);
 
   function noteFields(): DraftFields {
     return {
-      kind: pollDraft ? 'poll' : 'note',
+      kind: kindOfTab(editorTab),
       text: editorApi.getText(),
-      media: media.slice() as DraftMedia[],
-      poll: (pollDraft as PollDraft | null) || null
+      // A poll carries no attachments, and a note no poll.
+      media: editorTab === 'polls' ? [] : (media.slice() as DraftMedia[]),
+      poll: editorTab === 'polls' ? (pollDraft as PollDraft | null) || null : null
     };
   }
 
@@ -600,11 +632,7 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
     }
     if (currentTab === 'recipes') writeLocal(RECIPE_DRAFT_KEY, recipeHasContent() ? recipeForm : null);
     else if (currentTab === 'reads') writeLocal(ARTICLE_DRAFT_KEY, articleHasContent() ? articleForm : null);
-    else {
-      const r = writeDraft(loadDrafts(), loadBlanks(), activeId, noteFields(), Date.now());
-      activeId = r.id;
-      storeDrafts(r.all, r.blanks);
-    }
+    else saveEditor();
     // A green check, not the drafts folder: "saved" is a state, the folder
     // is the place drafts are kept.
     const check = ph(CheckIcon, 13);
@@ -612,6 +640,39 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
     savedEl.replaceChildren(check, document.createTextNode('Saved'));
     paintDraftsCount();
     if (page.querySelector('.compose-drafts-pane')) paintDraftsPane();
+  }
+
+  /** The editor's draft (a note or a poll) to the device. */
+  function saveEditor() {
+    const r = writeDraft(loadDrafts(), loadBlanks(), activeId, noteFields(), Date.now());
+    activeId = r.id;
+    storeDrafts(r.all, r.blanks);
+  }
+
+  /** Put a draft (or nothing) in the editor, as the one being written. */
+  function loadEditor(d: ComposerDraft | null, id: string | null = d ? d.id : null) {
+    closeAltEditor(false);
+    activeId = id;
+    editorApi.setText(d ? d.text : '');
+    media.length = 0;
+    if (d && d.kind === 'note') media.push(...(d.media as { url: string; isVideo?: boolean }[]));
+    pollDraft = d && d.poll ? JSON.parse(JSON.stringify(d.poll)) : null;
+    renderThumbs();
+    pollEditor.paint();
+    refreshPostState();
+  }
+
+  const latestOfKind = (kind: DraftKind) => listDrafts(loadDrafts()).find((d) => d.kind === kind) || null;
+
+  /** The editor over to a tab's own draft: the one it was on, else that
+   *  kind's most recent, else a blank one. */
+  function swapEditorTo(tab: EditorTab) {
+    if (tab === editorTab) return;
+    saveEditor();
+    parked[editorTab] = activeId;
+    editorTab = tab;
+    const id = parked[tab];
+    loadEditor(id ? loadDrafts()[id] || null : latestOfKind(kindOfTab(tab)), id || undefined);
   }
 
   function draftSaveSoon() {
@@ -646,26 +707,24 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
   /** Put a saved note or poll in the editor, as the draft being written. */
   function openDraft(d: ComposerDraft) {
     saveNow(); // the one on screen stays saved, as its own draft
-    activeId = d.id;
-    editorApi.setText(d.text);
-    media.length = 0;
-    media.push(...(d.media as { url: string; isVideo?: boolean }[]));
-    pollDraft = d.poll ? JSON.parse(JSON.stringify(d.poll)) : null;
-    renderThumbs();
-    setPane(d.kind === 'poll' ? 'polls' : 'notes');
-    if (d.kind === 'poll') pollEditor.paint();
-    refreshPostState();
+    const tab: EditorTab = d.kind === 'poll' ? 'polls' : 'notes';
+    if (tab !== editorTab) {
+      saveEditor();
+      parked[editorTab] = activeId;
+      editorTab = tab;
+    }
+    loadEditor(d);
+    setPane(tab);
   }
 
-  /** A fresh note: the one on screen is kept as a draft. */
+  /** A fresh note, or a fresh poll on Polls: the one on screen is kept. */
   function startNewDraft() {
     saveNow();
-    activeId = null;
-    editorApi.setText('');
-    media.length = 0;
-    pollDraft = null;
-    renderThumbs();
-    setPane('notes');
+    const tab: EditorTab = currentTab === 'polls' ? 'polls' : 'notes';
+    swapEditorTo(tab);
+    saveEditor();
+    loadEditor(null);
+    setPane(tab);
     savedEl.replaceChildren();
   }
 
@@ -711,7 +770,7 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
     const newBtn = document.createElement('button');
     newBtn.type = 'button';
     newBtn.className = 'tool-btn mono-icon-btn';
-    newBtn.append(ph(PlusIcon, 16), document.createTextNode('New note'));
+    newBtn.append(ph(PlusIcon, 16), document.createTextNode(currentTab === 'polls' ? 'New poll' : 'New note'));
     newBtn.addEventListener('click', () => {
       startNewDraft();
       closeDraftsPane();
@@ -800,13 +859,11 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
         () => {
           const r = removeDraft(loadDrafts(), loadBlanks(), d.id);
           storeDrafts(r.all, r.blanks);
+          if (parked.notes === d.id) parked.notes = null;
+          if (parked.polls === d.id) parked.polls = null;
           if (activeId === d.id) {
-            activeId = null;
-            editorApi.setText('');
-            media.length = 0;
-            pollDraft = null;
-            renderThumbs();
-            refreshPostState();
+            loadEditor(null);
+            if (currentTab === 'polls') setPane('polls'); // a fresh poll, raised
           }
           paintDraftsCount();
           paintDraftsPane();
@@ -870,11 +927,14 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
     if (recipe) Object.assign(recipeForm, recipe);
     const article = readLocal<typeof articleForm>(ARTICLE_DRAFT_KEY);
     if (article) Object.assign(articleForm, article);
-    const latest = listDrafts(loadDrafts())[0];
+    // The tab it opens on gets its own most recent draft: Post opens the
+    // latest note, never a poll left on Polls.
+    editorTab = currentTab === 'polls' ? 'polls' : 'notes';
+    const latest = latestOfKind(kindOfTab(editorTab));
+    activeId = latest ? latest.id : null;
     if (latest) {
-      activeId = latest.id;
       editorApi.setText(latest.text);
-      media.push(...(latest.media as { url: string; isVideo?: boolean }[]));
+      if (latest.kind === 'note') media.push(...(latest.media as { url: string; isVideo?: boolean }[]));
       pollDraft = latest.poll ? JSON.parse(JSON.stringify(latest.poll)) : null;
     }
     renderThumbs();
@@ -1442,15 +1502,28 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
     if (relayPopover.hidden) renderRelayPopover();
     else relayPopover.hidden = true;
   };
+  // An opened picker is brought into view above the pinned Post button
+  // (its scroll-margin clears the footer); on a tall editor it opened out
+  // of sight below it.
+  const revealPicker = (wrap: HTMLElement) =>
+    requestAnimationFrame(() => {
+      if (!wrap.classList.contains('hidden')) wrap.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    });
   const segs = {
     camera: segment(ImageIcon, 'Add a picture or video', () => fileInput.click()),
     gif: segment(GifIcon, 'GIF search', () => {
-      actionsEl.appendChild(gifPicker.wrap);
+      // Below the button row, full width, as Sidecar seats it (inside the
+      // row it was only as wide as its contents).
+      if (gifPicker.wrap.previousElementSibling !== actionsEl) actionsEl.after(gifPicker.wrap);
       gifPicker.addBtn.click();
+      revealPicker(gifPicker.wrap);
     }),
     emoji: segment(SmileyIcon, 'Emoji', () => {
-      actionsEl.appendChild(emojiPicker.wrap);
+      // Below the button row, full width, as Sidecar seats it (inside the
+      // row it was only as wide as its contents).
+      if (emojiPicker.wrap.previousElementSibling !== actionsEl) actionsEl.after(emojiPicker.wrap);
       emojiPicker.addBtn.click();
+      revealPicker(emojiPicker.wrap);
     }),
     pow: segment(HammerIcon, 'Proof of work lands next', () => {}, true),
     relays: segment(GlobeIcon, 'Where this posts', toggleRelays),
@@ -1848,18 +1921,9 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
     opts.onTabChange?.(tab);
   }
 
-  /** A poll with nothing in its options: raised, never written. */
-  const pollIsBlank = (p: unknown) => !((p as PollDraft | null)?.options || []).some((o) => o && o.trim());
-
   function paintPane(tab: MonoTab, keepPreview: boolean) {
-    // Leaving for Notes with an untouched poll drops it: otherwise it rode
-    // along unseen, and the note kept saving (and listing) as a poll. A poll
-    // with options filled in stays, and is there on coming back to Polls.
-    if (tab === 'notes' && pollDraft && pollIsBlank(pollDraft)) {
-      pollDraft = null;
-      pollEditor.paint(); // hides it, and gives the Media button back
-      draftSaveSoon();
-    }
+    // Notes and Polls each bring back their own draft.
+    if (tab === 'notes' || tab === 'polls') swapEditorTo(tab);
     currentTab = tab;
     sheetEl.dataset.mode = SHEET_MODE[tab];
     sheetEl.dataset.tab = tab; // the mono layer's own per-tab rules
@@ -1971,7 +2035,7 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
   restoreSavedDraft();
   // The draft on screen is a poll (options filled in): it opens where it
   // was being written, not on Notes with its poll out of sight.
-  setPane(currentTab === 'notes' && pollDraft && !pollIsBlank(pollDraft) ? 'polls' : currentTab);
+  setPane(currentTab);
   // Catch-up: a draft changed since its last push (the tab was killed, the
   // phone backgrounded it) goes up now, and the relays' drafts come in.
   if (me()) void syncDrafts();
@@ -1987,6 +2051,7 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
       if (me()) void draftSync.sync({ pull: false });
       if (countdownRaf !== null) cancelAnimationFrame(countdownRaf);
       unsubTimer();
+      releaseGifRoute();
       window.removeEventListener('resize', readDialogPad);
       mountedIcons.splice(0).forEach((c) => c.$destroy());
       root.remove();

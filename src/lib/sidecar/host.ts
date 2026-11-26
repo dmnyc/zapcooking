@@ -138,7 +138,74 @@ export function composerPool(live: boolean) {
       const first = [...events][0];
       return first ? [first] : [];
     },
-    querySync: () => []
+    querySync: (relays: string[], filter: Record<string, unknown>) => querySync(relays, filter)
+  };
+}
+
+/** Every event the relays have for a filter, as plain events. Through the
+ *  app's NDK (its relays; `relays` names extras worth asking, such as
+ *  purplepag.es for profiles). */
+async function querySync(relays: string[], filter: Record<string, unknown>): Promise<SignedEvent[]> {
+  const $ndk = get(ndk);
+  const extra = relays.length ? NDKRelaySet.fromRelayUrls(relays, $ndk) : undefined;
+  const events = await $ndk.fetchEvents(filter as never, { closeOnEose: true }, extra);
+  return [...events].map((e) => e.rawEvent() as SignedEvent);
+}
+
+/** Profiles the core looked up itself (the preview's mentions): kept here,
+ *  read back through cachedCoreProfile like the app's own caches. */
+const coreProfiles = new Map<string, CoreProfile>();
+
+/**
+ * GIF search through the app's own proxy, the one the old composer's picker
+ * uses (`/api/gif-search`, `/api/gif-suggest`, see gifProxy.server.ts):
+ * the app's key stays on the server and the proxy rate-limits per caller.
+ * The core calls gifs.nostr.build directly, with Sidecar's extension key,
+ * which a web page cannot do (no CORS) and should not (wrong key). It
+ * reaches the network through window.fetch, so while a composer is open
+ * its GIF requests are rerouted here and sent with no key; the proxy
+ * passes the upstream body and status through, so the core reads them
+ * unchanged. Counted, so nested mounts install it once.
+ */
+const CORE_GIF_API = 'https://gifs.nostr.build/api/v1/';
+const GIF_PROXY: Record<string, string> = { search: '/api/gif-search', suggest: '/api/gif-suggest' };
+let gifRouteUsers = 0;
+let fetchBeforeGifRoute: typeof fetch | null = null;
+let routedFetch: typeof fetch | null = null;
+
+export function routeGifSearchThroughApp(): () => void {
+  if (gifRouteUsers++ === 0) {
+    const original = window.fetch;
+    fetchBeforeGifRoute = original;
+    routedFetch = function (input: RequestInfo | URL, init?: RequestInit) {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url.startsWith(CORE_GIF_API)) {
+        const rest = url.slice(CORE_GIF_API.length);
+        const q = rest.indexOf('?');
+        const path = GIF_PROXY[q < 0 ? rest : rest.slice(0, q)];
+        if (path) {
+          return original.call(window, path + (q < 0 ? '' : rest.slice(q)), {
+            headers: { Accept: 'application/json' },
+            credentials: 'same-origin',
+            signal: init?.signal
+          });
+        }
+      }
+      return original.call(window, input, init);
+    } as typeof fetch;
+    window.fetch = routedFetch;
+  }
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    if (--gifRouteUsers === 0 && fetchBeforeGifRoute) {
+      // Only if nothing wrapped fetch after us: unwinding past someone
+      // else's wrapper would remove theirs.
+      if (window.fetch === routedFetch) window.fetch = fetchBeforeGifRoute;
+      fetchBeforeGifRoute = null;
+      routedFetch = null;
+    }
   };
 }
 
@@ -146,6 +213,8 @@ export function composerPool(live: boolean) {
 type CoreProfile = { pubkey?: string; name: string; picture?: string };
 
 function cachedCoreProfile(pubkey: string): CoreProfile | null {
+  const looked = coreProfiles.get(pubkey);
+  if (looked) return looked;
   const followed = getProfileCache().get(pubkey);
   if (followed?.name) return { pubkey, name: followed.name, picture: followed.picture };
   const searched = getCachedProfile(pubkey);
@@ -214,7 +283,14 @@ export function buildSidecarDeps(live: boolean): SidecarDeps {
       console.log('[composer devlog]', level, msg, data ?? ''),
     applyAvatar,
     cachedProfile: (pubkey: string) => cachedCoreProfile(pubkey),
-    cacheProfile: () => {},
+    // The preview's mention lookup writes what it found here, and reads it
+    // back through cachedProfile to put the name on the pill.
+    cacheProfile: (pubkey: string, content: Record<string, unknown>) => {
+      const name = String(content?.display_name || content?.displayName || content?.name || '').trim();
+      if (!name) return;
+      const picture = typeof content?.picture === 'string' ? content.picture : undefined;
+      coreProfiles.set(pubkey, { pubkey, name, picture });
+    },
     fetchPreviewProfile: (pubkey: string) => fetchCoreProfile(pubkey),
     // null, not [], until the follows are loaded: the core reads an empty
     // list as "loaded, follows nobody" and never asks again.
@@ -231,7 +307,7 @@ export function buildSidecarDeps(live: boolean): SidecarDeps {
       const events = (await result) as unknown[];
       return events[0] ?? null;
     },
-    poolQuerySync: () => [],
+    poolQuerySync: (relays: string[], filter: Record<string, unknown>) => querySync(relays, filter),
     relayUrls: (writableOnly?: boolean) => {
       void writableOnly;
       return getCurrentRelays();

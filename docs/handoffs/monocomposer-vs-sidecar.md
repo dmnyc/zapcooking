@@ -65,7 +65,7 @@ Article, so each of these is a regression until it closes.
 |---|---|---|---|
 | Options, multiple choice, runs-for, relay tags | ✅ | ✅ | the core's poll editor |
 | Poll or media, not both | ✅ | ✅ | |
-| Leaving Poll with options filled | asks for a second tap | ➖ | kept silently; dropped when blank |
+| Notes and Polls keep separate drafts | ❌ one draft, the poll attached to it | ✅ | each tab brings back its own; written up for Sidecar in editor-matrix |
 | Options in Preview / review | ❌ | ❌ | a gap in both |
 
 ## Posting
