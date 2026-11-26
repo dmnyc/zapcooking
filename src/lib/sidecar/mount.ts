@@ -50,6 +50,9 @@ import {
   type PollDraft
 } from '$lib/composerDrafts';
 import { composerDraftSync } from '$lib/composerDraftsIO';
+import { showToast } from '$lib/toast';
+import { CLIENT_TAG_IDENTIFIER } from '$lib/consts';
+import { ZAP_COOKING_HANDLER_ADDRESS } from '$lib/nip89';
 import type { ComponentType, SvelteComponent } from 'svelte';
 import PencilSimpleIcon from 'phosphor-svelte/lib/PencilSimple';
 import ChartBarHorizontalIcon from 'phosphor-svelte/lib/ChartBarHorizontal';
@@ -68,6 +71,8 @@ import CloudArrowUpIcon from 'phosphor-svelte/lib/CloudArrowUp';
 import DeviceMobileIcon from 'phosphor-svelte/lib/DeviceMobile';
 import ArrowsClockwiseIcon from 'phosphor-svelte/lib/ArrowsClockwise';
 import TrashIcon from 'phosphor-svelte/lib/Trash';
+import ArrowLeftIcon from 'phosphor-svelte/lib/ArrowLeft';
+import ArrowRightIcon from 'phosphor-svelte/lib/ArrowRight';
 import XCircleIcon from 'phosphor-svelte/lib/XCircle';
 import CheckIcon from 'phosphor-svelte/lib/Check';
 import XIcon from 'phosphor-svelte/lib/X';
@@ -93,7 +98,7 @@ export type MonoTab = (typeof MONO_TABS)[number]['id'];
 // composer wears the same single-color set as the rest of the app. Kept for
 // destroy().
 const mountedIcons: SvelteComponent[] = [];
-function ph(Icon: ComponentType, size = 18, weight?: 'regular' | 'fill'): HTMLElement {
+function ph(Icon: ComponentType, size = 18, weight?: 'regular' | 'fill' | 'bold'): HTMLElement {
   const span = document.createElement('span');
   span.className = 'mono-ico';
   mountedIcons.push(new Icon({ target: span, props: weight ? { size, weight } : { size } }));
@@ -127,6 +132,10 @@ interface ComposerController {
   serializeEditor(el: HTMLElement): string;
   uploadMedia(file: File, pubkey: string): Promise<string>;
   checkPastedQuote(q: unknown, revert: () => void): void;
+  buildQuoteBlock(
+    ref: string,
+    ctl: { canUp?: boolean; canDown?: boolean; onUp?: () => void; onDown?: () => void; onRemove?: () => void }
+  ): HTMLElement;
   showPostCountdown(o: Record<string, unknown>): { stop(): void };
   renderNotePreview(el: HTMLElement, content: string): void;
   buildPollEditor(o: Record<string, unknown>): { wrap: HTMLElement; addBtn: HTMLButtonElement; paint(): void };
@@ -173,6 +182,9 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
       installComposer: (d: Record<string, unknown>) => ComposerController & Record<string, unknown>;
       removeUrlFromEditor: (el: HTMLElement, url: string) => void;
       quoteEntriesFromPaste: (plain: string, media: unknown[]) => unknown[];
+      linkBareRefs(text: string, NT: unknown): string;
+      proseWithQuotes(prose: string, media: unknown[]): string;
+      noteBodyTags(prose: string, NT: unknown, threadTags: unknown[]): { p: string[][]; q: string[][]; t: string[][] };
       composeNoteContent: (text: string, media: unknown[]) => string;
       // On the core itself, not the installed controller: it takes its pool
       // as an argument rather than reading deps.
@@ -184,6 +196,29 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
       pollDraftIsPostable(p: unknown): boolean;
       buildPollTags(p: unknown, nowSecs: number, relays: string[]): unknown[];
       POLL_KIND: number;
+      // The strip and its ALT editor, the same builders Sidecar's own
+      // composer seats under its thumbnails.
+      buildAltEditorRow(o: {
+        url?: string; isVideo?: boolean; alt?: string; count?: number;
+        onChange?: (v: string) => void; onSave?: (v: string) => void;
+      }): HTMLElement & { flushPending?: () => void };
+      imetaTagsForMedia(media: unknown[]): string[][];
+      capAltText(s: string): string;
+      normalizeAltBreaks(s: string): string;
+      movePicture(media: unknown[], from: number, to: number): DraftMedia[];
+      moveQuoteEntry(media: unknown[], index: number, dir: number): DraftMedia[];
+      buildAttachmentsLabel(
+        count: number,
+        ctl: { urls: string[]; canUp?: boolean; canDown?: boolean; onUp?: () => void; onDown?: () => void }
+      ): { label: HTMLElement; list: HTMLElement };
+      canMovePicture(media: unknown[], i: number, dir: number): boolean;
+      pictureCount(media: unknown[]): number;
+      replaceMedia(media: unknown[], next: unknown[]): void;
+      addMedia(media: unknown[], entry: unknown): void;
+      videoThumbCover(url: string): HTMLElement;
+      primeVideoThumb(el: HTMLVideoElement, cell: HTMLElement): void;
+      readVideoMeta(file: File): Promise<{ mime?: string; dim?: string }>;
+      uploadErrorParts(e: unknown): (Node | string)[];
     };
   }).SidecarCore;
   const composer = SidecarCore.installComposer(deps) as ComposerController;
@@ -206,11 +241,81 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
     .mono-icon-btn:not(:disabled):hover, .mono-icon-btn.on { color: var(--orange); }
     .mono-seg { flex: 1 1 0; padding: 9px 6px; }
     .mono-seg.hidden { display: none; }
+    /* An upload in progress stripes the Media button (Sidecar's
+       .compose-add.is-uploading); each file holds its place in the strip
+       as its own picture, grayed, with the word over it. */
+    .mono-seg.is-uploading, .mono-thumb-uploading { position: relative; overflow: hidden; cursor: progress; }
+    .mono-seg.is-uploading:disabled { opacity: 1; }
+    .mono-seg.is-uploading::after {
+      content: ''; position: absolute; inset: 0; pointer-events: none;
+      background: repeating-linear-gradient(-45deg, rgba(var(--accent-rgb), 0.24) 0 8px, transparent 8px 16px);
+      background-size: 22.63px 22.63px;
+      animation: upload-stripes 0.9s linear infinite;
+    }
+    .mono-thumb-uploading { background: var(--bg-2, #191a1c); }
+    .mono-thumb-uploading img { opacity: 0.4; filter: grayscale(1); }
+    .mono-thumb-uploading-label {
+      position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+      font-size: 11px; font-weight: 600; color: var(--text); text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+    }
+    .compose-thumb-alt { gap: 3px; }
+    .compose-sheet.mono-previewing [data-mono="thumbs"] { display: none; }
+    /* A note's Post button stays in reach however long the note grows: the
+       footer sticks to the bottom of the dialog, which is what scrolls. It
+       hangs down over the dialog's bottom padding (--mono-pad-b) and fills
+       it, so text scrolling under it never shows below the button. */
+    /* And on a phone, where the dialog is the whole screen, the note takes
+       the height there is: the chain from the dialog down to the editor
+       stretches, the editor grows into the spare room, and the footer
+       lands on the bottom edge instead of floating mid-screen. Phones
+       only (Modal's full-screen breakpoint): wider, the dialog sizes to
+       its content and Sidecar's editor height stands. */
+    @media (max-width: 767.98px) {
+      :scope.mono-in-modal:has(.compose-sheet[data-tab="notes"]) { flex: 1 1 auto; display: flex; flex-direction: column; }
+      :scope.mono-in-modal:has(.compose-sheet[data-tab="notes"]) :is(.compose-page, .compose-body) {
+        flex: 1 1 auto; display: flex; flex-direction: column;
+      }
+      :scope.mono-in-modal .compose-sheet[data-tab="notes"] { flex: 1 1 auto; }
+      :scope.mono-in-modal .compose-sheet[data-tab="notes"] [data-mono="slot"]:has(> .compose-editor-wrap) {
+        flex: 1 1 0; min-height: 0; display: flex; flex-direction: column;
+      }
+      /* Grown from zero, not from the text: a long note scrolls inside the
+         editor rather than stretching the dialog past the screen. */
+      :scope.mono-in-modal .compose-sheet[data-tab="notes"] .compose-editor-wrap { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
+      :scope.mono-in-modal .compose-sheet[data-tab="notes"] .compose-editor { flex: 1 1 0; min-height: 160px; max-height: none; }
+    }
+    :scope.mono-in-modal .compose-sheet[data-tab="notes"] .mono-foot {
+      position: sticky; bottom: calc(-1 * var(--mono-pad-b, 2rem)); z-index: 5;
+      margin-bottom: calc(-1 * var(--mono-pad-b, 2rem));
+      padding: 12px 0 var(--mono-pad-b, 2rem);
+      background: var(--color-bg-secondary, #1f2937);
+    }
+    .compose-editor.is-empty::before,
+    input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 1; }
+    .compose-thumb-alt.is-open { outline: 2px solid var(--lav); outline-offset: 1px; }
+    @media (prefers-reduced-motion: reduce) {
+      .mono-seg.is-uploading::after { animation: none; }
+    }
     /* Button tabs: the kind row is Sidecar's segmented switch at full
        width, the Write / Preview row the same switch, compact. */
     .compose-modes.mono-kinds { display: flex; align-self: stretch; }
     .mono-kinds .compose-mode { flex: 1 1 0; justify-content: center; }
     .compose-mode .mono-ico { color: inherit; }
+    /* Which kind is being written, at a glance, in one color: the others
+       recede (the page's ink at 55%, since this app's muted ink is
+       near-white in the dark themes), and the chosen one is full-strength
+       ink on a raised neutral fill. */
+    .mono-kinds .compose-mode { color: color-mix(in srgb, var(--text) 55%, transparent); transition: color 0.15s, background-color 0.15s; }
+    .mono-kinds .compose-mode:hover:not(.active) { color: var(--text); background: rgba(255, 255, 255, 0.04); }
+    .mono-subrow .compose-tab:not(.active) { color: color-mix(in srgb, var(--text) 55%, transparent); }
+    .mono-subrow .compose-tab:not(.active):hover { color: var(--text); }
+    /* Sidecar's own active tab (a raised fill sitting on a 1px ledge), in
+       the page's ink rather than the accent. */
+    .mono-kinds .compose-mode.active {
+      color: var(--text);
+      background: color-mix(in srgb, var(--text) 12%, transparent);
+      box-shadow: 0 1px 0 var(--border-strong);
+    }
     /* Write / Preview: underline tabs, Sidecar's own .compose-tabs. */
     .mono-subrow { display: flex; align-items: flex-end; gap: 10px; border-bottom: 1px solid var(--border); }
     .mono-subrow .compose-tabs { border-bottom: none; margin: 0 0 -1px; }
@@ -226,8 +331,6 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
        while the send countdown runs, the bar fills left to right and a
        red Cancel pill sits beside it. */
     .mono-foot { display: flex; flex-direction: column; gap: 8px; }
-    .mono-foot-meta { display: flex; align-items: center; gap: 10px; }
-    .mono-foot-meta:has(.compose-status:empty) { display: none; }
     .mono-action-row { display: flex; align-items: center; gap: 8px; }
     .mono-cancel { flex-shrink: 0; padding: 10px 18px; border-radius: 9999px; border: none;
       font: inherit; font-size: 14px; font-weight: 500; background: #ef4444; color: #fff; cursor: pointer; }
@@ -379,9 +482,6 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
         <div class="mono-need" data-mono="need" hidden></div>
 
         <footer class="mono-foot">
-          <div class="mono-foot-meta">
-            <span class="compose-status" data-mono="status"></span>
-          </div>
           <div class="mono-action-row">
             <button type="button" class="mono-cancel" data-mono="cancel" hidden>Cancel</button>
             <button type="button" class="mono-post" data-mono="post" disabled>
@@ -397,7 +497,6 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
     page.querySelector(`[data-mono="${name}"]`) as T;
   const slotEl = el('slot');
   const errEl = el<HTMLParagraphElement>('err');
-  const statusEl = el('status');
   const postBtn = el<HTMLButtonElement>('post');
   const savedEl = page.querySelector('.compose-saved') as HTMLElement;
   const cancelBtn = el<HTMLButtonElement>('cancel');
@@ -431,7 +530,11 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
   let pollDraft: unknown = null;
   let showPreview = false;
   let draftTimer: ReturnType<typeof setTimeout> | null = null;
-  const media: { url: string; isVideo?: boolean }[] = [];
+  // The attachments, in the order they are appended to the note. Shared with
+  // the drafts and the strip; the core's movers return copies, so it is
+  // rewritten in place (replaceMedia).
+  const media: DraftMedia[] = [];
+  let uploadsInFlight = 0; // files on their way up; Post waits for them
   const recipeForm: {
     name: string; cover: string; summary: string; prep: string; cook: string; servings: string;
     ingredients: string[]; directions: string[]; notes: string; categories: string[]; source: string;
@@ -779,31 +882,276 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
   }
 
   // ── media strip ──────────────────────────────────────────────
-  function renderThumbs() {
-    thumbsEl.innerHTML = '';
-    media.forEach((m) => {
-      const img = document.createElement('img');
-      img.src = m.url;
-      img.style.cssText = 'width:64px;height:64px;object-fit:cover;border-radius:8px';
-      thumbsEl.appendChild(img);
+  // Sidecar's strip (compose.js renderThumbs), on this app's icons: each
+  // thumb wears the ALT chip (top left), the remove disc (top right) and,
+  // with more than one picture, steppers and drag to reorder. The order on
+  // the strip is the order the URLs are appended to the note.
+  let altRow: (HTMLElement & { flushPending?: () => void }) | null = null;
+  let altIndex = -1; // the slot the open row edits, so its own chip shuts it
+
+  function closeAltEditor(flush = true) {
+    if (altRow) {
+      // The tail of the description rides along, unless the slot is gone
+      // or moved: flushing into a spliced array would write one image's
+      // words onto another.
+      if (flush && altRow.flushPending) altRow.flushPending();
+      altRow.remove();
+      altRow = null;
+    }
+    altIndex = -1;
+  }
+
+  function openAltEditor(i: number) {
+    const m = media[i];
+    if (!m || !m.url) return;
+    if (altRow && altIndex === i) {
+      closeAltEditor();
+      return;
+    }
+    closeAltEditor();
+    altIndex = i;
+    const saveAltInto = (slot: number, value: string) => {
+      const cur = media[slot];
+      if (!cur) return;
+      // Normalized here and again at publish (imetaTagsForMedia), since a
+      // draft can publish without this row ever being opened.
+      const cleaned = SidecarCore.capAltText(SidecarCore.normalizeAltBreaks(value));
+      if (cleaned) cur.alt = cleaned;
+      else delete cur.alt;
+      draftSaveSoon();
+      renderThumbs();
+    };
+    altRow = SidecarCore.buildAltEditorRow({
+      url: m.url,
+      isVideo: !!m.isVideo,
+      alt: m.alt,
+      count: 1, // the row edits one picture: "Save description"
+      onChange: (value) => saveAltInto(i, value),
+      onSave: (value) => {
+        closeAltEditor();
+        saveAltInto(i, value);
+      }
     });
+    thumbsEl.after(altRow);
+    (altRow.querySelector('textarea') as HTMLTextAreaElement | null)?.focus();
+  }
+
+  /** The strip's own little buttons, on phosphor glyphs. */
+  function thumbButton(cls: string, title: string, Icon: ComponentType, onclick: () => void) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = cls;
+    b.title = title;
+    b.setAttribute('aria-label', title);
+    b.append(ph(Icon, 13));
+    b.addEventListener('click', onclick);
+    return b;
+  }
+
+  function reorder(next: DraftMedia[]) {
+    closeAltEditor(); // flush first: the row's slot is about to change places
+    SidecarCore.replaceMedia(media, next);
+    draftSaveSoon();
+    renderThumbs();
+  }
+
+  function renderThumbs() {
+    // A slot the open row was editing may be gone (a draft swapped in, a
+    // post sent): close it without writing anywhere.
+    if (altIndex >= 0 && !media[altIndex]?.url) closeAltEditor(false);
+    thumbsEl.innerHTML = '';
+    const pics = SidecarCore.pictureCount(media);
+    let dragFrom = -1;
+    // A PASTED QUOTE IS A BLOCK IN THE STRIP, shown as the note it quotes,
+    // in the strip's order: it posts where it sits, above or below the
+    // pictures. Beside one, the pictures are a block too, with a label and
+    // an arrow of their own (Sidecar's strip, from the same builders).
+    const qi = media.findIndex((m) => m && m.quote);
+    const firstPicture = media.findIndex((m) => m && !m.quote);
+    const lastPicture = media.findLastIndex((m) => m && !m.quote);
+    const moveQuote = (at: number, dir: number) => {
+      closeAltEditor(); // flush first: the row's slot is about to change places
+      reorder(SidecarCore.moveQuoteEntry(media, at, dir));
+    };
+    const picturesGroup =
+      qi >= 0 && pics > 0
+        ? SidecarCore.buildAttachmentsLabel(pics, {
+            urls: media.map((x) => x && x.url).filter((u): u is string => !!u),
+            canUp: qi === 0,
+            canDown: qi > 0,
+            onUp: () => moveQuote(qi, 1),
+            onDown: () => moveQuote(qi, -1)
+          })
+        : null;
+    media.forEach((m, i) => {
+      const ref = m && m.quote;
+      if (ref) {
+        thumbsEl.append(
+          composer.buildQuoteBlock(ref, {
+            canUp: i > 0,
+            canDown: i < media.length - 1,
+            onUp: () => moveQuote(i, -1),
+            onDown: () => moveQuote(i, 1),
+            onRemove: () => {
+              media.splice(i, 1);
+              closeAltEditor(false);
+              draftSaveSoon();
+              renderThumbs();
+              refreshPostState();
+              paintCount();
+            }
+          })
+        );
+        return;
+      }
+      if (!m || !m.url) return;
+      if (picturesGroup && i === firstPicture) thumbsEl.append(picturesGroup.label);
+      const cell = document.createElement('div');
+      cell.className = 'compose-thumb';
+      const shown = document.createElement(m.isVideo ? 'video' : 'img') as HTMLImageElement | HTMLVideoElement;
+      if (m.isVideo) {
+        (shown as HTMLVideoElement).preload = 'metadata';
+        (shown as HTMLVideoElement).muted = true;
+      } else {
+        // Media hosts that check the referrer answer some origins with 403.
+        (shown as HTMLImageElement).referrerPolicy = 'no-referrer';
+        (shown as HTMLImageElement).alt = m.alt || '';
+      }
+      shown.src = m.url;
+      shown.draggable = false;
+      shown.addEventListener('error', () => cell.classList.add('is-broken'));
+      cell.append(shown);
+      if (m.isVideo) {
+        cell.append(SidecarCore.videoThumbCover(m.url));
+        SidecarCore.primeVideoThumb(shown as HTMLVideoElement, cell);
+      }
+
+      cell.draggable = pics > 1;
+      cell.addEventListener('dragstart', (e) => {
+        dragFrom = i;
+        cell.classList.add('dragging');
+        if (e.dataTransfer) {
+          e.dataTransfer.effectAllowed = 'move';
+          try { e.dataTransfer.setData('text/plain', String(i)); } catch { /* some browsers refuse */ }
+        }
+      });
+      cell.addEventListener('dragover', (e) => {
+        if (dragFrom === -1 || dragFrom === i) return;
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+        cell.classList.add('drop-target');
+      });
+      cell.addEventListener('dragleave', () => cell.classList.remove('drop-target'));
+      cell.addEventListener('drop', (e) => {
+        e.preventDefault();
+        cell.classList.remove('drop-target');
+        if (dragFrom === -1 || dragFrom === i) return;
+        const from = dragFrom;
+        dragFrom = -1;
+        reorder(SidecarCore.movePicture(media, from, i));
+      });
+      cell.addEventListener('dragend', () => {
+        dragFrom = -1;
+        cell.classList.remove('dragging');
+        thumbsEl.querySelectorAll('.drop-target').forEach((t) => t.classList.remove('drop-target'));
+      });
+
+      // + ALT until described, a check and ALT once it is: the badge both
+      // apps use, on this app's glyphs.
+      const alt = document.createElement('button');
+      alt.type = 'button';
+      alt.className = 'compose-thumb-alt' + (m.alt ? ' has-alt' : '') + (altIndex === i ? ' is-open' : '');
+      alt.title = m.alt
+        ? m.isVideo ? 'Edit the video description' : 'Edit the image description'
+        : 'Add a description';
+      alt.append(ph(m.alt ? CheckIcon : PlusIcon, 10, 'bold'), document.createTextNode('ALT'));
+      alt.addEventListener('click', () => openAltEditor(i));
+      cell.append(alt);
+
+      // Drag never fires on touch, and a keyboard has none: the steppers
+      // are the reorder both can reach. The ends hide theirs.
+      if (pics > 1) {
+        if (SidecarCore.canMovePicture(media, i, -1))
+          cell.append(thumbButton('compose-thumb-move left', 'Move earlier', ArrowLeftIcon, () =>
+            reorder(SidecarCore.movePicture(media, i, i - 1))));
+        if (SidecarCore.canMovePicture(media, i, 1))
+          cell.append(thumbButton('compose-thumb-move right', 'Move later', ArrowRightIcon, () =>
+            reorder(SidecarCore.movePicture(media, i, i + 1))));
+      }
+      cell.append(thumbButton('compose-thumb-x', 'Remove', TrashIcon, () => {
+        media.splice(i, 1);
+        closeAltEditor(false); // the row edits a slot that no longer exists
+        draftSaveSoon();
+        renderThumbs();
+        refreshPostState();
+        paintCount();
+      }));
+      thumbsEl.appendChild(cell);
+      if (picturesGroup && i === lastPicture) thumbsEl.append(picturesGroup.list);
+    });
+    // The open row follows the strip it belongs to, but is only moved when it
+    // is out of place: moving a node blurs it, and the autosave repaints the
+    // strip mid-sentence.
+    if (altRow && thumbsEl.nextElementSibling !== altRow) thumbsEl.after(altRow);
+  }
+
+  // The strip's placeholders while files go up: one striped cell per file,
+  // so the space the picture will take is held from the first moment.
+  function uploadingCell(file: File) {
+    const cell = document.createElement('div');
+    cell.className = 'compose-thumb mono-thumb-uploading';
+    cell.setAttribute('aria-label', `Uploading ${file.name || 'a file'}`);
+    if (file.type.startsWith('image/')) {
+      const im = document.createElement('img');
+      const objectUrl = URL.createObjectURL(file);
+      im.src = objectUrl;
+      im.alt = '';
+      im.addEventListener('load', () => URL.revokeObjectURL(objectUrl), { once: true });
+      im.addEventListener('error', () => URL.revokeObjectURL(objectUrl), { once: true });
+      cell.append(im);
+    }
+    const label = document.createElement('span');
+    label.className = 'mono-thumb-uploading-label';
+    label.textContent = 'Uploading…';
+    cell.append(label);
+    return cell;
   }
 
   async function uploadFiles(files: File[]) {
     const pubkey = deps.activePubkey() as string;
-    statusEl.textContent = 'Uploading…';
+    errEl.textContent = '';
+    uploadsInFlight++;
+    // The whole Media button sweeps, as in Sidecar: stripes in the accent
+    // running across it, so it reads busy rather than unavailable.
+    segs.camera.classList.add('is-uploading');
+    segs.camera.disabled = true;
+    const pending = files.map(uploadingCell);
+    thumbsEl.append(...pending);
+    refreshPostState();
     try {
-      for (const file of files) {
-        const url = await composer.uploadMedia(file, pubkey);
-        media.push({ url, isVideo: file.type.startsWith('video/') });
+      for (const [n, file] of files.entries()) {
+        // The file is read for its type and size while it goes up.
+        const [url, meta] = await Promise.all([
+          composer.uploadMedia(file, pubkey),
+          SidecarCore.readVideoMeta(file)
+        ]);
+        pending[n].remove();
+        SidecarCore.addMedia(media, { url, isVideo: file.type.startsWith('video/'), ...meta });
         renderThumbs();
+        thumbsEl.append(...pending.slice(n + 1));
       }
-      errEl.textContent = '';
       draftSaveSoon();
     } catch (e) {
-      errEl.textContent = String((e as Error).message || e);
+      errEl.replaceChildren(...SidecarCore.uploadErrorParts(e));
     } finally {
-      statusEl.textContent = '';
+      pending.forEach((c) => c.remove());
+      uploadsInFlight--;
+      if (!uploadsInFlight) {
+        segs.camera.classList.remove('is-uploading');
+        segs.camera.disabled = false;
+      }
+      refreshPostState();
+      paintCount();
     }
   }
 
@@ -926,11 +1274,18 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
     }
     const asPoll = currentTab === 'polls' && !!pollDraft;
     posting = true;
-    postLabel.textContent = 'Posting…';
+    // The button says where the post is; nothing repeats it beside it.
+    // Signing first, since a remote signer can keep it waiting there.
+    postLabel.textContent = 'Signing…';
     refreshPostState();
     errEl.textContent = '';
     const nowSecs = Math.floor(Date.now() / 1000);
-    const text = composer.serializeEditor(editorApi.editor);
+    // A bare npub/nevent becomes its nostr: form first, so it tags and
+    // renders as a reference (Sidecar does the same before every post).
+    const text = SidecarCore.linkBareRefs(composer.serializeEditor(editorApi.editor), deps.NT);
+    // What the text tags: a p per person mentioned or quoted, a q per quoted
+    // note (including a quote that sits in the attachments), a t per hashtag.
+    const body = SidecarCore.noteBodyTags(SidecarCore.proseWithQuotes(text, asPoll ? [] : media), deps.NT, []);
     const template = {
       kind: asPoll ? SidecarCore.POLL_KIND : 1,
       // A poll carries no attachments (the core keeps the two apart); a
@@ -938,17 +1293,24 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
       content: asPoll ? text : SidecarCore.composeNoteContent(text, media),
       created_at: nowSecs,
       tags: [
-        ['client', 'zapcooking'],
-        ...(asPoll ? SidecarCore.buildPollTags(pollDraft, nowSecs, [...chosenRelays]) : [])
+        // The app's own tag, with its NIP-89 handler (as everything else it
+        // publishes): clients show "via Zap Cooking" with its name and logo.
+        ['client', CLIENT_TAG_IDENTIFIER, ZAP_COOKING_HANDLER_ADDRESS],
+        ...body.p,
+        ...body.q,
+        ...body.t,
+        ...(asPoll
+          ? SidecarCore.buildPollTags(pollDraft, nowSecs, [...chosenRelays])
+          : // NIP-92: each described picture's words, and what the file says
+            // about itself (type, size), for the client that draws it.
+            SidecarCore.imetaTagsForMedia(media))
       ]
     };
     try {
-      statusEl.textContent = 'Signing…';
       const signed = (await signAuth(template)) as SidecarEvent;
       await actuallyPublish(signed);
     } catch (e) {
       errEl.textContent = String((e as Error).message || e);
-      statusEl.textContent = '';
       posting = false;
       postLabel.textContent = postLabelText();
       refreshPostState();
@@ -956,7 +1318,7 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
   }
 
   async function actuallyPublish(signed: SidecarEvent) {
-    statusEl.textContent = 'Publishing…';
+    postLabel.textContent = 'Posting…';
     try {
       const report = await doPublish(signed);
       if (!report.accepted.length) {
@@ -980,23 +1342,27 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
       renderThumbs();
       paintDraftsCount();
       savedEl.textContent = '';
+      const wasPoll = !!pollDraft;
       if (pollDraft) {
         pollDraft = null;
         if (currentTab === 'polls') setPane('polls');
       }
-      errEl.textContent = `Sent to ${report.accepted.length}/${report.total} relays.`;
+      const sent = `Sent to ${report.accepted.length} of ${report.total} relays.`;
+      if (opts.onClose) {
+        // Posted: the composer's job is done, so it goes, and the word that
+        // it went out stays on the page behind it.
+        showToast('success', `${wasPoll ? 'Poll posted' : 'Posted'}. ${sent}`);
+        opts.onClose();
+        return;
+      }
+      errEl.textContent = sent;
     } catch (e) {
       errEl.textContent = String((e as Error).message || e);
     } finally {
-      statusEl.textContent = '';
       posting = false;
       postLabel.textContent = postLabelText();
       refreshPostState();
     }
-  }
-
-  function showToast(_variant: string, message: string) {
-    errEl.textContent = message;
   }
 
   // ── the editor (Notes and Polls share it) ────────────────────
@@ -1009,7 +1375,7 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
     },
     onAttachUrl: (url: string) => {
       SidecarCore.removeUrlFromEditor(editorApi.editor, url);
-      if (!media.some((m) => m && m.url === url)) media.push({ url, isVideo: false });
+      if (!media.some((m) => m && m.url === url)) SidecarCore.addMedia(media, { url, isVideo: false });
       editorApi.sync();
       renderThumbs();
       draftSaveSoon();
@@ -1026,12 +1392,26 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
       if (!quotes.length) return false;
       media.push(...(quotes as { url: string }[]));
       renderThumbs();
+      draftSaveSoon();
+      paintCount();
+      refreshPostState();
+      // A note no relay shows us does not stay a quote: it goes back into the
+      // text after what was already written (never in place of it), and the
+      // toast says why. As Sidecar does.
       composer.checkPastedQuote(quotes[0], () => {
-        const at = media.indexOf(quotes[0] as { url: string });
-        if (at >= 0) media.splice(at, 1);
-        editorApi.setText(String((quotes[0] as { quote?: string })?.quote || plain));
+        const at = media.indexOf(quotes[0] as DraftMedia);
+        if (at < 0) return; // already removed or replaced: nothing to undo
+        media.splice(at, 1);
+        closeAltEditor(false);
+        const ref = String((quotes[0] as DraftMedia).quote || plain);
+        const words = editorApi.getText().replace(/\s+$/, '');
+        editorApi.setText(words ? words + '\n\n' + ref : ref);
         editorApi.sync();
+        draftSaveSoon();
+        paintCount();
         renderThumbs();
+        refreshPostState();
+        showToast('info', 'Couldn’t find that note, so it was pasted as text.');
       });
       return true;
     }
@@ -1162,7 +1542,7 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
   });
   const gifPicker = SidecarCore.buildGifPicker({
     onPick: (gif: { url: string; title?: string }) => {
-      if (!media.some((m) => m.url === gif.url)) media.push({ url: gif.url, isVideo: false });
+      if (!media.some((m) => m.url === gif.url)) SidecarCore.addMedia(media, { url: gif.url, isVideo: false });
       renderThumbs();
       draftSaveSoon();
     }
@@ -1419,6 +1799,10 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
 
   function setPreview(which: 'write' | 'preview') {
     showPreview = which === 'preview';
+    // The preview draws the attachments full size, so the strip of small
+    // ones (and a description being written) steps aside until Write.
+    if (showPreview) closeAltEditor();
+    sheetEl.classList.toggle('mono-previewing', showPreview);
     subtabWrite.classList.toggle('active', !showPreview);
     subtabPreview.classList.toggle('active', showPreview);
     slotEl.innerHTML = '';
@@ -1428,7 +1812,12 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
       preview.className = 'compose-preview compose-preview-lg';
       preview.style.cssText = 'min-height:240px';
       if (currentTab === 'notes' || currentTab === 'polls') {
-        composer.renderNotePreview(preview, SidecarCore.composeNoteContent(editorApi.getText(), media));
+        // Into a .preview-body, as Sidecar does: its preview rules (mentions in
+        // the accent, bold) are written against that box.
+        const body = document.createElement('div');
+        body.className = 'preview-body';
+        preview.appendChild(body);
+        composer.renderNotePreview(body, SidecarCore.composeNoteContent(editorApi.getText(), media));
       } else {
         const note = document.createElement('p');
         note.style.cssText = 'color:var(--muted,#999);font-size:13px;padding:12px 4px';
@@ -1459,9 +1848,21 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
     opts.onTabChange?.(tab);
   }
 
+  /** A poll with nothing in its options: raised, never written. */
+  const pollIsBlank = (p: unknown) => !((p as PollDraft | null)?.options || []).some((o) => o && o.trim());
+
   function paintPane(tab: MonoTab, keepPreview: boolean) {
+    // Leaving for Notes with an untouched poll drops it: otherwise it rode
+    // along unseen, and the note kept saving (and listing) as a poll. A poll
+    // with options filled in stays, and is there on coming back to Polls.
+    if (tab === 'notes' && pollDraft && pollIsBlank(pollDraft)) {
+      pollDraft = null;
+      pollEditor.paint(); // hides it, and gives the Media button back
+      draftSaveSoon();
+    }
     currentTab = tab;
     sheetEl.dataset.mode = SHEET_MODE[tab];
+    sheetEl.dataset.tab = tab; // the mono layer's own per-tab rules
     kindsEl.querySelectorAll<HTMLButtonElement>('.compose-mode').forEach((b) => {
       b.classList.toggle('active', b.dataset.tab === tab);
     });
@@ -1482,6 +1883,10 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
       slotEl.appendChild(editorApi.wrap);
       if (tab === 'polls') {
         if (!pollDraft) pollEditor.addBtn.click(); // Sidecar's own raise-the-poll path
+        // A poll already in hand (a draft restored, the tab left and come
+        // back to) is drawn as it is: the editor only fills itself when one
+        // is raised, so without this it stood empty.
+        else pollEditor.paint();
         slotEl.appendChild(pollEditor.wrap);
         pollEditor.wrap.classList.remove('hidden');
       }
@@ -1506,6 +1911,7 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
   kindsEl.querySelectorAll<HTMLButtonElement>('.compose-mode').forEach((b) => {
     b.addEventListener('click', () => {
       showPreview = false;
+      sheetEl.classList.remove('mono-previewing');
       subtabWrite.classList.add('active');
       subtabPreview.classList.remove('active');
       setPane((b.dataset.tab || 'notes') as MonoTab);
@@ -1520,7 +1926,8 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
     }
     const hasBody = !!editorApi.getText().trim() || media.length > 0;
     const pollOk = currentTab !== 'polls' || !pollDraft || SidecarCore.pollDraftIsPostable(pollDraft);
-    postBtn.disabled = posting || !hasBody || !pollOk;
+    // A post sent mid-upload would leave the file behind.
+    postBtn.disabled = posting || uploadsInFlight > 0 || !hasBody || !pollOk;
   }
 
   postBtn.addEventListener('click', () => onPost());
@@ -1551,9 +1958,20 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
     applyAvatar(el('avatar'), profile);
   })();
 
+  // The dialog's bottom padding, for the sticky footer to hang over (it
+  // differs on phones, where the safe area is added to it).
+  const dialogEl = root.closest('dialog');
+  const readDialogPad = () => {
+    if (dialogEl) root.style.setProperty('--mono-pad-b', getComputedStyle(dialogEl).paddingBottom);
+  };
+  readDialogPad();
+  window.addEventListener('resize', readDialogPad);
+
   // ── boot ─────────────────────────────────────────────────────
   restoreSavedDraft();
-  setPane(currentTab);
+  // The draft on screen is a poll (options filled in): it opens where it
+  // was being written, not on Notes with its poll out of sight.
+  setPane(currentTab === 'notes' && pollDraft && !pollIsBlank(pollDraft) ? 'polls' : currentTab);
   // Catch-up: a draft changed since its last push (the tab was killed, the
   // phone backgrounded it) goes up now, and the relays' drafts come in.
   if (me()) void syncDrafts();
@@ -1564,9 +1982,12 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
       // Closing is the push: what is on screen is saved, then what changed
       // goes to the relays (the sync outlives the composer).
       saveNow();
-      if (me()) void draftSync.sync();
+      // Send only: the next open reads the relays, and every read can mean
+      // signer requests.
+      if (me()) void draftSync.sync({ pull: false });
       if (countdownRaf !== null) cancelAnimationFrame(countdownRaf);
       unsubTimer();
+      window.removeEventListener('resize', readDialogPad);
       mountedIcons.splice(0).forEach((c) => c.$destroy());
       root.remove();
       styleEl.remove();

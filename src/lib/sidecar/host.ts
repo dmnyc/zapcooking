@@ -14,6 +14,7 @@
  */
 import { get } from 'svelte/store';
 import { NDKEvent, NDKRelaySet } from '@nostr-dev-kit/ndk';
+import { getEventHash } from 'nostr-tools';
 import { ndk, userPublickey, getCurrentRelays } from '$lib/nostr';
 import {
   getProfileCache,
@@ -23,6 +24,7 @@ import {
 } from '$lib/followListCache';
 import { searchProfiles, getCachedProfile } from '$lib/profileSearchService';
 import { resolveProfileByPubkey } from '$lib/profileResolver';
+import { showToast } from '$lib/toast';
 import './sidecar-globals.js';
 
 type SignedEvent = Record<string, unknown>;
@@ -44,12 +46,30 @@ function composerSettings(): Record<string, unknown> {
 async function ownerSign(msg: { event: Record<string, unknown>; expectedPubkey?: string }): Promise<SignedEvent> {
   const $ndk = get(ndk);
   if (!$ndk?.signer) throw new Error('Not signed in');
-  const event = new NDKEvent($ndk, msg.event as never);
-  await event.sign();
-  if (msg.expectedPubkey && event.pubkey !== msg.expectedPubkey) {
+  // Signed as built, through the signer directly. NDKEvent.sign() runs its
+  // own content tagging first, which adds a second set of p/t tags (a t
+  // per "#1", hashtags in their written case) on top of the ones the core
+  // already derived from the text.
+  const user = await $ndk.signer.user();
+  const e = msg.event as {
+    kind: number;
+    content: string;
+    tags: string[][];
+    created_at?: number;
+  };
+  const unsigned = {
+    kind: e.kind,
+    content: e.content || '',
+    tags: e.tags || [],
+    created_at: e.created_at || Math.floor(Date.now() / 1000),
+    pubkey: user.pubkey
+  };
+  const id = getEventHash(unsigned);
+  const sig = await $ndk.signer.sign({ ...unsigned, id } as never);
+  if (msg.expectedPubkey && unsigned.pubkey !== msg.expectedPubkey) {
     throw new Error('Signed as the wrong account');
   }
-  return event.rawEvent() as SignedEvent;
+  return { ...unsigned, id, sig } as SignedEvent;
 }
 
 /** The SIDECAR_* messages the core sends, answered from the app. */
@@ -186,7 +206,10 @@ export function buildSidecarDeps(live: boolean): SidecarDeps {
   const pool = composerPool(live);
   return {
     NT,
-    onUploadFallback: (message: string) => console.log('[upload fallback]', message),
+    // Said on screen, as Sidecar does: the core calls this only for an
+    // account whose own Blossom servers all refused the file, so the link
+    // in the note is not where its owner expects it.
+    onUploadFallback: (message: string) => showToast('info', message, 7000),
     devLog: (level: string, msg: string, data?: unknown) =>
       console.log('[composer devlog]', level, msg, data ?? ''),
     applyAvatar,
@@ -214,7 +237,7 @@ export function buildSidecarDeps(live: boolean): SidecarDeps {
       return getCurrentRelays();
     },
     activePubkey: (): string => (get(userPublickey) as unknown as string) || '',
-    onUploadNotice: (message: string) => console.log('[upload notice]', message),
+    onUploadNotice: (message: string) => showToast('info', message, 7000),
     reduceBalanceMotion: () =>
       typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches,
     // Name search across Nostr is always on here, as it was in the old
