@@ -4,6 +4,7 @@
   import { standardRelays } from '$lib/consts';
   import TrashIcon from 'phosphor-svelte/lib/Trash';
   import GlobeIcon from 'phosphor-svelte/lib/Globe';
+  import CaretDownIcon from 'phosphor-svelte/lib/CaretDown';
   import FlameIcon from 'phosphor-svelte/lib/Flame';
   import ForkKnifeIcon from 'phosphor-svelte/lib/ForkKnife';
   import CopyIcon from 'phosphor-svelte/lib/Copy';
@@ -24,6 +25,14 @@
   import PasskeyVaultSection from '../../components/PasskeyVaultSection.svelte';
   import AccountNudgeItem from '../../components/AccountNudgeItem.svelte';
   import { markBackupSaved } from '$lib/accountNudge';
+  import {
+    buildWot,
+    setWotEnabled,
+    wotEnabled,
+    wotSeen,
+    wotSet,
+    wotState
+  } from '$lib/wot/wotStore';
   import { resolveSecuritySections, resolveDisplayPubkey } from '$lib/securitySections';
   import { nip19 } from 'nostr-tools';
   import { theme, type Theme } from '$lib/themeStore';
@@ -92,6 +101,9 @@
   let wotPubkey = '';
   let wotRelay = '';
   let wotHasChanges: boolean = false;
+  // Raw pubkey/relay inputs are advanced territory now that a known provider covers
+  // the common case; they open by default only when the saved provider is unknown.
+  let showCustomProviderFields = false;
 
   const KNOWN_WOT_PROVIDERS = [
     {
@@ -121,6 +133,11 @@
         wotMode = 'custom';
         wotPubkey = wotProvider.servicePubkey;
         wotRelay = wotProvider.relayHint || '';
+        // A saved provider the known list doesn't cover: open the advanced inputs so
+        // what they're using stays visible and editable.
+        showCustomProviderFields = !KNOWN_WOT_PROVIDERS.some(
+          (p) => p.pubkey === wotProvider?.servicePubkey
+        );
       } else {
         wotMode = 'global';
         wotPubkey = '';
@@ -137,6 +154,14 @@
     wotMode = 'custom';
     wotPubkey = provider.pubkey;
     wotRelay = provider.relay;
+  }
+
+  const DEFAULT_WOT_PROVIDER = KNOWN_WOT_PROVIDERS[0];
+
+  async function restoreDefaultWotProvider() {
+    if (!DEFAULT_WOT_PROVIDER || wotSaving) return;
+    selectWotProvider(DEFAULT_WOT_PROVIDER);
+    await saveWotProvider();
   }
 
   async function saveWotProvider() {
@@ -1586,6 +1611,20 @@
             {/if}
           </div>
 
+          <!-- A custom provider can be restored to the default in one click; hidden
+               when the default (or no) provider is already active. -->
+          {#if wotProvider?.servicePubkey && wotProvider.servicePubkey !== DEFAULT_WOT_PROVIDER?.pubkey}
+            <button
+              type="button"
+              class="text-xs font-medium underline-offset-2 hover:underline text-left w-full"
+              style="color: var(--color-accent); background: none; border: none; cursor: pointer; padding: 0;"
+              on:click={restoreDefaultWotProvider}
+              disabled={wotSaving}
+            >
+              {wotSaving ? 'Restoring…' : 'Restore default provider (Brainstorm)'}
+            </button>
+          {/if}
+
           <!-- Mode selection -->
           <div class="flex flex-col gap-2">
             <label class="flex items-start gap-3 p-3 rounded-lg cursor-pointer">
@@ -1641,7 +1680,13 @@
                     : 'transparent'};"
                   on:click={() => selectWotProvider(provider)}
                 >
-                  <ShieldCheckIcon size={16} weight="fill" class="text-green-500 flex-shrink-0" />
+                  <!-- Green shield is the active-provider badge (same as the status
+                       row above); an option that merely lists a provider reads neutral. -->
+                  {#if wotProvider?.servicePubkey === provider.pubkey}
+                    <ShieldCheckIcon size={16} weight="fill" class="text-green-500 flex-shrink-0" />
+                  {:else}
+                    <GlobeIcon size={16} class="text-[var(--color-caption)] flex-shrink-0" />
+                  {/if}
                   <div>
                     <span class="block text-sm font-medium" style="color: var(--color-text-primary)"
                       >{provider.name}</span
@@ -1653,24 +1698,41 @@
                 </button>
               {/each}
 
-              <div class="flex flex-col gap-2 mt-1">
-                <label class="text-xs font-medium" style="color: var(--color-text-secondary)"
-                  >Or enter a custom provider</label
+              <!-- Custom pubkey/relay is advanced territory now that a known provider
+                   covers the common case; open by default only for unknown providers. -->
+              <div class="mt-1">
+                <button
+                  type="button"
+                  class="flex items-center gap-1 text-xs font-medium"
+                  style="color: var(--color-text-secondary)"
+                  on:click={() => (showCustomProviderFields = !showCustomProviderFields)}
                 >
-                <input
-                  type="text"
-                  bind:value={wotPubkey}
-                  placeholder="Provider pubkey (64 hex characters)"
-                  class="w-full px-3 py-2 rounded-lg text-xs"
-                  style="background-color: var(--color-input-bg); color: var(--color-text-primary); border: 1px solid var(--color-input-border); font-family: monospace;"
-                />
-                <input
-                  type="text"
-                  bind:value={wotRelay}
-                  placeholder="Relay URL (optional, e.g. wss://...)"
-                  class="w-full px-3 py-2 rounded-lg text-xs"
-                  style="background-color: var(--color-input-bg); color: var(--color-text-primary); border: 1px solid var(--color-input-border); font-family: monospace;"
-                />
+                  <span
+                    class="inline-flex transition-transform"
+                    style={showCustomProviderFields ? 'transform: rotate(180deg);' : ''}
+                  >
+                    <CaretDownIcon size={12} />
+                  </span>
+                  Advanced: enter a custom provider
+                </button>
+                {#if showCustomProviderFields}
+                  <div class="flex flex-col gap-2 mt-2">
+                    <input
+                      type="text"
+                      bind:value={wotPubkey}
+                      placeholder="Provider pubkey (64 hex characters)"
+                      class="w-full px-3 py-2 rounded-lg text-xs"
+                      style="background-color: var(--color-input-bg); color: var(--color-text-primary); border: 1px solid var(--color-input-border); font-family: monospace;"
+                    />
+                    <input
+                      type="text"
+                      bind:value={wotRelay}
+                      placeholder="Relay URL (optional, e.g. wss://...)"
+                      class="w-full px-3 py-2 rounded-lg text-xs"
+                      style="background-color: var(--color-input-bg); color: var(--color-text-primary); border: 1px solid var(--color-input-border); font-family: monospace;"
+                    />
+                  </div>
+                {/if}
               </div>
             </div>
           {/if}
@@ -1700,6 +1762,81 @@
               {wotMessage.text}
             </p>
           {/if}
+
+          <!-- Local web of trust — the spam filter's allowlist (you, your follows,
+               and everyone ten of your follows follow). Separate from the provider
+               above: this is built locally, not fetched from a service. -->
+          <div
+            class="flex flex-col gap-3 px-3 py-3 rounded-lg"
+            style="border: 1px solid var(--color-input-border);"
+          >
+            <!-- Title + switch, the settings-row pattern the countdown toggle uses -->
+            <div class="flex items-center justify-between gap-3">
+              <div class="min-w-0">
+                <p class="text-sm font-medium" style="color: var(--color-text-primary)">
+                  Web of trust (spam filter)
+                </p>
+                <p class="text-xs mt-0.5" style="color: var(--color-text-secondary)">
+                  Hide known spammers outside your network
+                </p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={$wotEnabled}
+                aria-label="Hide spam using your web of trust"
+                class="relative w-12 h-7 rounded-full transition-colors cursor-pointer flex-shrink-0 {$wotEnabled
+                  ? 'bg-action'
+                  : 'bg-[var(--color-input-border)]'}"
+                on:click={() => setWotEnabled(!$wotEnabled)}
+              >
+                <span
+                  class="absolute top-1 left-1 w-5 h-5 bg-on-action rounded-full shadow transition-transform {$wotEnabled
+                    ? 'translate-x-5'
+                    : ''}"
+                ></span>
+              </button>
+            </div>
+
+            {#if $wotEnabled}
+              <div
+                class="flex items-center justify-between gap-3 pt-3 border-t"
+                style="border-color: var(--color-input-border);"
+              >
+                <p
+                  class="text-xs min-w-0 flex items-center gap-1.5"
+                  style="color: var(--color-text-secondary)"
+                >
+                  {#if $wotState === 'building'}
+                    Working out your network…
+                  {:else if $wotState === 'ready'}
+                    <span class="w-1.5 h-1.5 rounded-full bg-green-500 flex-shrink-0"></span>
+                    Your network: {$wotSet.size.toLocaleString()}
+                    {$wotSet.size === 1 ? 'person' : 'people'}{#if $wotSeen > 0}, from
+                      {$wotSeen.toLocaleString()} your follows follow{/if}.
+                  {:else}
+                    Not built yet — builds in the background after you sign in
+                  {/if}
+                </p>
+                <button
+                  type="button"
+                  class="px-3 py-1.5 bg-secondary hover:bg-accent-gray rounded-lg text-xs font-medium transition-colors whitespace-nowrap"
+                  style="color: var(--color-text-primary)"
+                  disabled={$wotState === 'building'}
+                  on:click={() => buildWot($ndk, $userPublickey, { force: true }).catch(() => {})}
+                >
+                  {$wotState === 'building' ? 'Building…' : 'Rebuild'}
+                </button>
+              </div>
+            {:else}
+              <p
+                class="text-xs pt-3 border-t"
+                style="border-color: var(--color-input-border); color: var(--color-text-secondary);"
+              >
+                Off — spammers are still hidden outside your direct follows
+              </p>
+            {/if}
+          </div>
         {/if}
       </div>
     </Accordion>

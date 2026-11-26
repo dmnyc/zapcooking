@@ -13,14 +13,19 @@ vi.mock('$lib/nostr', async () => {
   const { writable } = await import('svelte/store');
   return { ndk: writable({}), userPublickey: writable(h.me) };
 });
-vi.mock('$lib/followListCache', async () => {
+// The WoT gate, mocked so the test controls who is in-network. beforeEach seeds the
+// set with the account plus the person fixture, so the person's notifications stay
+// visible while the bot's (out-of-network) hide.
+vi.mock('$lib/wot/wotStore', async () => {
   const { writable } = await import('svelte/store');
+  const wot = await import('$lib/wot/wot');
   return {
-    followListReady: writable(false),
-    followPubkeysReady: writable(false),
-    followListSize: writable(0),
-    getFollowedPubkeys: () => new Set<string>(),
-    loadFollowListProfiles: async () => new Map()
+    inNetwork: wot.inNetwork,
+    wotState: writable<'idle' | 'building' | 'ready'>('ready'),
+    wotSet: writable<ReadonlySet<string>>(new Set()),
+    wotEnabled: writable(true),
+    setWotEnabled: vi.fn(),
+    buildWot: vi.fn(async () => null)
   };
 });
 vi.mock('$lib/muteListStore', async () => {
@@ -45,7 +50,8 @@ vi.mock('$lib/native/notifications', () => ({
   sendImmediateNotification: vi.fn().mockResolvedValue(true)
 }));
 
-import { followPubkeysReady } from '$lib/followListCache';
+import { wotSet, wotState } from '$lib/wot/wotStore';
+import { short } from '$lib/wot/wot';
 import {
   notifications,
   visibleNotifications,
@@ -105,7 +111,9 @@ beforeEach(async () => {
     'fetch',
     vi.fn(async () => new Response(new Uint8Array(bin)))
   );
-  followPubkeysReady.set(true);
+  // The WoT set: the account and the person are in-network; the bot is a stranger.
+  wotState.set('ready');
+  wotSet.set(new Set([short(ME), short(person.pubkey)]));
   notifications.clear();
   handlers = new Map();
   const subscription = {

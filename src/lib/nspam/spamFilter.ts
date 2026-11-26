@@ -1,29 +1,26 @@
 /**
  * The nspam judge — Sidecar's judgeStrangers method, applied as hiding.
  *
- * THE FOLLOW LIST KNOWS YOUR CIRCLE AND NOTHING ABOUT A STRANGER; nspam knows nothing about
- * your circle and something about the stranger, from how their replies read. An author whose
- * newest scorable replies (a bundle of up to ten, newest first — that is how the model reads
- * them) score >= SPAM_THRESHOLD goes into the verdict set, and everything of theirs — replies
- * and notifications — is hidden while they are in it. Anyone in your follow list is never
- * hidden, whatever they score: a model's false positive must not be able to silence a friend.
+ * THE WEB OF TRUST KNOWS YOUR CIRCLE AND SOMETHING ABOUT A STRANGER; nspam knows nothing
+ * about your circle and something about the stranger, from how their replies read. An author
+ * whose newest scorable replies (a bundle of up to ten, newest first — that is how the model
+ * reads them) score >= SPAM_THRESHOLD goes into the verdict set, and everything of theirs —
+ * replies and notifications — is hidden while they are in it AND outside your web of trust
+ * (see $lib/wot): inside the network nothing is ever hidden, whatever it scores. A model's
+ * false positive must not be able to silence your circle.
  *
  * FAIL OPEN. With no model loaded nothing is judged and nothing is hidden; a reply that is not
  * scorable (not a kind-1 reply, or not mostly Latin — see nspam.ts scorable) leaves its author
- * unscored; and until the follow list has been read, no one is a stranger yet. A failed model
- * fetch only costs the feature, never a reply.
+ * unscored; and until the web-of-trust set has been built, no one is a stranger yet. A failed
+ * model fetch or a slow relay only costs the feature, never a reply.
  */
 
 import { derived, get, writable } from 'svelte/store';
 import { browser } from '$app/environment';
 import { userPublickey } from '$lib/nostr';
+import { followPubkeysReady, getFollowedPubkeys } from '$lib/followListCache';
 import { load, score, scorable, type NspamModel, type ScorableNote } from './nspam';
-import {
-  followListSize,
-  followPubkeysReady,
-  getFollowedPubkeys,
-  loadFollowListProfiles
-} from '$lib/followListCache';
+import { inNetwork, wotEnabled, wotSet, wotState } from '$lib/wot/wotStore';
 
 /** A note with the fields the judge keys and scores on. NDKEvent satisfies this. */
 export interface JudgeableEvent extends ScorableNote {
@@ -56,37 +53,42 @@ export const nspamSpammers = writable<ReadonlySet<string>>(new Set());
 const EMPTY: ReadonlySet<string> = new Set();
 
 /**
- * Verdicts with the follow list subtracted: the set of authors to hide. Fail-open while the
- * follow list is unread — until it lands, no one is a stranger yet (and a reply you chose to
- * follow must never be hidden because it arrived before the list did). `followListSize` is a
- * dependency so a re-read that changes the set re-runs this, not just the first read.
+ * Verdicts with the web of trust subtracted: the set of authors to hide — the people the
+ * nspam model has condemned AND your network cannot vouch for. With the web of trust on
+ * (default) the set is you, your follows, and everyone at least ten of your follows
+ * follow (Sidecar's wot — see $lib/wot): inside it nothing is ever hidden, whatever it
+ * scores, because a model's false positive must not be able to silence your circle, and
+ * a two-hop vouch is the louder signal. With it off, the older direct-follows gate
+ * applies: verdicts hide authors outside your kind-3 list, and hiding works without
+ * waiting for the crawl. Fail-open either way — an unbuilt set or an unread follow list
+ * means no one is a stranger yet; a slow relay costs the feature, never a reply.
  */
 export const nspamHiddenAuthors = derived(
-  [nspamSpammers, followPubkeysReady, followListSize],
-  ([$spammers, $followsReady]) => {
+  [nspamSpammers, wotSet, wotState, wotEnabled, followPubkeysReady],
+  ([$spammers, $set, $state, $enabled, $followsReady]) => {
     if ($spammers.size === 0) return EMPTY;
-    if (!$followsReady) return EMPTY;
-    const followed = getFollowedPubkeys();
     const hidden = new Set<string>();
-    for (const pk of $spammers) if (!followed.has(pk)) hidden.add(pk);
+    if ($enabled) {
+      if ($state !== 'ready') return EMPTY;
+      for (const pk of $spammers) if (!inNetwork($set, pk)) hidden.add(pk);
+    } else {
+      if (!$followsReady) return EMPTY;
+      const followed = getFollowedPubkeys();
+      for (const pk of $spammers) if (!followed.has(pk)) hidden.add(pk);
+    }
     return hidden;
   }
 );
 
 let model: NspamModel | null = null;
 let modelLoading: Promise<void> | null = null;
-let followsKicked = false;
 
 /**
- * Load the model and the follow list in the background. Safe to call anywhere, any number of
- * times: one fetch each, and a failed model fetch leaves the judge inert (nothing hidden).
+ * Load the model in the background. Safe to call anywhere, any number of times: one
+ * fetch, and a failed model fetch leaves the judge inert (nothing hidden).
  */
 export function warmNspam(): void {
   if (!browser) return;
-  if (!followsKicked) {
-    followsKicked = true;
-    loadFollowListProfiles().catch(() => {});
-  }
   if (model || modelLoading) return;
   modelLoading = (async () => {
     try {

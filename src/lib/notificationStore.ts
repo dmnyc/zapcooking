@@ -15,6 +15,7 @@ import type { MuteList } from '$lib/muteFilter';
 import { getReplyParentId, getThreadRootId } from '$lib/thread/replyParent';
 import { isHellthread } from '$lib/notificationUtils';
 import { judgeReplies, nspamHiddenAuthors, warmNspam } from '$lib/nspam/spamFilter';
+import { buildWot } from '$lib/wot/wotStore';
 import { decode as decodeBolt11 } from '@gandlaf21/bolt11-decode';
 import { extractZapAmountSats } from '$lib/zapAmount';
 
@@ -200,8 +201,7 @@ export const visibleNotifications = derived(
   ([$notifications, $mutedPubkeys, $muteState, _moderationVersion, $lookups, $spamHidden]) => {
     const byAuthor = $notifications.filter(
       (n) =>
-        (!n.fromPubkey ||
-          (!$mutedPubkeys.has(n.fromPubkey) && !$spamHidden.has(n.fromPubkey))) &&
+        (!n.fromPubkey || (!$mutedPubkeys.has(n.fromPubkey) && !$spamHidden.has(n.fromPubkey))) &&
         !isNotificationInMutedThread($muteState.muteList, n)
     );
     if (!byAuthor.some((n) => n.plated)) return byAuthor;
@@ -252,14 +252,16 @@ function recordZapToSparkSdk(event: NDKEvent): void {
     const zapRequestJson = descTag || '';
 
     // Fire-and-forget: import and call recordNip57ZapData
-    import('$lib/spark').then(({ recordNip57ZapData, walletInitialized }) => {
-      // Only record if Spark wallet is active
-      if (!get(walletInitialized)) return;
+    import('$lib/spark')
+      .then(({ recordNip57ZapData, walletInitialized }) => {
+        // Only record if Spark wallet is active
+        if (!get(walletInitialized)) return;
 
-      recordNip57ZapData(paymentHash!, zapRequestJson, zapReceiptJson, preimageTag).catch(
-        () => {} // Silently ignore errors
-      );
-    }).catch(() => {});
+        recordNip57ZapData(paymentHash!, zapRequestJson, zapReceiptJson, preimageTag).catch(
+          () => {} // Silently ignore errors
+        );
+      })
+      .catch(() => {});
   } catch {
     // Non-fatal: best-effort recording
   }
@@ -333,11 +335,7 @@ export async function loadOwnNoteIds(ndk: NDK, pubkey: string): Promise<Set<stri
  * own-note id set is read at call time — a note published this session
  * is in the set by the next rebuild.
  */
-function buildNotificationFilters(
-  userPubkey: string,
-  since: number,
-  until?: number
-): NDKFilter[] {
+function buildNotificationFilters(userPubkey: string, since: number, until?: number): NDKFilter[] {
   const bound: NDKFilter = until ? { since, until } : { since };
   const filters: NDKFilter[] = [
     // Reactions to my posts (NIP-25)
@@ -386,7 +384,11 @@ function isRelevantKind1(event: NDKEvent, userPubkey: string): boolean {
   if (event.tags.some((t) => t[0] === 'q' && t[1] && ids.has(t[1]))) return true;
   const eTags = event.tags.filter((t) => t[0] === 'e');
   const replyMarker = eTags.find((t) => t[3] === 'reply') || eTags.find((t) => t[3] === 'root');
-  const replyTarget = replyMarker ? replyMarker[1] : eTags.length > 0 ? eTags[eTags.length - 1][1] : undefined;
+  const replyTarget = replyMarker
+    ? replyMarker[1]
+    : eTags.length > 0
+      ? eTags[eTags.length - 1][1]
+      : undefined;
   return !!replyTarget && ids.has(replyTarget);
 }
 
@@ -469,15 +471,18 @@ export async function subscribeToNotifications(
   // routes shared with the older-pages fetch and the bell refetch via
   // buildNotificationFilters. The relay set targets the NIP-65 inbox
   // when known (undefined = NDK's default pool behavior).
-  activeSubscription = ndk.subscribe(
-    filters,
-    { closeOnEose: false },
-    relaySet ?? undefined
-  );
+  activeSubscription = ndk.subscribe(filters, { closeOnEose: false }, relaySet ?? undefined);
 
   // The reply-spam model loads in the background, the way the trust set warms
   // in Sidecar's bell: notifications read as they always did until it lands.
   warmNspam();
+  // And the web-of-trust set builds in the background too, deferred past first
+  // paint the way Sidecar defers it: at concurrency its chunked kind:3 requests
+  // crowded the relay pool hard enough to starve the bell's own lookups. Until
+  // it lands, nspam verdicts hide nothing (unknown means in-network).
+  setTimeout(() => {
+    buildWot(ndk, userPubkey).catch(() => {});
+  }, 4000);
 
   // Buffer events received before EOSE so we can insert them in one
   // addBulk() call (one sort + one localStorage write) instead of doing
@@ -696,10 +701,7 @@ export async function fetchOlderNotifications(
     const TIMEOUT_MS = 8000; // 8 second timeout
     let resolved = false;
 
-    const sub = ndk.subscribe(
-      buildNotificationFilters(userPubkey, since),
-      { closeOnEose: true }
-    );
+    const sub = ndk.subscribe(buildNotificationFilters(userPubkey, since), { closeOnEose: true });
 
     sub.on('event', (event: NDKEvent) => {
       collectedEvents.push(event);
@@ -775,13 +777,19 @@ function cleanContentForPreview(content: string): string {
   let cleaned = content
     // Remove image URLs (they don't render in text previews)
     .replace(/https?:\/\/[^\s]+\.(?:jpg|jpeg|png|gif|webp|svg|bmp|avif)(?:\?[^\s]*)?/gi, '')
-    .replace(/https?:\/\/(?:i\.)?(?:nostr\.build|imgur\.com|primal\.b-cdn\.net|image\.nostr\.build|void\.cat|m\.primal\.net|cdn\.satellite\.earth)[^\s]*/gi, '')
+    .replace(
+      /https?:\/\/(?:i\.)?(?:nostr\.build|imgur\.com|primal\.b-cdn\.net|image\.nostr\.build|void\.cat|m\.primal\.net|cdn\.satellite\.earth)[^\s]*/gi,
+      ''
+    )
     // Remove standalone bech32 identifiers (without nostr: prefix) — display layer only resolves nostr: URIs.
     // The consumed-and-re-emitted nostr: prefix keeps `nostr:npub1…` mentions intact; without it
     // the bech32 gets stripped out of the URI, leaving a dangling literal "nostr: " that the
     // display layer can no longer resolve to a name. (No lookbehind: parse-time
     // SyntaxError on iOS Safari < 16.4.)
-    .replace(/(nostr:)?\b(?:note1|nevent1|naddr1|npub1|nprofile1)[023456789ac-hj-np-z]{20,}\b/gi, (match, nostrPrefix) => (nostrPrefix ? match : ' '))
+    .replace(
+      /(nostr:)?\b(?:note1|nevent1|naddr1|npub1|nprofile1)[023456789ac-hj-np-z]{20,}\b/gi,
+      (match, nostrPrefix) => (nostrPrefix ? match : ' ')
+    )
     // Clean up multiple spaces and newlines
     .replace(/\s+/g, ' ')
     .trim();
@@ -810,7 +818,8 @@ function parseNotification(event: NDKEvent, userPubkey: string): Notification | 
   };
 
   switch (event.kind) {
-    case 7: { // Reaction
+    case 7: {
+      // Reaction
       // NIP-25: "the target event id should be last of the e tags"
       const eTags7 = event.tags.filter((t) => t[0] === 'e');
       const reactedEventId = eTags7.length > 0 ? eTags7[eTags7.length - 1][1] : undefined;
@@ -825,7 +834,8 @@ function parseNotification(event: NDKEvent, userPubkey: string): Notification | 
       };
     }
 
-    case 9735: { // Zap receipt
+    case 9735: {
+      // Zap receipt
       // The zap receipt is published by the zapper service (e.g., Alby)
       // The actual sender info is in the embedded zap request in the 'description' tag
       let zapSenderPubkey = event.pubkey; // fallback to zapper if we can't parse
@@ -862,7 +872,8 @@ function parseNotification(event: NDKEvent, userPubkey: string): Notification | 
       };
     }
 
-    case 1: { // Reply, mention, or quote repost
+    case 1: {
+      // Reply, mention, or quote repost
       // NIP-10: events with e-tags are replies in a thread; events without are standalone notes.
       // Both types p-tag the user — "mention" here means no thread context, "comment" means
       // there is one. The Mentions UI tab shows both types (any note that tagged you).
@@ -904,7 +915,8 @@ function parseNotification(event: NDKEvent, userPubkey: string): Notification | 
       };
     }
 
-    case 1111: { // NIP-22 comment on a recipe or reply to a comment
+    case 1111: {
+      // NIP-22 comment on a recipe or reply to a comment
       // lowercase 'e' tag = parent comment id (present when replying to a comment)
       const parentETag = event.tags.find((t) => t[0] === 'e');
       // A plate of your recipe stays a 'comment' (tabs, counts and the
@@ -922,7 +934,8 @@ function parseNotification(event: NDKEvent, userPubkey: string): Notification | 
     }
 
     case 6: // Repost (kind 1 notes)
-    case 16: { // Generic repost (recipes, etc. per NIP-18)
+    case 16: {
+      // Generic repost (recipes, etc. per NIP-18)
       const repostedEventId = event.tags.find((t) => t[0] === 'e')?.[1];
       return {
         ...baseNotification,
@@ -962,9 +975,8 @@ async function sendLocalNotificationForNostrEvent(notification: Notification): P
     // A known spammer doesn't get to buzz your phone either.
     if (get(nspamHiddenAuthors).has(notification.fromPubkey)) return;
 
-    const { checkNotificationPermissions, sendImmediateNotification } = await import(
-      '$lib/native/notifications'
-    );
+    const { checkNotificationPermissions, sendImmediateNotification } =
+      await import('$lib/native/notifications');
     const permission = await checkNotificationPermissions();
 
     if (permission !== 'granted' || isNotificationMuted(notification)) {

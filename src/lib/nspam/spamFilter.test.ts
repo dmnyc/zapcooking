@@ -14,6 +14,18 @@ vi.mock('$lib/nostr', async () => {
   const { writable } = await import('svelte/store');
   return { ndk: writable({}), userPublickey: writable(h.me) };
 });
+vi.mock('$lib/wot/wotStore', async () => {
+  const { writable } = await import('svelte/store');
+  const { inNetwork } = await import('$lib/wot/wot');
+  return {
+    inNetwork,
+    wotSet: writable<ReadonlySet<string>>(new Set()),
+    wotState: writable<'idle' | 'building' | 'ready'>('idle'),
+    wotEnabled: writable(true),
+    setWotEnabled: vi.fn(),
+    buildWot: vi.fn(async () => null)
+  };
+});
 vi.mock('$lib/followListCache', async () => {
   const { writable } = await import('svelte/store');
   return {
@@ -34,7 +46,9 @@ vi.mock('$lib/muteListStore', async () => {
 });
 
 import { userPublickey } from '$lib/nostr';
+import { wotEnabled, wotSet, wotState } from '$lib/wot/wotStore';
 import { followPubkeysReady } from '$lib/followListCache';
+import { short } from '$lib/wot/wot';
 import { load, score } from './nspam';
 import { judgeReplies, nspamHiddenAuthors, nspamSpammers, spamVerdict } from './spamFilter';
 import { createCommentSubscription } from '$lib/comments/subscription';
@@ -72,8 +86,13 @@ function serveModel() {
 }
 
 beforeEach(() => {
-  h.follows.clear();
+  // A built set that contains only the account: strangers are strangers, and the
+  // per-test mutations below layer on top of it.
+  wotState.set('ready');
+  wotSet.set(new Set([short(h.me)]));
+  wotEnabled.set(true);
   followPubkeysReady.set(true);
+  h.follows.clear();
 });
 
 afterEach(() => {
@@ -110,13 +129,48 @@ describe('the nspam judge', () => {
     expect(get(nspamSpammers).has(person.pubkey)).toBe(false);
   });
 
-  it('verdicts hide strangers but never anyone you follow', () => {
-    followPubkeysReady.set(true);
+  it('verdicts hide out-of-network authors but never anyone your network vouches for', () => {
+    // Both fixtures condemned, regardless of what the model scored them: the gate
+    // under test is the subtraction, not the scoring.
+    (nspamSpammers as unknown as { set: (s: Set<string>) => void }).set(
+      new Set([bot.pubkey, person.pubkey])
+    );
+    // With a set that holds only the account, both are strangers and both hide.
+    wotState.set('ready');
+    wotSet.set(new Set([short(h.me)]));
+    expect(get(nspamHiddenAuthors).has(bot.pubkey)).toBe(true);
+    expect(get(nspamHiddenAuthors).has(person.pubkey)).toBe(true);
+    // The set is you, your follows, and everyone ten of your follows follow: inside it
+    // nothing is ever hidden, whatever the model said.
+    wotSet.set(new Set([short(h.me), short(person.pubkey)]));
+    expect(get(nspamHiddenAuthors).has(person.pubkey)).toBe(false);
+    expect(get(nspamHiddenAuthors).has(bot.pubkey)).toBe(true);
+    // Fail open while the set is unbuilt — unknown means in-network.
+    wotState.set('building');
+    expect(get(nspamHiddenAuthors).size).toBe(0);
+    // And a built-but-empty set filters nobody either (the fresh-account shape).
+    wotState.set('ready');
+    wotSet.set(new Set());
+    expect(get(nspamHiddenAuthors).size).toBe(0);
+  });
+
+  it('with the web of trust disabled the gate falls back to direct follows', () => {
+    // Both fixtures condemned, regardless of what the model scored them.
+    (nspamSpammers as unknown as { set: (s: Set<string>) => void }).set(
+      new Set([bot.pubkey, person.pubkey])
+    );
+    wotEnabled.set(false);
     h.follows.add(person.pubkey);
+    // No crawl, no wait: verdicts apply immediately, minus direct follows.
     expect(get(nspamHiddenAuthors).has(bot.pubkey)).toBe(true);
     expect(get(nspamHiddenAuthors).has(person.pubkey)).toBe(false);
-    // Before the follow list has been read, no one is a stranger yet.
+    // Fail open until the follow list has been read.
     followPubkeysReady.set(false);
+    expect(get(nspamHiddenAuthors).size).toBe(0);
+    // Re-enabling hands the gate back to the (stale, unbuilt) set: fail open.
+    followPubkeysReady.set(true);
+    wotEnabled.set(true);
+    wotState.set('idle');
     expect(get(nspamHiddenAuthors).size).toBe(0);
   });
 

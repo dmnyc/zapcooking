@@ -28,8 +28,11 @@ Nothing is hidden unless every gate opens:
   whole). Reactions, zaps, mentions without an `e` tag, and non-Latin text leave their author
   unscored — the model was trained on (mostly English) kind-1 replies and is weak on anything
   else.
-- **Your circle is never hidden.** Anyone in your kind-3 follow list is exempt from hiding,
-  whatever they score. Until the follow list has been read, no one is a stranger yet.
+- **Your circle is never hidden.** Anyone inside your web of trust is exempt from hiding,
+  whatever they score. The set (`$lib/wot`, ported from Sidecar's wot.js) is you, your
+  kind-3 follows, and everyone at least ten of your follows follow; it builds in the
+  background after login, and until it is ready nothing is hidden at all — unknown means
+  in-network.
 - **Your own replies are never judged** (`userPublickey` is excluded), so the model can't
   hide you from your own threads.
 - **Hiding is reactive, not destructive.** Raw notifications stay in `notifications` and raw
