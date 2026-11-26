@@ -52,6 +52,7 @@ export function setWotEnabled(enabled: boolean): void {
     // gate's follow-list fallback takes over immediately.
     wotState.set('idle');
     wotSet.set(new Set());
+    wotSeen.set(0);
     builtForPubkey = '';
     lastResult = null;
   }
@@ -59,6 +60,9 @@ export function setWotEnabled(enabled: boolean): void {
 
 /** The built set (16-char key prefixes). Empty and unbuilt read the same: fail open. */
 export const wotSet: Writable<ReadonlySet<string>> = writable(new Set());
+
+/** How many of your follows were crawled for votes (Sidecar's `seen`). */
+export const wotSeen: Writable<number> = writable(0);
 
 export const wotState: Writable<WotState> = writable('idle');
 
@@ -150,11 +154,13 @@ export async function buildWot(
       if (!get(wotEnabled)) {
         wotState.set('idle');
         wotSet.set(new Set());
+        wotSeen.set(0);
         return null;
       }
       lastResult = result;
       builtForPubkey = pubkey;
       wotSet.set(result.set);
+      wotSeen.set(result.seen);
       wotState.set(result.follows > 0 ? 'ready' : 'idle');
       console.info(
         `[Wot] built: ${result.set.size} in network (${result.qualified} qualified of ` +

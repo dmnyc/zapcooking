@@ -25,7 +25,14 @@
   import PasskeyVaultSection from '../../components/PasskeyVaultSection.svelte';
   import AccountNudgeItem from '../../components/AccountNudgeItem.svelte';
   import { markBackupSaved } from '$lib/accountNudge';
-  import { buildWot, setWotEnabled, wotEnabled, wotSet, wotState } from '$lib/wot/wotStore';
+  import {
+    buildWot,
+    setWotEnabled,
+    wotEnabled,
+    wotSeen,
+    wotSet,
+    wotState
+  } from '$lib/wot/wotStore';
   import { resolveSecuritySections, resolveDisplayPubkey } from '$lib/securitySections';
   import { nip19 } from 'nostr-tools';
   import { theme, type Theme } from '$lib/themeStore';
@@ -1801,10 +1808,12 @@
                   style="color: var(--color-text-secondary)"
                 >
                   {#if $wotState === 'building'}
-                    Building…
+                    Working out your network…
                   {:else if $wotState === 'ready'}
                     <span class="w-1.5 h-1.5 rounded-full bg-green-500 flex-shrink-0"></span>
-                    Ready: {$wotSet.size.toLocaleString()} accounts in your network
+                    Your network: {$wotSet.size.toLocaleString()}
+                    {$wotSet.size === 1 ? 'person' : 'people'}{#if $wotSeen > 0}, from
+                      {$wotSeen.toLocaleString()} your follows follow{/if}.
                   {:else}
                     Not built yet — builds in the background after you sign in
                   {/if}

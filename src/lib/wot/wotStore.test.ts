@@ -39,7 +39,7 @@ vi.mock('$lib/muteListStore', async () => {
 });
 
 import { getFollowedPubkeys } from '$lib/followListCache';
-import { buildWot, setWotEnabled, wotSet, wotState, wotEnabled } from './wotStore';
+import { buildWot, setWotEnabled, wotSeen, wotSet, wotState, wotEnabled } from './wotStore';
 import { short, THRESHOLD } from './wot';
 
 // A fake NDK whose fetchEvents answers each chunk with one kind:3 per author, all
@@ -67,6 +67,7 @@ const ME3 = 'd2'.repeat(32);
 beforeEach(() => {
   setWotEnabled(true);
   wotSet.set(new Set());
+  wotSeen.set(0);
   wotState.set('idle');
 });
 
@@ -77,6 +78,7 @@ describe('the wot store runner', () => {
     expect(r).toBeNull();
     expect(get(wotState)).toBe('idle');
     expect(get(wotSet).size).toBe(0);
+    expect(get(wotSeen)).toBe(0);
   });
 
   it('publishes the built set and the ready state', async () => {
@@ -89,6 +91,7 @@ describe('the wot store runner', () => {
     expect(set.has(short(POPULAR))).toBe(true);
     expect(set.size).toBe(h.follows.length + 2);
     expect(r!.seen).toBe(1);
+    expect(get(wotSeen)).toBe(1);
     expect(r!.qualified).toBe(1);
     expect(THRESHOLD).toBe(10);
   });
