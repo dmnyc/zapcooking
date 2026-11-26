@@ -18,7 +18,7 @@ Article, so each of these is a regression until it closes.
 | B1 | **Tags from the text**: `p` per mention, `q` per quote, `t` per hashtag | ✅ | ✅ fixed: `noteBodyTags(proseWithQuotes(text, media))`, after the client tag, as Sidecar orders them. Signing now skips NDK's own content tagging, which doubled the t tags |
 | B2 | **Recipes publish** | ✅ /create | ❌ "lands with the longform port"; the cover can't be uploaded, and the form requires one |
 | B3 | **Articles publish** | ✅ LongformEditorModal | ❌ same; cover placeholder, no Preview |
-| B4 | **Proof of work** | ✅ | ❌ button disabled |
+| B4 | **Proof of work** | ✅ | ✅ fixed: the hammer cycles Off/16/18/20/22 from the Settings default; mined in the background on the app's miner and indicator, signed as mined, draft kept until it is out |
 | B5 | **Pasted quote is invisible** | ✅ | ✅ fixed: shown as the quoted note in the strip, moves above or below the pictures, two taps to remove. A note no relay has goes back into the text after what was written (it used to replace the whole text) |
 
 ## Notes editor
