@@ -1,7 +1,7 @@
 # Monocomposer vs Sidecar: the gaps
 
-The monocomposer (`src/lib/sidecar/mount.ts`, branch `feat/composer-drafts`)
-side by side with Sidecar's full-size composer (`compose.js`, `longform.js`,
+The monocomposer (`src/lib/sidecar/mount.ts`, the top of the stack is
+`feat/composer-pow`, merged with `upstream/main` at a902ce4f) side by side with Sidecar's full-size composer (`compose.js`, `longform.js`,
 `composer-core.js` at cf29ba5f). `composer-feature-parity.md` compares Sidecar
 with this app's *old* composers; this compares it with the new one, and calls
 out where the new one is behind the old.
@@ -18,8 +18,9 @@ Article, so each of these is a regression until it closes.
 | B1 | **Tags from the text**: `p` per mention, `q` per quote, `t` per hashtag | ✅ | ✅ fixed: `noteBodyTags(proseWithQuotes(text, media))`, after the client tag, as Sidecar orders them. Signing now skips NDK's own content tagging, which doubled the t tags |
 | B2 | **Recipes publish** | ✅ /create | ❌ "lands with the longform port"; the cover can't be uploaded, and the form requires one |
 | B3 | **Articles publish** | ✅ LongformEditorModal | ❌ same; cover placeholder, no Preview |
-| B4 | **Proof of work** | ✅ | ❌ button disabled |
+| B4 | **Proof of work** | ✅ | ✅ fixed: the hammer cycles Off/16/18/20/22 from the Settings default; mined in the background on the app's miner and indicator, signed as mined, draft kept until it is out |
 | B5 | **Pasted quote is invisible** | ✅ | ✅ fixed: shown as the quoted note in the strip, moves above or below the pictures, two taps to remove. A note no relay has goes back into the text after what was written (it used to replace the whole text) |
+| B6 | **Scheduling a note** | ✅ the composer's calendar, Reschedule, a time from the Scheduled calendar | ❌ the calendar button is disabled. The + menu's Post opens the monocomposer, so a note can't be scheduled from it. The Scheduled page's own entry points still open the old composer (see below) |
 
 ## Notes editor
 
@@ -78,7 +79,7 @@ Article, so each of these is a regression until it closes.
 | **Relay report**: which took it, which refused, why | ✅ expandable | ❌ | only "Sent to N of M" |
 | After posting | receipt card: Open in…, Write another | ➖ | closes, with a toast |
 | Post button stages | Signing… / Publishing… in the status line | ➖ | on the button |
-| Scheduling | ❌ | ❌ | disabled button here ("lands with the scheduler port") |
+| Scheduling | ❌ | ❌ | B6: the app's old composer has it, Sidecar does not |
 | Client tag | Sidecar | ✅ | `Zap Cooking` + NIP-89 handler |
 
 ## Preview
@@ -96,7 +97,7 @@ Article, so each of these is a regression until it closes.
 | Saved on tab hide / unload | ✅ | ◐ | saved on close and on each pause; not on page hide (decided) |
 | NIP-37 relay copies | ✅ explicit Save/Check | ➖ | pushed on close, read on open, Sync now; decrypt once per version |
 | Drafts pane: list, open, new | ✅ | ✅ | |
-| **Delete needs a second tap** | ✅ | ❌ | one tap deletes |
+| Delete needs a second tap | ✅ | ✅ | "Delete this draft?" / "Delete it from your relays?", tap again on the trash or the row; settles after 4s; the ask survives a sync repainting the list |
 | **Article/recipe drafts in the list**, dot on their tab | ✅ | ❌ | kept per tab, not listed |
 | **Account switch mid-draft** ("Now writing as X") | ✅ | ❌ | the account is read once, at open |
 
@@ -131,6 +132,41 @@ Article, so each of these is a regression until it closes.
 | Locked store / Unlock to post | ✅ | ➖ | no such state here |
 | Cmd+Enter to post | ❌ | ❌ | neither |
 | Light themes | ✅ | ❌ | theme mapping assumes dark |
+
+## Since the upstream merge (a902ce4f)
+
+Upstream's scheduling work (#1028 to #1036) landed in the old composer
+(`PostComposer.svelte`) and the Scheduled page, while the monocomposer was
+being built. It merged without conflicts; none of it reaches the
+monocomposer. Sidecar has no scheduler, so these are compared with the
+old composer, not with Sidecar.
+
+| Upstream addition | Old composer | Mono | Note |
+|---|---|---|---|
+| Schedule a note from the composer's calendar | ✅ | ❌ | B6 |
+| Reschedule from the Scheduled page (`openComposerRestored`): the original stays scheduled until the new time is taken; Post now refused | ✅ #1030 | ❌ | opens the old composer through PostModal |
+| Move a scheduled post to a new time | ✅ #1031 | ➖ | on the Scheduled page; no composer involved |
+| A time picked from the calendar or a posting slot (`openComposerAt`) | ✅ #1033 | ❌ | opens the old composer with the time preset |
+| The Scheduled page's "New post" button | ✅ | ❌ | `postComposerOpen.set(true)`: the old composer |
+| Revive a canceled row when the same post is scheduled again | ✅ #1032 | ❌ | server side; reached only through a composer that schedules |
+
+Before the old composer retires, the monocomposer has to take over every
+way into it in `postComposerStore.ts`:
+
+- `postComposerOpen.set(true)`: the Scheduled page's New post, the draft dock
+- `openComposerRestored`: Reschedule
+- `openComposerAt`: a time from the calendar or a posting slot
+- `openComposerWithQuote`: quote reposts (`NoteRepost`), memory note cards
+- `openComposerWithText`: sharing a live stream (`LiveShareButton`)
+
+It also has to carry `rescheduling` through its drafts and refuse Post now
+while rescheduling, as the old one does, and route through
+`composerSubmitRoute` (`src/lib/composerSchedule.ts`): a time beats proof of
+work, so the hammer has to stand down while a time is set. The rules are
+written down in editor-matrix's `docs/composer-findings.md` ("Scheduling")
+too; a Sidecar scheduler is unplanned. Until then, the app has two
+composers on purpose: the + menu opens the monocomposer, and everything
+above, plus replies, opens the old one.
 
 ## Ahead of Sidecar
 

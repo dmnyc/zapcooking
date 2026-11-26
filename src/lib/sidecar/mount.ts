@@ -85,6 +85,16 @@ import QuotesIcon from 'phosphor-svelte/lib/Quotes';
 import ListBulletsIcon from 'phosphor-svelte/lib/ListBullets';
 import ListNumbersIcon from 'phosphor-svelte/lib/ListNumbers';
 import CodeIcon from 'phosphor-svelte/lib/Code';
+import { POW_LEVELS, isPowBits, powLevelFor } from '$lib/pow';
+import { minePow, powCancel, isPowCanceled } from '$lib/powMiner';
+import {
+  miningOp,
+  startMiningOp,
+  reportMiningBest,
+  markMiningFound,
+  endMiningOp
+} from '$lib/stores/miningOp';
+import { addPendingOp, removePendingOp } from '$lib/stores/pendingOps';
 
 export const MONO_TABS = [
   { id: 'notes', label: 'Notes', icon: PencilSimpleIcon },
@@ -262,6 +272,7 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
       border: 0; background: none; box-shadow: none;
       accent-color: var(--orange); cursor: pointer; flex-shrink: 0;
     }
+    .mono-pow-bits { font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }
     .mono-seg.hidden { display: none; }
     /* An upload in progress stripes the Media button (Sidecar's
        .compose-add.is-uploading); each file holds its place in the strip
@@ -1373,6 +1384,12 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
       return;
     }
     const asPoll = currentTab === 'polls' && !!pollDraft;
+    // One mine at a time: the miner keeps a single worker, and a second
+    // post would wait unseen behind the first.
+    if (powBits !== null && get(miningOp)) {
+      errEl.textContent = 'Still mining your last post. One at a time.';
+      return;
+    }
     posting = true;
     // The button says where the post is; nothing repeats it beside it.
     // Signing first, since a remote signer can keep it waiting there.
@@ -1406,6 +1423,10 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
             SidecarCore.imetaTagsForMedia(media))
       ]
     };
+    if (powBits !== null) {
+      handOffToMiner(template, powBits, asPoll);
+      return;
+    }
     try {
       const signed = (await signAuth(template)) as SidecarEvent;
       await actuallyPublish(signed);
@@ -1414,6 +1435,99 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
       posting = false;
       postLabel.textContent = postLabelText();
       refreshPostState();
+    }
+  }
+
+  // ── proof of work: mined in the background ───────────────────
+  // A mine can take the better part of a minute, so the composer does not
+  // wait for it, as the old composer did not: the draft is saved and kept,
+  // the composer clears and closes, and the mine runs on in the app's
+  // mining indicator (with Stop). Mined BEFORE it is signed, since the
+  // signature covers the id; signed exactly as mined (the host signs the
+  // event as built). The draft goes only once the relays have the note: a
+  // stopped mine or a failed publish leaves it to open again.
+  function handOffToMiner(template: Record<string, unknown>, bits: number, wasPoll: boolean) {
+    if (draftTimer) {
+      clearTimeout(draftTimer);
+      draftTimer = null;
+    }
+    saveNow();
+    const draftId = activeId;
+    // The editor lets go of the draft before it clears, so clearing it
+    // writes nothing; the stored copy stays until the note is out.
+    activeId = null;
+    editorApi.setText('');
+    media.length = 0;
+    renderThumbs();
+    if (pollDraft) {
+      pollDraft = null;
+      if (currentTab === 'polls') setPane('polls');
+    }
+    savedEl.textContent = '';
+    posting = false;
+    postLabel.textContent = postLabelText();
+    refreshPostState();
+    paintDraftsCount();
+    void mineAndPost(template, bits, draftId, wasPoll);
+    if (opts.onClose) opts.onClose();
+  }
+
+  async function mineAndPost(
+    template: Record<string, unknown>,
+    bits: number,
+    draftId: string | null,
+    wasPoll: boolean
+  ) {
+    startMiningOp(bits, powCancel);
+    let signed: SidecarEvent;
+    try {
+      const mined = await minePow(
+        {
+          pubkey: deps.activePubkey() as string,
+          created_at: template.created_at as number,
+          kind: template.kind as number,
+          tags: (template.tags as string[][]).map((t) => [...t]),
+          content: template.content as string
+        },
+        bits,
+        (p) => reportMiningBest(p.best)
+      );
+      markMiningFound();
+      // A long mine re-stamps created_at; the mined tags carry the nonce.
+      signed = (await signAuth({
+        ...template,
+        tags: mined.event.tags,
+        created_at: mined.event.created_at
+      })) as SidecarEvent;
+    } catch (e) {
+      endMiningOp();
+      if (isPowCanceled(e)) showToast('info', 'Mining stopped. Your draft is saved.', 5000);
+      else showToast('error', `${String((e as Error).message || e)}. Your draft is saved.`);
+      return;
+    }
+    endMiningOp();
+    const opId = addPendingOp('Posting...');
+    try {
+      const report = await doPublish(signed);
+      if (!report.accepted.length) {
+        showToast('error', 'No relay accepted it. Your draft is saved.');
+        return;
+      }
+      if (draftId) {
+        const r = removeDraft(loadDrafts(), loadBlanks(), draftId);
+        storeDrafts(r.all, r.blanks);
+        if (me()) void draftSync.sync({ pull: false });
+      }
+      showToast(
+        'success',
+        `${wasPoll ? 'Poll posted' : 'Posted'} with ${bits} bits of proof of work. Sent to ${report.accepted.length} of ${report.total} relays.`
+      );
+    } catch (e) {
+      showToast('error', `${String((e as Error).message || e)}. Your draft is saved.`);
+    } finally {
+      removePendingOp(opId);
+      // The drafts badge, if the composer is still on screen.
+      if (root.isConnected) paintDraftsCount();
     }
   }
 
@@ -1565,7 +1679,7 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
       emojiPicker.addBtn.click();
       revealPicker(emojiPicker.wrap);
     }),
-    pow: segment(HammerIcon, 'Proof of work lands next', () => {}, true),
+    pow: segment(HammerIcon, 'Proof of work', () => cyclePow()),
     relays: segment(GlobeIcon, 'Where this posts', toggleRelays),
     timer: segment(ClockIcon, 'Send countdown', () => toggleTimerPopover()),
     schedule: segment(CalendarBlankIcon, 'Schedule lands with the scheduler port', () => {}, true)
@@ -1577,6 +1691,38 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
     reads: []
   };
   actionsEl.append(fileInput, ...Object.values(segs));
+
+  // Proof of work for THIS note: seeded from Settings and never written
+  // back. The hammer cycles Off, 16, 18, 20, 22 and round, as the old
+  // composer's did; on, it shows the bits. Re-seeded only when the setting
+  // itself changes, so a per-note choice survives until then.
+  let powBits: number | null = null;
+  let powSettingSeen: number | null | undefined = undefined;
+  const powBitsEl = document.createElement('span');
+  powBitsEl.className = 'mono-pow-bits';
+  segs.pow.append(powBitsEl);
+  function paintPow() {
+    segs.pow.classList.toggle('on', powBits !== null);
+    powBitsEl.textContent = powBits !== null ? String(powBits) : '';
+    const title =
+      powBits !== null
+        ? `Proof of work: ${powBits} bits. ${powLevelFor(powBits).cost} Tap for the next level.`
+        : 'Proof of work: off. Tap to mine some into this note.';
+    segs.pow.title = title;
+    segs.pow.setAttribute('aria-label', title);
+  }
+  function cyclePow() {
+    const order: (number | null)[] = [null, ...POW_LEVELS.map((l) => l.bits)];
+    powBits = order[(order.indexOf(powBits) + 1) % order.length];
+    paintPow();
+  }
+  const unsubPow = timerSettings.subscribe((t) => {
+    const fromSettings = isPowBits(t.powBits) ? t.powBits : null;
+    if (fromSettings === powSettingSeen) return;
+    powSettingSeen = fromSettings;
+    powBits = fromSettings;
+    paintPow();
+  });
 
   // The send countdown's settings, as the old composer's clock button had
   // them: on/off and 5/10/15/30 seconds, saved to the same timerSettings.
@@ -2091,6 +2237,7 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
       if (me()) void draftSync.sync({ pull: false });
       if (countdownRaf !== null) cancelAnimationFrame(countdownRaf);
       unsubTimer();
+      unsubPow();
       releaseGifRoute();
       window.removeEventListener('resize', readDialogPad);
       mountedIcons.splice(0).forEach((c) => c.$destroy());
