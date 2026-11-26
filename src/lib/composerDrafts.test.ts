@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import * as nostrTools from 'nostr-tools';
+import { ZAP_COOKING_HANDLER_ADDRESS } from './nip89';
 import {
   writeDraft,
   removeDraft,
@@ -165,7 +166,7 @@ describe('relay copies', () => {
     const r = writeDraft({}, {}, null, { kind: 'note', text: 'Soup weather', media: [{ url: 'https://x.test/a.jpg' }], poll: null }, 1000, ids);
     const inner = buildInner(r.all[r.id!], { core, selfPubkey: me, NT: nostrTools, nowSecs: 50 })!;
     expect(inner.kind).toBe(1);
-    expect(inner.tags).toContainEqual(['client', 'zapcooking']);
+    expect(inner.tags).toContainEqual(['client', 'Zap Cooking', ZAP_COOKING_HANDLER_ADDRESS]);
     expect((inner.tags as string[][]).some((t) => t[0] === 'client' && t[1] === 'Sidecar')).toBe(false);
     const back = parseInner(JSON.parse(JSON.stringify(inner)), 1, { core, selfPubkey: me });
     expect(back).toMatchObject({ kind: 'note', text: 'Soup weather' });
@@ -277,7 +278,7 @@ describe('sync', () => {
     useDraftScope('d'.repeat(64)); // the store holds another account's drafts
     const r = writeDraft({}, {}, null, note('Not yours'), 1000, ids);
     storeDrafts(r.all, r.blanks);
-    expect(await createDraftSync(io).sync()).toEqual({ pushed: 0, blanked: 0, pulled: 0, failed: 0 });
+    expect(await createDraftSync(io).sync()).toEqual({ pushed: 0, blanked: 0, pulled: 0, failed: 0, decrypted: 0 });
     expect(published).toEqual([]);
   });
 
@@ -298,5 +299,112 @@ describe('sync', () => {
     const all = loadDrafts();
     expect(Object.keys(all)).toEqual(['sidecar-1790000000-a1b2c3']);
     expect(all['sidecar-1790000000-a1b2c3'].text).toBe('From Sidecar');
+  });
+
+  describe('signer requests', () => {
+    const sidecarWrap = (at: number, text: string) => ({
+      id: 'side' + at,
+      pubkey: me,
+      kind: 31234,
+      created_at: at,
+      content: 'enc:' + JSON.stringify({ kind: 1, content: text, tags: [], created_at: 1 }),
+      tags: [['d', 'sidecar-1790000000-a1b2c3'], ['k', '1']]
+    });
+    function counting(io: SyncIO, fail = false) {
+      const asked = { decrypt: 0, query: 0 };
+      const decrypt = io.decrypt;
+      const query = io.query;
+      io.decrypt = async (c) => {
+        asked.decrypt++;
+        if (fail) throw new Error('refused');
+        return decrypt(c);
+      };
+      io.query = async (r, f) => {
+        asked.query++;
+        return query(r, f);
+      };
+      return asked;
+    }
+
+    it('opens a version of a draft once, across reloads', async () => {
+      const { io, held } = fakeRelays();
+      io.core = core;
+      held.push(sidecarWrap(1_790_000_000, 'From Sidecar'));
+      const asked = counting(io);
+      await createDraftSync(io).sync();
+      await createDraftSync(io).sync(); // a reload: a new sync, the same store
+      await createDraftSync(io).sync();
+      expect(asked.decrypt).toBe(1);
+    });
+
+    it('opens a newer version when Sidecar edits it', async () => {
+      const { io, held } = fakeRelays();
+      io.core = core;
+      held.push(sidecarWrap(1_790_000_000, 'From Sidecar'));
+      const asked = counting(io);
+      await createDraftSync(io).sync();
+      held.push(sidecarWrap(1_790_000_500, 'From Sidecar, edited'));
+      await createDraftSync(io).sync();
+      expect(asked.decrypt).toBe(2);
+      expect(loadDrafts()['sidecar-1790000000-a1b2c3'].text).toBe('From Sidecar, edited');
+    });
+
+    it('never asks to open a draft this device pushed', async () => {
+      const { io } = fakeRelays();
+      io.core = core;
+      const r = writeDraft({}, {}, null, note('Soup'), 1000, ids);
+      storeDrafts(r.all, r.blanks);
+      const asked = counting(io);
+      await createDraftSync(io).sync();
+      await createDraftSync(io).sync();
+      expect(asked.decrypt).toBe(0);
+    });
+
+    it('a refused draft is asked about again after a day, not on every open', async () => {
+      const { io, held } = fakeRelays();
+      io.core = core;
+      held.push(sidecarWrap(1_790_000_000, 'From Sidecar'));
+      const asked = counting(io, true);
+      await createDraftSync(io).sync();
+      await createDraftSync(io).sync();
+      expect(asked.decrypt).toBe(1);
+      const now = io.now;
+      io.now = () => now() + 25 * 60 * 60 * 1000;
+      await createDraftSync(io).sync();
+      expect(asked.decrypt).toBe(2);
+    });
+
+    it('a draft saved during a running sync is still sent', async () => {
+      const { io, published } = fakeRelays();
+      io.core = core;
+      const sync = createDraftSync(io);
+      let release!: () => void;
+      const query = io.query;
+      io.query = async (r, f) => {
+        await new Promise<void>((ok) => (release = ok));
+        return query(r, f);
+      };
+      const opening = sync.sync(); // nothing to send yet; now reading
+      await new Promise((ok) => setTimeout(ok, 0));
+      const r = writeDraft({}, {}, null, note('Soup'), 1000, ids);
+      storeDrafts(r.all, r.blanks); // typed, then closed, mid-read
+      const closing = sync.sync({ pull: false });
+      release();
+      await opening;
+      await closing;
+      expect(published).toHaveLength(1);
+      expect(published[0].tags).toContainEqual(['d', r.id]);
+    });
+
+    it('closing sends what changed and reads nothing', async () => {
+      const { io, published } = fakeRelays();
+      io.core = core;
+      const r = writeDraft({}, {}, null, note('Soup'), 1000, ids);
+      storeDrafts(r.all, r.blanks);
+      const asked = counting(io);
+      expect(await createDraftSync(io).sync({ pull: false })).toMatchObject({ pushed: 1 });
+      expect(published).toHaveLength(1);
+      expect(asked.query).toBe(0);
+    });
   });
 });
