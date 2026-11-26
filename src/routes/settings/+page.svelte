@@ -1796,11 +1796,15 @@
                 class="flex items-center justify-between gap-3 pt-3 border-t"
                 style="border-color: var(--color-input-border);"
               >
-                <p class="text-xs min-w-0" style="color: var(--color-text-secondary)">
+                <p
+                  class="text-xs min-w-0 flex items-center gap-1.5"
+                  style="color: var(--color-text-secondary)"
+                >
                   {#if $wotState === 'building'}
                     Building…
                   {:else if $wotState === 'ready'}
-                    Ready · {$wotSet.size.toLocaleString()} accounts in your network
+                    <span class="w-1.5 h-1.5 rounded-full bg-green-500 flex-shrink-0"></span>
+                    Ready: {$wotSet.size.toLocaleString()} accounts in your network
                   {:else}
                     Not built yet — builds in the background after you sign in
                   {/if}
