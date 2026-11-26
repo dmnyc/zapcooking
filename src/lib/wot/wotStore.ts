@@ -13,12 +13,49 @@
  */
 
 import NDK from '@nostr-dev-kit/ndk';
+import { browser } from '$app/environment';
 import { get, writable, type Writable } from 'svelte/store';
 import { getFollowedPubkeys, loadFollowListProfiles } from '$lib/followListCache';
 import { mutedPubkeys } from '$lib/muteListStore';
 import { build, followsFromEvents, type WotResult } from './wot';
 
 export type WotState = 'idle' | 'building' | 'ready';
+
+const WOT_ENABLED_KEY = 'zapcooking_wot_enabled';
+
+function initialEnabled(): boolean {
+  if (!browser) return true;
+  try {
+    return localStorage.getItem(WOT_ENABLED_KEY) !== 'false';
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Master switch for the web of trust. Off, the set is never built and the nspam gate
+ * falls back to direct follows (see spamFilter): verdicts then hide authors outside
+ * your kind-3 list, and hiding works without waiting for the crawl. Default on.
+ */
+export const wotEnabled: Writable<boolean> = writable(initialEnabled());
+
+export function setWotEnabled(enabled: boolean): void {
+  wotEnabled.set(enabled);
+  if (!browser) return;
+  try {
+    localStorage.setItem(WOT_ENABLED_KEY, String(enabled));
+  } catch {
+    /* a refused setItem only costs persistence across reloads */
+  }
+  if (!enabled) {
+    // Off means off now, not on the next rebuild: drop any published set so the
+    // gate's follow-list fallback takes over immediately.
+    wotState.set('idle');
+    wotSet.set(new Set());
+    builtForPubkey = '';
+    lastResult = null;
+  }
+}
 
 /** The built set (16-char key prefixes). Empty and unbuilt read the same: fail open. */
 export const wotSet: Writable<ReadonlySet<string>> = writable(new Set());
@@ -63,6 +100,8 @@ export async function buildWot(
     if (inflight) return inflight;
     if (builtForPubkey === pubkey && lastResult) return lastResult;
   }
+  // Off means never build: the gate reads the follow list instead.
+  if (!get(wotEnabled)) return null;
 
   // Hop one rides on the app's kind:3 cache; loading it is idempotent and shared.
   await loadFollowListProfiles().catch(() => {});
@@ -107,6 +146,12 @@ export async function buildWot(
           }
         }
       });
+      // Disabled while the crawl ran: discard, don't publish behind the user's back.
+      if (!get(wotEnabled)) {
+        wotState.set('idle');
+        wotSet.set(new Set());
+        return null;
+      }
       lastResult = result;
       builtForPubkey = pubkey;
       wotSet.set(result.set);

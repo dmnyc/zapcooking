@@ -5,7 +5,8 @@ import { get } from 'svelte/store';
 
 // Shared state for the module mocks, which are hoisted above these imports.
 const h = vi.hoisted(() => ({
-  me: '11'.repeat(32)
+  me: '11'.repeat(32),
+  follows: new Set<string>()
 }));
 
 vi.mock('$app/environment', () => ({ browser: true }));
@@ -20,7 +21,19 @@ vi.mock('$lib/wot/wotStore', async () => {
     inNetwork,
     wotSet: writable<ReadonlySet<string>>(new Set()),
     wotState: writable<'idle' | 'building' | 'ready'>('idle'),
+    wotEnabled: writable(true),
+    setWotEnabled: vi.fn(),
     buildWot: vi.fn(async () => null)
+  };
+});
+vi.mock('$lib/followListCache', async () => {
+  const { writable } = await import('svelte/store');
+  return {
+    followListReady: writable(false),
+    followPubkeysReady: writable(false),
+    followListSize: writable(0),
+    getFollowedPubkeys: () => h.follows,
+    loadFollowListProfiles: async () => new Map()
   };
 });
 vi.mock('$lib/muteListStore', async () => {
@@ -33,7 +46,8 @@ vi.mock('$lib/muteListStore', async () => {
 });
 
 import { userPublickey } from '$lib/nostr';
-import { wotSet, wotState } from '$lib/wot/wotStore';
+import { wotEnabled, wotSet, wotState } from '$lib/wot/wotStore';
+import { followPubkeysReady } from '$lib/followListCache';
 import { short } from '$lib/wot/wot';
 import { load, score } from './nspam';
 import { judgeReplies, nspamHiddenAuthors, nspamSpammers, spamVerdict } from './spamFilter';
@@ -76,6 +90,9 @@ beforeEach(() => {
   // per-test mutations below layer on top of it.
   wotState.set('ready');
   wotSet.set(new Set([short(h.me)]));
+  wotEnabled.set(true);
+  followPubkeysReady.set(true);
+  h.follows.clear();
 });
 
 afterEach(() => {
@@ -134,6 +151,26 @@ describe('the nspam judge', () => {
     // And a built-but-empty set filters nobody either (the fresh-account shape).
     wotState.set('ready');
     wotSet.set(new Set());
+    expect(get(nspamHiddenAuthors).size).toBe(0);
+  });
+
+  it('with the web of trust disabled the gate falls back to direct follows', () => {
+    // Both fixtures condemned, regardless of what the model scored them.
+    (nspamSpammers as unknown as { set: (s: Set<string>) => void }).set(
+      new Set([bot.pubkey, person.pubkey])
+    );
+    wotEnabled.set(false);
+    h.follows.add(person.pubkey);
+    // No crawl, no wait: verdicts apply immediately, minus direct follows.
+    expect(get(nspamHiddenAuthors).has(bot.pubkey)).toBe(true);
+    expect(get(nspamHiddenAuthors).has(person.pubkey)).toBe(false);
+    // Fail open until the follow list has been read.
+    followPubkeysReady.set(false);
+    expect(get(nspamHiddenAuthors).size).toBe(0);
+    // Re-enabling hands the gate back to the (stale, unbuilt) set: fail open.
+    followPubkeysReady.set(true);
+    wotEnabled.set(true);
+    wotState.set('idle');
     expect(get(nspamHiddenAuthors).size).toBe(0);
   });
 

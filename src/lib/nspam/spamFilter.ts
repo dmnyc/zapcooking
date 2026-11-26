@@ -18,8 +18,9 @@
 import { derived, get, writable } from 'svelte/store';
 import { browser } from '$app/environment';
 import { userPublickey } from '$lib/nostr';
+import { followPubkeysReady, getFollowedPubkeys } from '$lib/followListCache';
 import { load, score, scorable, type NspamModel, type ScorableNote } from './nspam';
-import { inNetwork, wotSet, wotState } from '$lib/wot/wotStore';
+import { inNetwork, wotEnabled, wotSet, wotState } from '$lib/wot/wotStore';
 
 /** A note with the fields the judge keys and scores on. NDKEvent satisfies this. */
 export interface JudgeableEvent extends ScorableNote {
@@ -53,20 +54,28 @@ const EMPTY: ReadonlySet<string> = new Set();
 
 /**
  * Verdicts with the web of trust subtracted: the set of authors to hide — the people the
- * nspam model has condemned AND your network cannot vouch for. The set is you, your
- * follows, and everyone at least ten of your follows follow (Sidecar's wot — see
- * $lib/wot): inside it nothing is ever hidden, whatever it scores, because a model's
- * false positive must not be able to silence your circle, and a two-hop vouch is the
- * louder signal. Fail-open while the set is unbuilt — unknown means in-network, so a
- * slow relay costs the feature, never a reply.
+ * nspam model has condemned AND your network cannot vouch for. With the web of trust on
+ * (default) the set is you, your follows, and everyone at least ten of your follows
+ * follow (Sidecar's wot — see $lib/wot): inside it nothing is ever hidden, whatever it
+ * scores, because a model's false positive must not be able to silence your circle, and
+ * a two-hop vouch is the louder signal. With it off, the older direct-follows gate
+ * applies: verdicts hide authors outside your kind-3 list, and hiding works without
+ * waiting for the crawl. Fail-open either way — an unbuilt set or an unread follow list
+ * means no one is a stranger yet; a slow relay costs the feature, never a reply.
  */
 export const nspamHiddenAuthors = derived(
-  [nspamSpammers, wotSet, wotState],
-  ([$spammers, $set, $state]) => {
+  [nspamSpammers, wotSet, wotState, wotEnabled, followPubkeysReady],
+  ([$spammers, $set, $state, $enabled, $followsReady]) => {
     if ($spammers.size === 0) return EMPTY;
-    if ($state !== 'ready') return EMPTY;
     const hidden = new Set<string>();
-    for (const pk of $spammers) if (!inNetwork($set, pk)) hidden.add(pk);
+    if ($enabled) {
+      if ($state !== 'ready') return EMPTY;
+      for (const pk of $spammers) if (!inNetwork($set, pk)) hidden.add(pk);
+    } else {
+      if (!$followsReady) return EMPTY;
+      const followed = getFollowedPubkeys();
+      for (const pk of $spammers) if (!followed.has(pk)) hidden.add(pk);
+    }
     return hidden;
   }
 );

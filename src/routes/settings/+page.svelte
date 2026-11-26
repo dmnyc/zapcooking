@@ -25,7 +25,7 @@
   import PasskeyVaultSection from '../../components/PasskeyVaultSection.svelte';
   import AccountNudgeItem from '../../components/AccountNudgeItem.svelte';
   import { markBackupSaved } from '$lib/accountNudge';
-  import { buildWot, wotSet, wotState } from '$lib/wot/wotStore';
+  import { buildWot, setWotEnabled, wotEnabled, wotSet, wotState } from '$lib/wot/wotStore';
   import { resolveSecuritySections, resolveDisplayPubkey } from '$lib/securitySections';
   import { nip19 } from 'nostr-tools';
   import { theme, type Theme } from '$lib/themeStore';
@@ -1767,8 +1767,21 @@
               <p class="text-sm" style="color: var(--color-text-primary)">
                 Web of trust (spam filter)
               </p>
-              <p class="text-xs" style="color: var(--color-text-secondary)">
-                {#if $wotState === 'building'}
+              <label class="flex items-center gap-2 mt-1 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={$wotEnabled}
+                  on:change={() => setWotEnabled(!$wotEnabled)}
+                  style="accent-color: var(--color-accent);"
+                />
+                <span class="text-xs" style="color: var(--color-text-secondary)">
+                  Hide spam using your web of trust
+                </span>
+              </label>
+              <p class="text-xs mt-1" style="color: var(--color-text-secondary)">
+                {#if !$wotEnabled}
+                  Off — spammers are hidden outside your direct follows
+                {:else if $wotState === 'building'}
                   Building…
                 {:else if $wotState === 'ready'}
                   Ready · {$wotSet.size.toLocaleString()} accounts in your network
@@ -1777,15 +1790,17 @@
                 {/if}
               </p>
             </div>
-            <button
-              type="button"
-              class="px-3 py-1.5 bg-secondary hover:bg-accent-gray rounded-lg text-xs font-medium transition-colors whitespace-nowrap"
-              style="color: var(--color-text-primary)"
-              disabled={$wotState === 'building'}
-              on:click={() => buildWot($ndk, $userPublickey, { force: true }).catch(() => {})}
-            >
-              {$wotState === 'building' ? 'Building…' : 'Rebuild'}
-            </button>
+            {#if $wotEnabled}
+              <button
+                type="button"
+                class="px-3 py-1.5 bg-secondary hover:bg-accent-gray rounded-lg text-xs font-medium transition-colors whitespace-nowrap"
+                style="color: var(--color-text-primary)"
+                disabled={$wotState === 'building'}
+                on:click={() => buildWot($ndk, $userPublickey, { force: true }).catch(() => {})}
+              >
+                {$wotState === 'building' ? 'Building…' : 'Rebuild'}
+              </button>
+            {/if}
           </div>
         {/if}
       </div>

@@ -23,6 +23,8 @@ vi.mock('$lib/wot/wotStore', async () => {
     inNetwork: wot.inNetwork,
     wotState: writable<'idle' | 'building' | 'ready'>('ready'),
     wotSet: writable<ReadonlySet<string>>(new Set()),
+    wotEnabled: writable(true),
+    setWotEnabled: vi.fn(),
     buildWot: vi.fn(async () => null)
   };
 });

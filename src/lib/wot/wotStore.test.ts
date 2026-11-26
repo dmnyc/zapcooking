@@ -19,6 +19,7 @@ const h = vi.hoisted(() => ({
   ]
 }));
 
+vi.mock('$app/environment', () => ({ browser: false }));
 vi.mock('$lib/followListCache', async () => {
   const { writable } = await import('svelte/store');
   return {
@@ -38,7 +39,7 @@ vi.mock('$lib/muteListStore', async () => {
 });
 
 import { getFollowedPubkeys } from '$lib/followListCache';
-import { buildWot, wotSet, wotState } from './wotStore';
+import { buildWot, setWotEnabled, wotSet, wotState, wotEnabled } from './wotStore';
 import { short, THRESHOLD } from './wot';
 
 // A fake NDK whose fetchEvents answers each chunk with one kind:3 per author, all
@@ -64,11 +65,20 @@ const ME2 = 'd1'.repeat(32);
 const ME3 = 'd2'.repeat(32);
 
 beforeEach(() => {
+  setWotEnabled(true);
   wotSet.set(new Set());
   wotState.set('idle');
 });
 
 describe('the wot store runner', () => {
+  it('with the web of trust disabled buildWot never builds', async () => {
+    setWotEnabled(false);
+    const r = await buildWot(fakeNdk(), ME1);
+    expect(r).toBeNull();
+    expect(get(wotState)).toBe('idle');
+    expect(get(wotSet).size).toBe(0);
+  });
+
   it('publishes the built set and the ready state', async () => {
     const r = await buildWot(fakeNdk(), ME1);
     expect(r).not.toBeNull();
