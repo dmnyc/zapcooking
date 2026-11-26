@@ -32,6 +32,10 @@
   --text-2: var(--color-text-secondary, #c9c9cd);
   --muted: var(--color-text-muted, #8a8c92);
   --faint: var(--color-text-muted, #6b6d73);
+  /* Placeholders: this app's muted ink is near-white in the dark themes
+     (#d1d5db), which made an empty field read as filled. The page's own ink
+     at 40%, so it stays quiet on every theme, light or dark. */
+  --placeholder: color-mix(in srgb, var(--color-text-primary, #f4f4f5) 40%, transparent);
 
   /* accents — Sidecar's lavender and gold are this app's orange. The
      stylesheet's :root defaults are rewritten to :host when it is adopted

@@ -31,9 +31,29 @@ import { timerSettings, loadTimerSettings, saveTimerSettings } from '$lib/timerS
 // then the core — the same order compose.html loads them in. The core is a
 // dynamic, client-only import: it reads window at its top level, and the
 // route never renders on the server.
-import { applyAvatar, buildSidecarDeps, composerPool } from './host';
+import { applyAvatar, buildSidecarDeps, composerPool, routeGifSearchThroughApp } from './host';
 import { isScrollbarStyling, scopeStylesheet } from './scopeCss';
 import { MONO_DRAFTS_LIST_KEY } from '$lib/monoComposerStore';
+import {
+  contentSum,
+  listDrafts,
+  loadBlanks,
+  loadDrafts,
+  removeDraft,
+  storeDrafts,
+  useDraftScope,
+  writeDraft,
+  type ComposerDraft,
+  type CoreHelpers,
+  type DraftFields,
+  type DraftKind,
+  type DraftMedia,
+  type PollDraft
+} from '$lib/composerDrafts';
+import { composerDraftSync } from '$lib/composerDraftsIO';
+import { showToast } from '$lib/toast';
+import { CLIENT_TAG_IDENTIFIER } from '$lib/consts';
+import { ZAP_COOKING_HANDLER_ADDRESS } from '$lib/nip89';
 import type { ComponentType, SvelteComponent } from 'svelte';
 import PencilSimpleIcon from 'phosphor-svelte/lib/PencilSimple';
 import ChartBarHorizontalIcon from 'phosphor-svelte/lib/ChartBarHorizontal';
@@ -47,6 +67,13 @@ import GlobeIcon from 'phosphor-svelte/lib/Globe';
 import ClockIcon from 'phosphor-svelte/lib/Clock';
 import CalendarBlankIcon from 'phosphor-svelte/lib/CalendarBlank';
 import FolderSimpleIcon from 'phosphor-svelte/lib/FolderSimple';
+import CloudCheckIcon from 'phosphor-svelte/lib/CloudCheck';
+import CloudArrowUpIcon from 'phosphor-svelte/lib/CloudArrowUp';
+import DeviceMobileIcon from 'phosphor-svelte/lib/DeviceMobile';
+import ArrowsClockwiseIcon from 'phosphor-svelte/lib/ArrowsClockwise';
+import TrashIcon from 'phosphor-svelte/lib/Trash';
+import ArrowLeftIcon from 'phosphor-svelte/lib/ArrowLeft';
+import ArrowRightIcon from 'phosphor-svelte/lib/ArrowRight';
 import XCircleIcon from 'phosphor-svelte/lib/XCircle';
 import CheckIcon from 'phosphor-svelte/lib/Check';
 import XIcon from 'phosphor-svelte/lib/X';
@@ -72,10 +99,10 @@ export type MonoTab = (typeof MONO_TABS)[number]['id'];
 // composer wears the same single-color set as the rest of the app. Kept for
 // destroy().
 const mountedIcons: SvelteComponent[] = [];
-function ph(Icon: ComponentType, size = 18): HTMLElement {
+function ph(Icon: ComponentType, size = 18, weight?: 'regular' | 'fill' | 'bold'): HTMLElement {
   const span = document.createElement('span');
   span.className = 'mono-ico';
-  mountedIcons.push(new Icon({ target: span, props: { size } }));
+  mountedIcons.push(new Icon({ target: span, props: weight ? { size, weight } : { size } }));
   return span;
 }
 function iconButton(Icon: ComponentType, title: string, cls = 'tool-btn mono-icon-btn'): HTMLButtonElement {
@@ -106,9 +133,13 @@ interface ComposerController {
   serializeEditor(el: HTMLElement): string;
   uploadMedia(file: File, pubkey: string): Promise<string>;
   checkPastedQuote(q: unknown, revert: () => void): void;
+  buildQuoteBlock(
+    ref: string,
+    ctl: { canUp?: boolean; canDown?: boolean; onUp?: () => void; onDown?: () => void; onRemove?: () => void }
+  ): HTMLElement;
   showPostCountdown(o: Record<string, unknown>): { stop(): void };
   renderNotePreview(el: HTMLElement, content: string): void;
-  buildPollEditor(o: Record<string, unknown>): { wrap: HTMLElement; addBtn: HTMLButtonElement };
+  buildPollEditor(o: Record<string, unknown>): { wrap: HTMLElement; addBtn: HTMLButtonElement; paint(): void };
   buildEmojiPicker(o: Record<string, unknown>): { wrap: HTMLElement; addBtn: HTMLElement; close(): void };
   buildGifPicker(o: Record<string, unknown>): { wrap: HTMLElement; addBtn: HTMLElement };
   newPollDraft(): unknown;
@@ -152,20 +183,48 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
       installComposer: (d: Record<string, unknown>) => ComposerController & Record<string, unknown>;
       removeUrlFromEditor: (el: HTMLElement, url: string) => void;
       quoteEntriesFromPaste: (plain: string, media: unknown[]) => unknown[];
+      linkBareRefs(text: string, NT: unknown): string;
+      proseWithQuotes(prose: string, media: unknown[]): string;
+      noteBodyTags(prose: string, NT: unknown, threadTags: unknown[]): { p: string[][]; q: string[][]; t: string[][] };
       composeNoteContent: (text: string, media: unknown[]) => string;
       // On the core itself, not the installed controller: it takes its pool
       // as an argument rather than reading deps.
       publishToRelays(o: Record<string, unknown>): Promise<PublishReport>;
-      buildPollEditor(o: Record<string, unknown>): { wrap: HTMLElement; addBtn: HTMLButtonElement };
+      buildPollEditor(o: Record<string, unknown>): { wrap: HTMLElement; addBtn: HTMLButtonElement; paint(): void };
       buildEmojiPicker(o: Record<string, unknown>): { wrap: HTMLElement; addBtn: HTMLButtonElement; close(): void };
       buildGifPicker(o: Record<string, unknown>): { wrap: HTMLElement; addBtn: HTMLButtonElement };
       newPollDraft(): unknown;
       pollDraftIsPostable(p: unknown): boolean;
       buildPollTags(p: unknown, nowSecs: number, relays: string[]): unknown[];
       POLL_KIND: number;
+      // The strip and its ALT editor, the same builders Sidecar's own
+      // composer seats under its thumbnails.
+      buildAltEditorRow(o: {
+        url?: string; isVideo?: boolean; alt?: string; count?: number;
+        onChange?: (v: string) => void; onSave?: (v: string) => void;
+      }): HTMLElement & { flushPending?: () => void };
+      imetaTagsForMedia(media: unknown[]): string[][];
+      capAltText(s: string): string;
+      normalizeAltBreaks(s: string): string;
+      movePicture(media: unknown[], from: number, to: number): DraftMedia[];
+      moveQuoteEntry(media: unknown[], index: number, dir: number): DraftMedia[];
+      buildAttachmentsLabel(
+        count: number,
+        ctl: { urls: string[]; canUp?: boolean; canDown?: boolean; onUp?: () => void; onDown?: () => void }
+      ): { label: HTMLElement; list: HTMLElement };
+      canMovePicture(media: unknown[], i: number, dir: number): boolean;
+      pictureCount(media: unknown[]): number;
+      replaceMedia(media: unknown[], next: unknown[]): void;
+      addMedia(media: unknown[], entry: unknown): void;
+      videoThumbCover(url: string): HTMLElement;
+      primeVideoThumb(el: HTMLVideoElement, cell: HTMLElement): void;
+      readVideoMeta(file: File): Promise<{ mime?: string; dim?: string }>;
+      uploadErrorParts(e: unknown): (Node | string)[];
     };
   }).SidecarCore;
   const composer = SidecarCore.installComposer(deps) as ComposerController;
+  // GIF search goes through the app's proxy and key, as the old picker's did.
+  const releaseGifRoute = routeGifSearchThroughApp();
 
   // ── skeleton ─────────────────────────────────────────────────
   const styleEl = document.createElement('style');
@@ -184,12 +243,101 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
     .mono-icon-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; color: var(--muted); }
     .mono-icon-btn:not(:disabled):hover, .mono-icon-btn.on { color: var(--orange); }
     .mono-seg { flex: 1 1 0; padding: 9px 6px; }
+    .gif-picker, .emoji-picker { scroll-margin-bottom: calc(96px + var(--mono-pad-b, 2rem)); }
+    /* The poll's "some clients cannot show polls" line: a footnote, not a
+       warning box. */
+    .poll-editor .kind-warn {
+      margin-top: 6px; padding: 0; background: none; border: 0;
+      color: var(--muted); opacity: 0.8; font-size: 11.5px;
+    }
+    /* No "Remove poll": a poll is its own tab and its own draft here, and
+       leaving the tab is how one stops writing it. */
+    .poll-editor .poll-remove { display: none; }
+    /* Checkboxes as Sidecar draws them: the platform's own box in the
+       accent. A wider input rule set appearance: none and padded them into
+       an empty field, so checked and unchecked looked the same. */
+    input[type="checkbox"] {
+      appearance: auto; -webkit-appearance: checkbox;
+      width: 17px; height: 17px; min-height: 0; padding: 0; margin: 0;
+      border: 0; background: none; box-shadow: none;
+      accent-color: var(--orange); cursor: pointer; flex-shrink: 0;
+    }
     .mono-seg.hidden { display: none; }
+    /* An upload in progress stripes the Media button (Sidecar's
+       .compose-add.is-uploading); each file holds its place in the strip
+       as its own picture, grayed, with the word over it. */
+    .mono-seg.is-uploading, .mono-thumb-uploading { position: relative; overflow: hidden; cursor: progress; }
+    .mono-seg.is-uploading:disabled { opacity: 1; }
+    .mono-seg.is-uploading::after {
+      content: ''; position: absolute; inset: 0; pointer-events: none;
+      background: repeating-linear-gradient(-45deg, rgba(var(--accent-rgb), 0.24) 0 8px, transparent 8px 16px);
+      background-size: 22.63px 22.63px;
+      animation: upload-stripes 0.9s linear infinite;
+    }
+    .mono-thumb-uploading { background: var(--bg-2, #191a1c); }
+    .mono-thumb-uploading img { opacity: 0.4; filter: grayscale(1); }
+    .mono-thumb-uploading-label {
+      position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+      font-size: 11px; font-weight: 600; color: var(--text); text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+    }
+    .compose-thumb-alt { gap: 3px; }
+    .compose-sheet.mono-previewing [data-mono="thumbs"] { display: none; }
+    /* A note's Post button stays in reach however long the note grows: the
+       footer sticks to the bottom of the dialog, which is what scrolls. It
+       hangs down over the dialog's bottom padding (--mono-pad-b) and fills
+       it, so text scrolling under it never shows below the button. */
+    /* And on a phone, where the dialog is the whole screen, the note takes
+       the height there is: the chain from the dialog down to the editor
+       stretches, the editor grows into the spare room, and the footer
+       lands on the bottom edge instead of floating mid-screen. Phones
+       only (Modal's full-screen breakpoint): wider, the dialog sizes to
+       its content and Sidecar's editor height stands. */
+    @media (max-width: 767.98px) {
+      :scope.mono-in-modal:has(.compose-sheet[data-tab="notes"]) { flex: 1 1 auto; display: flex; flex-direction: column; }
+      :scope.mono-in-modal:has(.compose-sheet[data-tab="notes"]) :is(.compose-page, .compose-body) {
+        flex: 1 1 auto; display: flex; flex-direction: column;
+      }
+      :scope.mono-in-modal .compose-sheet[data-tab="notes"] { flex: 1 1 auto; }
+      :scope.mono-in-modal .compose-sheet[data-tab="notes"] [data-mono="slot"]:has(> .compose-editor-wrap) {
+        flex: 1 1 0; min-height: 0; display: flex; flex-direction: column;
+      }
+      /* Grown from zero, not from the text: a long note scrolls inside the
+         editor rather than stretching the dialog past the screen. */
+      :scope.mono-in-modal .compose-sheet[data-tab="notes"] .compose-editor-wrap { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
+      :scope.mono-in-modal .compose-sheet[data-tab="notes"] .compose-editor { flex: 1 1 0; min-height: 160px; max-height: none; }
+    }
+    :scope.mono-in-modal .compose-sheet[data-tab="notes"] .mono-foot {
+      position: sticky; bottom: calc(-1 * var(--mono-pad-b, 2rem)); z-index: 5;
+      margin-bottom: calc(-1 * var(--mono-pad-b, 2rem));
+      padding: 12px 0 var(--mono-pad-b, 2rem);
+      background: var(--color-bg-secondary, #1f2937);
+    }
+    .compose-editor.is-empty::before,
+    input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 1; }
+    .compose-thumb-alt.is-open { outline: 2px solid var(--lav); outline-offset: 1px; }
+    @media (prefers-reduced-motion: reduce) {
+      .mono-seg.is-uploading::after { animation: none; }
+    }
     /* Button tabs: the kind row is Sidecar's segmented switch at full
        width, the Write / Preview row the same switch, compact. */
     .compose-modes.mono-kinds { display: flex; align-self: stretch; }
     .mono-kinds .compose-mode { flex: 1 1 0; justify-content: center; }
     .compose-mode .mono-ico { color: inherit; }
+    /* Which kind is being written, at a glance, in one color: the others
+       recede (the page's ink at 55%, since this app's muted ink is
+       near-white in the dark themes), and the chosen one is full-strength
+       ink on a raised neutral fill. */
+    .mono-kinds .compose-mode { color: color-mix(in srgb, var(--text) 55%, transparent); transition: color 0.15s, background-color 0.15s; }
+    .mono-kinds .compose-mode:hover:not(.active) { color: var(--text); background: rgba(255, 255, 255, 0.04); }
+    .mono-subrow .compose-tab:not(.active) { color: color-mix(in srgb, var(--text) 55%, transparent); }
+    .mono-subrow .compose-tab:not(.active):hover { color: var(--text); }
+    /* Sidecar's own active tab (a raised fill sitting on a 1px ledge), in
+       the page's ink rather than the accent. */
+    .mono-kinds .compose-mode.active {
+      color: var(--text);
+      background: color-mix(in srgb, var(--text) 12%, transparent);
+      box-shadow: 0 1px 0 var(--border-strong);
+    }
     /* Write / Preview: underline tabs, Sidecar's own .compose-tabs. */
     .mono-subrow { display: flex; align-items: flex-end; gap: 10px; border-bottom: 1px solid var(--border); }
     .mono-subrow .compose-tabs { border-bottom: none; margin: 0 0 -1px; }
@@ -205,8 +353,6 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
        while the send countdown runs, the bar fills left to right and a
        red Cancel pill sits beside it. */
     .mono-foot { display: flex; flex-direction: column; gap: 8px; }
-    .mono-foot-meta { display: flex; align-items: center; gap: 10px; }
-    .mono-foot-meta:has(.compose-status:empty) { display: none; }
     .mono-action-row { display: flex; align-items: center; gap: 8px; }
     .mono-cancel { flex-shrink: 0; padding: 10px 18px; border-radius: 9999px; border: none;
       font: inherit; font-size: 14px; font-weight: 500; background: #ef4444; color: #fff; cursor: pointer; }
@@ -228,6 +374,36 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
       font-variant-numeric: tabular-nums; white-space: nowrap; }
     .mono-saved { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
     .mono-saved-check { color: var(--success); }
+    /* Saved drafts: Sidecar's list — a row is the draft (opens it), with a
+       trash icon beside it; the time and the relay state on one line. */
+    .mono-drafts-pane { display: flex; flex-direction: column; gap: 8px; }
+    /* While the list is open it is the sheet: everything below the tabs that
+       belongs to writing steps aside, untouched. */
+    .compose-sheet.mono-drafts-open > :not(.compose-head):not(.mono-kinds):not(.compose-drafts-pane) { display: none !important; }
+    .mono-drafts-back { width: 100%; justify-content: center; margin-top: 4px; color: var(--text); }
+    .mono-drafts-head { display: flex; align-items: center; gap: 8px; }
+    .mono-drafts-title { flex: 1; font-weight: 600; font-size: 14px; }
+    .mono-drafts-head .tool-btn { padding: 6px 10px; font-size: 12.5px; }
+    .mono-drafts-status { margin: 0; font-size: 12px; color: var(--muted); min-height: 0; }
+    .mono-drafts-status:empty { display: none; }
+    .mono-drafts-empty { margin: 4px 0; font-size: 13px; color: var(--muted); }
+    .mono-drafts-list { display: flex; flex-direction: column; gap: 8px; }
+    .mono-draft { display: flex; align-items: stretch; min-width: 0; border-radius: 10px;
+      background: var(--hover-soft); border: 1px solid var(--border); }
+    .mono-draft:hover, .mono-draft.is-current { border-color: var(--gold-soft); }
+    .mono-draft-open { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; text-align: start;
+      padding: 10px 12px; background: none; border: none; cursor: pointer; color: var(--text); font: inherit; }
+    .mono-draft-top { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .mono-draft-kind { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .mono-draft-meta { margin-inline-start: auto; flex-shrink: 0; display: inline-flex; align-items: center; gap: 5px;
+      font-size: 12px; color: var(--muted); }
+    .mono-draft-cloud.is-synced { color: var(--success); }
+    .mono-draft-snip { font-size: 13px; color: var(--text-2); line-height: 1.45;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .mono-draft-del { border: none; background: none; flex-shrink: 0; padding: 0 12px; }
+    .mono-draft-meta[hidden] { display: none; }
+    .mono-draft.confirming, .mono-draft.confirming:hover { border-color: var(--red); }
+    .mono-draft.confirming .mono-draft-kind, .mono-draft.confirming .mono-draft-del { color: var(--red); }
     .mono-toolbar { display: flex; gap: 4px; border: 1px solid var(--border); border-radius: 10px; padding: 6px; margin-bottom: 6px; }
     .mono-toolbar .tool-btn { padding: 6px 9px; }
     /* Sidecar's compose page owns a whole browser tab and centers the
@@ -331,9 +507,6 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
         <div class="mono-need" data-mono="need" hidden></div>
 
         <footer class="mono-foot">
-          <div class="mono-foot-meta">
-            <span class="compose-status" data-mono="status"></span>
-          </div>
           <div class="mono-action-row">
             <button type="button" class="mono-cancel" data-mono="cancel" hidden>Cancel</button>
             <button type="button" class="mono-post" data-mono="post" disabled>
@@ -349,7 +522,6 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
     page.querySelector(`[data-mono="${name}"]`) as T;
   const slotEl = el('slot');
   const errEl = el<HTMLParagraphElement>('err');
-  const statusEl = el('status');
   const postBtn = el<HTMLButtonElement>('post');
   const savedEl = page.querySelector('.compose-saved') as HTMLElement;
   const cancelBtn = el<HTMLButtonElement>('cancel');
@@ -383,7 +555,11 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
   let pollDraft: unknown = null;
   let showPreview = false;
   let draftTimer: ReturnType<typeof setTimeout> | null = null;
-  const media: { url: string; isVideo?: boolean }[] = [];
+  // The attachments, in the order they are appended to the note. Shared with
+  // the drafts and the strip; the core's movers return copies, so it is
+  // rewritten in place (replaceMedia).
+  const media: DraftMedia[] = [];
+  let uploadsInFlight = 0; // files on their way up; Post waits for them
   const recipeForm: {
     name: string; cover: string; summary: string; prep: string; cook: string; servings: string;
     ingredients: string[]; directions: string[]; notes: string; categories: string[]; source: string;
@@ -393,170 +569,689 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
   };
 
   // ── drafts ───────────────────────────────────────────────────
-  const DRAFT_KEY = 'zapcooking_mono_draft';
-  const DRAFTS_LIST_KEY = MONO_DRAFTS_LIST_KEY;
-  type DraftEntry = { text: string; at: number };
+  // Notes and polls: composerDrafts.ts — one id per draft for its whole
+  // life, kept on the device as you type, pushed to the account's draft
+  // relays when the composer closes (only what changed), caught up when it
+  // opens, and on Sync now. Recipes and reads keep one draft each on the
+  // device until those tabs publish; they move to the recipe and article
+  // draft stores then.
+  const RECIPE_DRAFT_KEY = 'zapcooking_mono_recipe_draft';
+  const ARTICLE_DRAFT_KEY = 'zapcooking_mono_article_draft';
+  const LEGACY_DRAFT_KEY = 'zapcooking_mono_draft';
+  // The note or poll being written: its draft id, or null before it has
+  // content. Kept while the editor is emptied, so typing again continues the
+  // same draft rather than starting another.
+  let activeId: string | null = null;
+  // NOTES AND POLLS ARE SEPARATE DRAFTS. They share the editor, so it holds
+  // one tab's draft at a time: editorTab says whose, and the other tab's
+  // draft id waits in parked until its tab is opened again. Switching tabs
+  // saves the one being left and brings back the other's own draft (or a
+  // blank one); nothing written on one tab follows to the other.
+  type EditorTab = 'notes' | 'polls';
+  let editorTab: EditorTab = 'notes';
+  const parked: Record<EditorTab, string | null> = { notes: null, polls: null };
+  const kindOfTab = (tab: EditorTab): DraftKind => (tab === 'polls' ? 'poll' : 'note');
+  const me = () => (deps.activePubkey() as string) || '';
+  useDraftScope(me());
+  const draftSync = composerDraftSync(SidecarCore as unknown as CoreHelpers, deps.NT);
 
-  function readDraftList(): Record<string, DraftEntry> {
+  function noteFields(): DraftFields {
+    return {
+      kind: kindOfTab(editorTab),
+      text: editorApi.getText(),
+      // A poll carries no attachments, and a note no poll.
+      media: editorTab === 'polls' ? [] : (media.slice() as DraftMedia[]),
+      poll: editorTab === 'polls' ? (pollDraft as PollDraft | null) || null : null
+    };
+  }
+
+  const recipeHasContent = () =>
+    !!(recipeForm.name.trim() || recipeForm.summary.trim() || recipeForm.ingredients.length ||
+      recipeForm.directions.length || recipeForm.notes.trim());
+  const articleHasContent = () =>
+    !!(articleForm.title.trim() || articleForm.body.trim() || articleForm.summary.trim());
+
+  function writeLocal(key: string, value: unknown) {
     try {
-      return JSON.parse(localStorage.getItem(DRAFTS_LIST_KEY) || '{}') as Record<string, DraftEntry>;
+      if (value) localStorage.setItem(key, JSON.stringify({ ...(value as object), at: Date.now() }));
+      else localStorage.removeItem(key);
     } catch (_) {
-      return {};
+      /* storage blocked: the draft is still on screen */
+    }
+  }
+  function readLocal<T>(key: string): (T & { at: number }) | null {
+    try {
+      return JSON.parse(localStorage.getItem(key) || 'null');
+    } catch (_) {
+      return null;
     }
   }
 
-  function writeDraftList(list: Record<string, DraftEntry>) {
-    try {
-      localStorage.setItem(DRAFTS_LIST_KEY, JSON.stringify(list));
-    } catch (_) {
-      /* storage blocked: the draft still exists in the editor */
+  /** Write what is on screen to the device, now. */
+  function saveNow() {
+    if (draftTimer) {
+      clearTimeout(draftTimer);
+      draftTimer = null;
     }
+    if (currentTab === 'recipes') writeLocal(RECIPE_DRAFT_KEY, recipeHasContent() ? recipeForm : null);
+    else if (currentTab === 'reads') writeLocal(ARTICLE_DRAFT_KEY, articleHasContent() ? articleForm : null);
+    else saveEditor();
+    // A green check, not the drafts folder: "saved" is a state, the folder
+    // is the place drafts are kept.
+    const check = ph(CheckIcon, 13);
+    check.classList.add('mono-saved-check');
+    savedEl.replaceChildren(check, document.createTextNode('Saved'));
+    paintDraftsCount();
+    if (page.querySelector('.compose-drafts-pane')) paintDraftsPane();
   }
 
-  function draftHasContent(): boolean {
-    if (currentTab === 'notes' || currentTab === 'polls')
-      return !!editorApi.getText().trim() || media.length > 0 || !!pollDraft;
-    if (currentTab === 'recipes')
-      return !!(recipeForm.name || recipeForm.summary || recipeForm.ingredients.length || recipeForm.directions.length);
-    return !!(articleForm.title || articleForm.body || articleForm.summary);
+  /** The editor's draft (a note or a poll) to the device. */
+  function saveEditor() {
+    const r = writeDraft(loadDrafts(), loadBlanks(), activeId, noteFields(), Date.now());
+    activeId = r.id;
+    storeDrafts(r.all, r.blanks);
+  }
+
+  /** Put a draft (or nothing) in the editor, as the one being written. */
+  function loadEditor(d: ComposerDraft | null, id: string | null = d ? d.id : null) {
+    closeAltEditor(false);
+    activeId = id;
+    editorApi.setText(d ? d.text : '');
+    media.length = 0;
+    if (d && d.kind === 'note') media.push(...(d.media as { url: string; isVideo?: boolean }[]));
+    pollDraft = d && d.poll ? JSON.parse(JSON.stringify(d.poll)) : null;
+    renderThumbs();
+    pollEditor.paint();
+    refreshPostState();
+  }
+
+  const latestOfKind = (kind: DraftKind) => listDrafts(loadDrafts()).find((d) => d.kind === kind) || null;
+
+  /** The editor over to a tab's own draft: the one it was on, else that
+   *  kind's most recent, else a blank one. */
+  function swapEditorTo(tab: EditorTab) {
+    if (tab === editorTab) return;
+    saveEditor();
+    parked[editorTab] = activeId;
+    editorTab = tab;
+    const id = parked[tab];
+    loadEditor(id ? loadDrafts()[id] || null : latestOfKind(kindOfTab(tab)), id || undefined);
   }
 
   function draftSaveSoon() {
     if (draftTimer) clearTimeout(draftTimer);
-    draftTimer = setTimeout(() => {
-      try {
-        if (currentTab === 'notes' || currentTab === 'polls') {
-          localStorage.setItem(
-            DRAFT_KEY,
-            JSON.stringify({ text: editorApi.getText(), media, poll: pollDraft, at: Date.now() })
-          );
-        } else if (currentTab === 'recipes') {
-          localStorage.setItem(DRAFT_KEY, JSON.stringify({ recipe: recipeForm, at: Date.now() }));
-        } else {
-          localStorage.setItem(DRAFT_KEY, JSON.stringify({ article: articleForm, at: Date.now() }));
-        }
-        // A green check, not the drafts folder: "saved" is a state, the
-        // folder is the place drafts are kept.
-        const check = ph(CheckIcon, 13);
-        check.classList.add('mono-saved-check');
-        savedEl.replaceChildren(check, document.createTextNode('Saved'));
-      } catch (_) {
-        /* storage blocked: the note still posts */
-      }
-      const list = readDraftList();
-      if (draftHasContent()) list[currentTab] = { text: draftSummary(), at: Date.now() };
-      else delete list[currentTab];
-      writeDraftList(list);
-      paintDraftsCount();
-    }, 600);
+    draftTimer = setTimeout(saveNow, 600);
   }
 
-  function draftSummary(): string {
-    if (currentTab === 'notes' || currentTab === 'polls') return editorApi.getText();
-    if (currentTab === 'recipes') return recipeForm.name || recipeForm.summary;
-    return articleForm.title || articleForm.summary || articleForm.body.slice(0, 60);
+  /** Drafts pushed and pulled: blanks first, then what changed, then a read. */
+  function syncDrafts() {
+    return draftSync.sync().then((report) => {
+      paintDraftsCount();
+      if (page.querySelector('.compose-drafts-pane')) paintDraftsPane();
+      return report;
+    });
+  }
+
+  function localRows(): { tab: MonoTab; label: string; snippet: string; at: number }[] {
+    const rows: { tab: MonoTab; label: string; snippet: string; at: number }[] = [];
+    const recipe = readLocal<typeof recipeForm>(RECIPE_DRAFT_KEY);
+    if (recipe) rows.push({ tab: 'recipes', label: 'Recipe', snippet: recipe.name || recipe.summary || '', at: recipe.at });
+    const article = readLocal<typeof articleForm>(ARTICLE_DRAFT_KEY);
+    if (article)
+      rows.push({ tab: 'reads', label: 'Article', snippet: article.title || article.summary || article.body.slice(0, 60), at: article.at });
+    return rows;
   }
 
   function paintDraftsCount() {
-    const list = readDraftList();
-    const count = Object.values(list).filter((d) => d.text && d.text.trim()).length;
+    const count = listDrafts(loadDrafts()).length + localRows().length;
     draftsCountEl.textContent = count ? String(count) : '';
   }
 
-  function renderDraftsPane() {
-    const existing = page.querySelector('.compose-drafts-pane');
-    if (existing) {
-      existing.remove();
-      return;
+  /** Put a saved note or poll in the editor, as the draft being written. */
+  function openDraft(d: ComposerDraft) {
+    saveNow(); // the one on screen stays saved, as its own draft
+    const tab: EditorTab = d.kind === 'poll' ? 'polls' : 'notes';
+    if (tab !== editorTab) {
+      saveEditor();
+      parked[editorTab] = activeId;
+      editorTab = tab;
     }
-    const pane = document.createElement('div');
-    pane.className = 'compose-drafts-pane';
-    pane.style.cssText = 'padding:8px 4px';
-    const list = readDraftList();
-    const entries = MONO_TABS.filter((t) => list[t.id]?.text?.trim());
-    if (!entries.length) {
-      const empty = document.createElement('p');
-      empty.style.cssText = 'color:var(--muted,#999);font-size:12px;padding:6px 2px';
-      empty.textContent = 'No saved drafts yet — what you type is saved here as you go.';
-      pane.appendChild(empty);
-    }
-    for (const tab of entries) {
-      const d = list[tab.id];
-      const row = document.createElement('div');
-      row.style.cssText =
-        'display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--border,#333);padding:6px 2px;font-size:12px';
-      const label = document.createElement('span');
-      label.style.cssText = 'font-weight:600;min-width:52px';
-      label.textContent = tab.label;
-      const preview = document.createElement('span');
-      preview.style.cssText =
-        'flex:1;color:var(--muted,#999);overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
-      preview.textContent = d.text.trim().slice(0, 60);
-      const restoreBtn = document.createElement('button');
-      restoreBtn.type = 'button';
-      restoreBtn.className = 'tool-btn';
-      restoreBtn.textContent = 'Restore';
-      restoreBtn.addEventListener('click', () => {
-        setPane(tab.id);
-        restoreSavedDraft();
-        pane.remove();
-      });
-      const discardBtn = iconButton(XIcon, 'Discard this draft');
-      discardBtn.addEventListener('click', () => {
-        const next = readDraftList();
-        delete next[tab.id];
-        writeDraftList(next);
-        paintDraftsCount();
-        renderDraftsPane();
-      });
-      row.append(label, preview, restoreBtn, discardBtn);
-      pane.appendChild(row);
-    }
-    kindsEl.after(pane);
+    loadEditor(d);
+    setPane(tab);
   }
 
-  function restoreSavedDraft() {
-    try {
-      const saved = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null');
-      if (!saved) return;
-      if (saved.text) editorApi.setText(saved.text);
-      if (Array.isArray(saved.media)) media.push(...saved.media);
-      if (saved.poll) pollDraft = saved.poll;
-      if (saved.recipe) Object.assign(recipeForm, saved.recipe);
-      if (saved.article) Object.assign(articleForm, saved.article);
-      renderThumbs();
-      refreshPostState();
-    } catch (_) {
-      /* unreadable draft: start clean */
+  /** A fresh note, or a fresh poll on Polls: the one on screen is kept. */
+  function startNewDraft() {
+    saveNow();
+    const tab: EditorTab = currentTab === 'polls' ? 'polls' : 'notes';
+    swapEditorTo(tab);
+    saveEditor();
+    loadEditor(null);
+    setPane(tab);
+    savedEl.replaceChildren();
+  }
+
+  function relTime(ms: number) {
+    const s = Math.max(0, (Date.now() - ms) / 1000);
+    if (s < 60) return 'just now';
+    if (s < 3600) return `${Math.round(s / 60)}m ago`;
+    if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+    return new Date(ms).toLocaleDateString();
+  }
+
+  // The list takes the writing area's place while it is open, as in
+  // Sidecar: the folder toggles it, and opening a draft, New note or Back
+  // to writing return to the editor.
+  function closeDraftsPane() {
+    page.querySelector('.compose-drafts-pane')?.remove();
+    page.querySelector('.compose-sheet')?.classList.remove('mono-drafts-open');
+  }
+
+  function renderDraftsPane() {
+    if (page.querySelector('.compose-drafts-pane')) {
+      closeDraftsPane();
+      return;
     }
+    paintDraftsPane();
+  }
+
+  // The row asking "Delete this draft?", by key, and until when. Kept out
+  // here because a sync landing between the two taps repaints the list,
+  // and the second tap must still find the row asking.
+  let armedDelete: { key: string; until: number } | null = null;
+
+  function paintDraftsPane() {
+    let pane = page.querySelector('.compose-drafts-pane') as HTMLElement | null;
+    if (!pane) {
+      pane = document.createElement('div');
+      pane.className = 'compose-drafts-pane mono-drafts-pane';
+      kindsEl.after(pane);
+    }
+    page.querySelector('.compose-sheet')?.classList.add('mono-drafts-open');
+    pane.replaceChildren();
+
+    const head = document.createElement('div');
+    head.className = 'mono-drafts-head';
+    const title = document.createElement('span');
+    title.className = 'mono-drafts-title';
+    title.textContent = 'Saved drafts';
+    const newBtn = document.createElement('button');
+    newBtn.type = 'button';
+    newBtn.className = 'tool-btn mono-icon-btn';
+    newBtn.append(ph(PlusIcon, 16), document.createTextNode(currentTab === 'polls' ? 'New poll' : 'New note'));
+    newBtn.addEventListener('click', () => {
+      startNewDraft();
+      closeDraftsPane();
+    });
+    const syncBtn = document.createElement('button');
+    syncBtn.type = 'button';
+    syncBtn.className = 'tool-btn mono-icon-btn';
+    syncBtn.append(ph(ArrowsClockwiseIcon, 16), document.createTextNode('Sync now'));
+    syncBtn.disabled = !me();
+    syncBtn.title = me() ? 'Send changed drafts to your relays and read theirs' : 'Sign in to sync drafts';
+    syncBtn.addEventListener('click', async () => {
+      saveNow();
+      syncBtn.disabled = true;
+      syncStatus.textContent = 'Syncing…';
+      const report = await syncDrafts();
+      syncStatus.textContent = report.failed
+        ? 'Some drafts could not reach your relays.'
+        : 'Up to date with your relays.';
+      syncBtn.disabled = false;
+    });
+    head.append(title, newBtn, syncBtn);
+    const syncStatus = document.createElement('p');
+    syncStatus.className = 'mono-drafts-status';
+    syncStatus.setAttribute('role', 'status');
+    pane.append(head, syncStatus);
+
+    const notes = listDrafts(loadDrafts());
+    const locals = localRows();
+    if (!notes.length && !locals.length) {
+      const empty = document.createElement('p');
+      empty.className = 'mono-drafts-empty';
+      empty.textContent = 'No saved drafts yet. What you write is saved as you go.';
+      pane.append(empty, backButton());
+      return;
+    }
+
+    const list = document.createElement('div');
+    list.className = 'mono-drafts-list';
+    const row = (
+      label: string, snippet: string, at: number, state: 'synced' | 'pending' | 'device',
+      key: string, onOpen: () => void, onDelete: () => void, current: boolean, onRelays = false
+    ) => {
+      const item = document.createElement('div');
+      item.className = 'mono-draft' + (current ? ' is-current' : '');
+      const open = document.createElement('button');
+      open.type = 'button';
+      open.className = 'mono-draft-open';
+      const top = document.createElement('span');
+      top.className = 'mono-draft-top';
+      const kind = document.createElement('span');
+      kind.className = 'mono-draft-kind';
+      kind.textContent = current ? `${label} · writing now` : label;
+      const meta = document.createElement('span');
+      meta.className = 'mono-draft-meta';
+      const cloud =
+        // Clouds are drawn filled app-wide: the outline cloud's check is
+        // too small to read at this size.
+        state === 'synced'
+          ? ph(CloudCheckIcon, 14, 'fill')
+          : state === 'pending'
+            ? ph(CloudArrowUpIcon, 14, 'fill')
+            : ph(DeviceMobileIcon, 14);
+      cloud.classList.add('mono-draft-cloud', `is-${state}`);
+      cloud.title =
+        state === 'synced' ? 'On your relays' : state === 'pending' ? 'Goes to your relays when the composer closes' : 'On this device only';
+      meta.append(document.createTextNode(relTime(at)), cloud);
+      top.append(kind, meta);
+      const snip = document.createElement('span');
+      snip.className = 'mono-draft-snip';
+      snip.textContent = snippet.trim() || 'Pictures only';
+      open.append(top, snip);
+      const del = iconButton(TrashIcon, onRelays ? 'Delete from your relays' : 'Delete this draft');
+      del.classList.add('mono-draft-del');
+      // Two taps to delete, as Sidecar's list asks: the first turns the row
+      // into the question, the second (on the trash or the row) deletes, and
+      // it settles back on its own after a few seconds. One tap used to
+      // delete outright, relay copy and all, a slip away from opening it.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const settle = () => {
+        clearTimeout(timer);
+        if (armedDelete?.key === key) armedDelete = null;
+        item.classList.remove('confirming');
+        kind.textContent = current ? `${label} · writing now` : label;
+        meta.hidden = false;
+        snip.textContent = snippet.trim() || 'Pictures only';
+      };
+      const ask = (ms: number) => {
+        item.classList.add('confirming');
+        kind.textContent = onRelays ? 'Delete it from your relays?' : 'Delete this draft?';
+        meta.hidden = true;
+        snip.textContent = 'Tap again to delete';
+        timer = setTimeout(settle, ms);
+      };
+      const confirming = () => item.classList.contains('confirming');
+      const remove = () => {
+        clearTimeout(timer);
+        armedDelete = null;
+        onDelete();
+      };
+      del.addEventListener('click', () => {
+        if (confirming()) return remove();
+        armedDelete = { key, until: Date.now() + 4000 };
+        ask(4000);
+      });
+      open.addEventListener('click', () => (confirming() ? remove() : onOpen()));
+      if (armedDelete?.key === key && armedDelete.until > Date.now()) ask(armedDelete.until - Date.now());
+      item.append(open, del);
+      list.appendChild(item);
+    };
+
+    for (const d of notes) {
+      const state = !me() ? 'device' : d.relay && d.relay.sum === contentSum(d) ? 'synced' : 'pending';
+      row(
+        d.kind === 'poll' ? 'Poll' : 'Note', d.text || (d.poll ? d.poll.options.filter(Boolean).join(' / ') : ''),
+        d.updatedAt, state, d.id,
+        () => { openDraft(d); closeDraftsPane(); },
+        () => {
+          const r = removeDraft(loadDrafts(), loadBlanks(), d.id);
+          storeDrafts(r.all, r.blanks);
+          if (parked.notes === d.id) parked.notes = null;
+          if (parked.polls === d.id) parked.polls = null;
+          if (activeId === d.id) {
+            loadEditor(null);
+            if (currentTab === 'polls') setPane('polls'); // a fresh poll, raised
+          }
+          paintDraftsCount();
+          paintDraftsPane();
+          if (me()) void syncDrafts(); // the relay copy goes now, not at close
+        },
+        d.id === activeId,
+        !!me() && !!d.relay
+      );
+    }
+    for (const l of locals) {
+      row(l.label, l.snippet, l.at, 'device', `local:${l.tab}`,
+        () => { setPane(l.tab); closeDraftsPane(); },
+        () => {
+          writeLocal(l.tab === 'recipes' ? RECIPE_DRAFT_KEY : ARTICLE_DRAFT_KEY, null);
+          paintDraftsCount();
+          paintDraftsPane();
+        },
+        false
+      );
+    }
+    pane.append(list, backButton());
+  }
+
+  function backButton() {
+    const back = document.createElement('button');
+    back.type = 'button';
+    back.className = 'tool-btn mono-icon-btn mono-drafts-back';
+    back.append(ph(PencilSimpleIcon, 16), document.createTextNode('Back to writing'));
+    back.addEventListener('click', () => {
+      closeDraftsPane();
+      editorApi.focus();
+    });
+    return back;
+  }
+
+  /** The note and poll draft from before drafts had ids, and the recipe or
+   *  article that shared its one slot, moved to where they live now. */
+  function migrateLegacyDraft() {
+    const old = readLocal<{ text?: string; media?: DraftMedia[]; poll?: PollDraft; recipe?: unknown; article?: unknown }>(
+      LEGACY_DRAFT_KEY
+    );
+    if (!old) return;
+    if (old.recipe) writeLocal(RECIPE_DRAFT_KEY, old.recipe);
+    else if (old.article) writeLocal(ARTICLE_DRAFT_KEY, old.article);
+    else {
+      const r = writeDraft(loadDrafts(), loadBlanks(), null, {
+        kind: old.poll ? 'poll' : 'note', text: old.text || '', media: old.media || [], poll: old.poll || null
+      }, old.at || Date.now());
+      storeDrafts(r.all, r.blanks);
+    }
+    try {
+      localStorage.removeItem(LEGACY_DRAFT_KEY);
+      localStorage.removeItem(MONO_DRAFTS_LIST_KEY);
+    } catch (_) {}
+  }
+
+  /** On open: the most recent note or poll draft back in the editor, and
+   *  the recipe and article drafts back in their forms. */
+  function restoreSavedDraft() {
+    migrateLegacyDraft();
+    const recipe = readLocal<typeof recipeForm>(RECIPE_DRAFT_KEY);
+    if (recipe) Object.assign(recipeForm, recipe);
+    const article = readLocal<typeof articleForm>(ARTICLE_DRAFT_KEY);
+    if (article) Object.assign(articleForm, article);
+    // The tab it opens on gets its own most recent draft: Post opens the
+    // latest note, never a poll left on Polls.
+    editorTab = currentTab === 'polls' ? 'polls' : 'notes';
+    const latest = latestOfKind(kindOfTab(editorTab));
+    activeId = latest ? latest.id : null;
+    if (latest) {
+      editorApi.setText(latest.text);
+      if (latest.kind === 'note') media.push(...(latest.media as { url: string; isVideo?: boolean }[]));
+      pollDraft = latest.poll ? JSON.parse(JSON.stringify(latest.poll)) : null;
+    }
+    renderThumbs();
+    refreshPostState();
   }
 
   // ── media strip ──────────────────────────────────────────────
-  function renderThumbs() {
-    thumbsEl.innerHTML = '';
-    media.forEach((m) => {
-      const img = document.createElement('img');
-      img.src = m.url;
-      img.style.cssText = 'width:64px;height:64px;object-fit:cover;border-radius:8px';
-      thumbsEl.appendChild(img);
+  // Sidecar's strip (compose.js renderThumbs), on this app's icons: each
+  // thumb wears the ALT chip (top left), the remove disc (top right) and,
+  // with more than one picture, steppers and drag to reorder. The order on
+  // the strip is the order the URLs are appended to the note.
+  let altRow: (HTMLElement & { flushPending?: () => void }) | null = null;
+  let altIndex = -1; // the slot the open row edits, so its own chip shuts it
+
+  function closeAltEditor(flush = true) {
+    if (altRow) {
+      // The tail of the description rides along, unless the slot is gone
+      // or moved: flushing into a spliced array would write one image's
+      // words onto another.
+      if (flush && altRow.flushPending) altRow.flushPending();
+      altRow.remove();
+      altRow = null;
+    }
+    altIndex = -1;
+  }
+
+  function openAltEditor(i: number) {
+    const m = media[i];
+    if (!m || !m.url) return;
+    if (altRow && altIndex === i) {
+      closeAltEditor();
+      return;
+    }
+    closeAltEditor();
+    altIndex = i;
+    const saveAltInto = (slot: number, value: string) => {
+      const cur = media[slot];
+      if (!cur) return;
+      // Normalized here and again at publish (imetaTagsForMedia), since a
+      // draft can publish without this row ever being opened.
+      const cleaned = SidecarCore.capAltText(SidecarCore.normalizeAltBreaks(value));
+      if (cleaned) cur.alt = cleaned;
+      else delete cur.alt;
+      draftSaveSoon();
+      renderThumbs();
+    };
+    altRow = SidecarCore.buildAltEditorRow({
+      url: m.url,
+      isVideo: !!m.isVideo,
+      alt: m.alt,
+      count: 1, // the row edits one picture: "Save description"
+      onChange: (value) => saveAltInto(i, value),
+      onSave: (value) => {
+        closeAltEditor();
+        saveAltInto(i, value);
+      }
     });
+    thumbsEl.after(altRow);
+    (altRow.querySelector('textarea') as HTMLTextAreaElement | null)?.focus();
+  }
+
+  /** The strip's own little buttons, on phosphor glyphs. */
+  function thumbButton(cls: string, title: string, Icon: ComponentType, onclick: () => void) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = cls;
+    b.title = title;
+    b.setAttribute('aria-label', title);
+    b.append(ph(Icon, 13));
+    b.addEventListener('click', onclick);
+    return b;
+  }
+
+  function reorder(next: DraftMedia[]) {
+    closeAltEditor(); // flush first: the row's slot is about to change places
+    SidecarCore.replaceMedia(media, next);
+    draftSaveSoon();
+    renderThumbs();
+  }
+
+  function renderThumbs() {
+    // A slot the open row was editing may be gone (a draft swapped in, a
+    // post sent): close it without writing anywhere.
+    if (altIndex >= 0 && !media[altIndex]?.url) closeAltEditor(false);
+    thumbsEl.innerHTML = '';
+    const pics = SidecarCore.pictureCount(media);
+    let dragFrom = -1;
+    // A PASTED QUOTE IS A BLOCK IN THE STRIP, shown as the note it quotes,
+    // in the strip's order: it posts where it sits, above or below the
+    // pictures. Beside one, the pictures are a block too, with a label and
+    // an arrow of their own (Sidecar's strip, from the same builders).
+    const qi = media.findIndex((m) => m && m.quote);
+    const firstPicture = media.findIndex((m) => m && !m.quote);
+    const lastPicture = media.findLastIndex((m) => m && !m.quote);
+    const moveQuote = (at: number, dir: number) => {
+      closeAltEditor(); // flush first: the row's slot is about to change places
+      reorder(SidecarCore.moveQuoteEntry(media, at, dir));
+    };
+    const picturesGroup =
+      qi >= 0 && pics > 0
+        ? SidecarCore.buildAttachmentsLabel(pics, {
+            urls: media.map((x) => x && x.url).filter((u): u is string => !!u),
+            canUp: qi === 0,
+            canDown: qi > 0,
+            onUp: () => moveQuote(qi, 1),
+            onDown: () => moveQuote(qi, -1)
+          })
+        : null;
+    media.forEach((m, i) => {
+      const ref = m && m.quote;
+      if (ref) {
+        thumbsEl.append(
+          composer.buildQuoteBlock(ref, {
+            canUp: i > 0,
+            canDown: i < media.length - 1,
+            onUp: () => moveQuote(i, -1),
+            onDown: () => moveQuote(i, 1),
+            onRemove: () => {
+              media.splice(i, 1);
+              closeAltEditor(false);
+              draftSaveSoon();
+              renderThumbs();
+              refreshPostState();
+              paintCount();
+            }
+          })
+        );
+        return;
+      }
+      if (!m || !m.url) return;
+      if (picturesGroup && i === firstPicture) thumbsEl.append(picturesGroup.label);
+      const cell = document.createElement('div');
+      cell.className = 'compose-thumb';
+      const shown = document.createElement(m.isVideo ? 'video' : 'img') as HTMLImageElement | HTMLVideoElement;
+      if (m.isVideo) {
+        (shown as HTMLVideoElement).preload = 'metadata';
+        (shown as HTMLVideoElement).muted = true;
+      } else {
+        // Media hosts that check the referrer answer some origins with 403.
+        (shown as HTMLImageElement).referrerPolicy = 'no-referrer';
+        (shown as HTMLImageElement).alt = m.alt || '';
+      }
+      shown.src = m.url;
+      shown.draggable = false;
+      shown.addEventListener('error', () => cell.classList.add('is-broken'));
+      cell.append(shown);
+      if (m.isVideo) {
+        cell.append(SidecarCore.videoThumbCover(m.url));
+        SidecarCore.primeVideoThumb(shown as HTMLVideoElement, cell);
+      }
+
+      cell.draggable = pics > 1;
+      cell.addEventListener('dragstart', (e) => {
+        dragFrom = i;
+        cell.classList.add('dragging');
+        if (e.dataTransfer) {
+          e.dataTransfer.effectAllowed = 'move';
+          try { e.dataTransfer.setData('text/plain', String(i)); } catch { /* some browsers refuse */ }
+        }
+      });
+      cell.addEventListener('dragover', (e) => {
+        if (dragFrom === -1 || dragFrom === i) return;
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+        cell.classList.add('drop-target');
+      });
+      cell.addEventListener('dragleave', () => cell.classList.remove('drop-target'));
+      cell.addEventListener('drop', (e) => {
+        e.preventDefault();
+        cell.classList.remove('drop-target');
+        if (dragFrom === -1 || dragFrom === i) return;
+        const from = dragFrom;
+        dragFrom = -1;
+        reorder(SidecarCore.movePicture(media, from, i));
+      });
+      cell.addEventListener('dragend', () => {
+        dragFrom = -1;
+        cell.classList.remove('dragging');
+        thumbsEl.querySelectorAll('.drop-target').forEach((t) => t.classList.remove('drop-target'));
+      });
+
+      // + ALT until described, a check and ALT once it is: the badge both
+      // apps use, on this app's glyphs.
+      const alt = document.createElement('button');
+      alt.type = 'button';
+      alt.className = 'compose-thumb-alt' + (m.alt ? ' has-alt' : '') + (altIndex === i ? ' is-open' : '');
+      alt.title = m.alt
+        ? m.isVideo ? 'Edit the video description' : 'Edit the image description'
+        : 'Add a description';
+      alt.append(ph(m.alt ? CheckIcon : PlusIcon, 10, 'bold'), document.createTextNode('ALT'));
+      alt.addEventListener('click', () => openAltEditor(i));
+      cell.append(alt);
+
+      // Drag never fires on touch, and a keyboard has none: the steppers
+      // are the reorder both can reach. The ends hide theirs.
+      if (pics > 1) {
+        if (SidecarCore.canMovePicture(media, i, -1))
+          cell.append(thumbButton('compose-thumb-move left', 'Move earlier', ArrowLeftIcon, () =>
+            reorder(SidecarCore.movePicture(media, i, i - 1))));
+        if (SidecarCore.canMovePicture(media, i, 1))
+          cell.append(thumbButton('compose-thumb-move right', 'Move later', ArrowRightIcon, () =>
+            reorder(SidecarCore.movePicture(media, i, i + 1))));
+      }
+      cell.append(thumbButton('compose-thumb-x', 'Remove', TrashIcon, () => {
+        media.splice(i, 1);
+        closeAltEditor(false); // the row edits a slot that no longer exists
+        draftSaveSoon();
+        renderThumbs();
+        refreshPostState();
+        paintCount();
+      }));
+      thumbsEl.appendChild(cell);
+      if (picturesGroup && i === lastPicture) thumbsEl.append(picturesGroup.list);
+    });
+    // The open row follows the strip it belongs to, but is only moved when it
+    // is out of place: moving a node blurs it, and the autosave repaints the
+    // strip mid-sentence.
+    if (altRow && thumbsEl.nextElementSibling !== altRow) thumbsEl.after(altRow);
+  }
+
+  // The strip's placeholders while files go up: one striped cell per file,
+  // so the space the picture will take is held from the first moment.
+  function uploadingCell(file: File) {
+    const cell = document.createElement('div');
+    cell.className = 'compose-thumb mono-thumb-uploading';
+    cell.setAttribute('aria-label', `Uploading ${file.name || 'a file'}`);
+    if (file.type.startsWith('image/')) {
+      const im = document.createElement('img');
+      const objectUrl = URL.createObjectURL(file);
+      im.src = objectUrl;
+      im.alt = '';
+      im.addEventListener('load', () => URL.revokeObjectURL(objectUrl), { once: true });
+      im.addEventListener('error', () => URL.revokeObjectURL(objectUrl), { once: true });
+      cell.append(im);
+    }
+    const label = document.createElement('span');
+    label.className = 'mono-thumb-uploading-label';
+    label.textContent = 'Uploading…';
+    cell.append(label);
+    return cell;
   }
 
   async function uploadFiles(files: File[]) {
     const pubkey = deps.activePubkey() as string;
-    statusEl.textContent = 'Uploading…';
+    errEl.textContent = '';
+    uploadsInFlight++;
+    // The whole Media button sweeps, as in Sidecar: stripes in the accent
+    // running across it, so it reads busy rather than unavailable.
+    segs.camera.classList.add('is-uploading');
+    segs.camera.disabled = true;
+    const pending = files.map(uploadingCell);
+    thumbsEl.append(...pending);
+    refreshPostState();
     try {
-      for (const file of files) {
-        const url = await composer.uploadMedia(file, pubkey);
-        media.push({ url, isVideo: file.type.startsWith('video/') });
+      for (const [n, file] of files.entries()) {
+        // The file is read for its type and size while it goes up.
+        const [url, meta] = await Promise.all([
+          composer.uploadMedia(file, pubkey),
+          SidecarCore.readVideoMeta(file)
+        ]);
+        pending[n].remove();
+        SidecarCore.addMedia(media, { url, isVideo: file.type.startsWith('video/'), ...meta });
         renderThumbs();
+        thumbsEl.append(...pending.slice(n + 1));
       }
-      errEl.textContent = '';
       draftSaveSoon();
     } catch (e) {
-      errEl.textContent = String((e as Error).message || e);
+      errEl.replaceChildren(...SidecarCore.uploadErrorParts(e));
     } finally {
-      statusEl.textContent = '';
+      pending.forEach((c) => c.remove());
+      uploadsInFlight--;
+      if (!uploadsInFlight) {
+        segs.camera.classList.remove('is-uploading');
+        segs.camera.disabled = false;
+      }
+      refreshPostState();
+      paintCount();
     }
   }
 
@@ -679,11 +1374,18 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
     }
     const asPoll = currentTab === 'polls' && !!pollDraft;
     posting = true;
-    postLabel.textContent = 'Posting…';
+    // The button says where the post is; nothing repeats it beside it.
+    // Signing first, since a remote signer can keep it waiting there.
+    postLabel.textContent = 'Signing…';
     refreshPostState();
     errEl.textContent = '';
     const nowSecs = Math.floor(Date.now() / 1000);
-    const text = composer.serializeEditor(editorApi.editor);
+    // A bare npub/nevent becomes its nostr: form first, so it tags and
+    // renders as a reference (Sidecar does the same before every post).
+    const text = SidecarCore.linkBareRefs(composer.serializeEditor(editorApi.editor), deps.NT);
+    // What the text tags: a p per person mentioned or quoted, a q per quoted
+    // note (including a quote that sits in the attachments), a t per hashtag.
+    const body = SidecarCore.noteBodyTags(SidecarCore.proseWithQuotes(text, asPoll ? [] : media), deps.NT, []);
     const template = {
       kind: asPoll ? SidecarCore.POLL_KIND : 1,
       // A poll carries no attachments (the core keeps the two apart); a
@@ -691,17 +1393,24 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
       content: asPoll ? text : SidecarCore.composeNoteContent(text, media),
       created_at: nowSecs,
       tags: [
-        ['client', 'zapcooking'],
-        ...(asPoll ? SidecarCore.buildPollTags(pollDraft, nowSecs, [...chosenRelays]) : [])
+        // The app's own tag, with its NIP-89 handler (as everything else it
+        // publishes): clients show "via Zap Cooking" with its name and logo.
+        ['client', CLIENT_TAG_IDENTIFIER, ZAP_COOKING_HANDLER_ADDRESS],
+        ...body.p,
+        ...body.q,
+        ...body.t,
+        ...(asPoll
+          ? SidecarCore.buildPollTags(pollDraft, nowSecs, [...chosenRelays])
+          : // NIP-92: each described picture's words, and what the file says
+            // about itself (type, size), for the client that draws it.
+            SidecarCore.imetaTagsForMedia(media))
       ]
     };
     try {
-      statusEl.textContent = 'Signing…';
       const signed = (await signAuth(template)) as SidecarEvent;
       await actuallyPublish(signed);
     } catch (e) {
       errEl.textContent = String((e as Error).message || e);
-      statusEl.textContent = '';
       posting = false;
       postLabel.textContent = postLabelText();
       refreshPostState();
@@ -709,42 +1418,51 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
   }
 
   async function actuallyPublish(signed: SidecarEvent) {
-    statusEl.textContent = 'Publishing…';
+    postLabel.textContent = 'Posting…';
     try {
       const report = await doPublish(signed);
       if (!report.accepted.length) {
         errEl.textContent = 'No relay accepted it. It is still saved as a draft.';
         return;
       }
+      // Posted: the draft is done. Removed here and its relay copy blanked
+      // now, before the editor is cleared, so the clearing writes nothing.
+      if (draftTimer) {
+        clearTimeout(draftTimer);
+        draftTimer = null;
+      }
+      if (activeId) {
+        const r = removeDraft(loadDrafts(), loadBlanks(), activeId);
+        storeDrafts(r.all, r.blanks);
+        activeId = null;
+        if (me()) void syncDrafts();
+      }
       editorApi.setText('');
       media.length = 0;
       renderThumbs();
-      try {
-        localStorage.removeItem(DRAFT_KEY);
-        const list = readDraftList();
-        delete list.notes;
-        delete list.polls;
-        writeDraftList(list);
-        paintDraftsCount();
-      } catch (_) {}
+      paintDraftsCount();
       savedEl.textContent = '';
+      const wasPoll = !!pollDraft;
       if (pollDraft) {
         pollDraft = null;
         if (currentTab === 'polls') setPane('polls');
       }
-      errEl.textContent = `Sent to ${report.accepted.length}/${report.total} relays.`;
+      const sent = `Sent to ${report.accepted.length} of ${report.total} relays.`;
+      if (opts.onClose) {
+        // Posted: the composer's job is done, so it goes, and the word that
+        // it went out stays on the page behind it.
+        showToast('success', `${wasPoll ? 'Poll posted' : 'Posted'}. ${sent}`);
+        opts.onClose();
+        return;
+      }
+      errEl.textContent = sent;
     } catch (e) {
       errEl.textContent = String((e as Error).message || e);
     } finally {
-      statusEl.textContent = '';
       posting = false;
       postLabel.textContent = postLabelText();
       refreshPostState();
     }
-  }
-
-  function showToast(_variant: string, message: string) {
-    errEl.textContent = message;
   }
 
   // ── the editor (Notes and Polls share it) ────────────────────
@@ -757,7 +1475,7 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
     },
     onAttachUrl: (url: string) => {
       SidecarCore.removeUrlFromEditor(editorApi.editor, url);
-      if (!media.some((m) => m && m.url === url)) media.push({ url, isVideo: false });
+      if (!media.some((m) => m && m.url === url)) SidecarCore.addMedia(media, { url, isVideo: false });
       editorApi.sync();
       renderThumbs();
       draftSaveSoon();
@@ -774,12 +1492,26 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
       if (!quotes.length) return false;
       media.push(...(quotes as { url: string }[]));
       renderThumbs();
+      draftSaveSoon();
+      paintCount();
+      refreshPostState();
+      // A note no relay shows us does not stay a quote: it goes back into the
+      // text after what was already written (never in place of it), and the
+      // toast says why. As Sidecar does.
       composer.checkPastedQuote(quotes[0], () => {
-        const at = media.indexOf(quotes[0] as { url: string });
-        if (at >= 0) media.splice(at, 1);
-        editorApi.setText(String((quotes[0] as { quote?: string })?.quote || plain));
+        const at = media.indexOf(quotes[0] as DraftMedia);
+        if (at < 0) return; // already removed or replaced: nothing to undo
+        media.splice(at, 1);
+        closeAltEditor(false);
+        const ref = String((quotes[0] as DraftMedia).quote || plain);
+        const words = editorApi.getText().replace(/\s+$/, '');
+        editorApi.setText(words ? words + '\n\n' + ref : ref);
         editorApi.sync();
+        draftSaveSoon();
+        paintCount();
         renderThumbs();
+        refreshPostState();
+        showToast('info', 'Couldn’t find that note, so it was pasted as text.');
       });
       return true;
     }
@@ -810,15 +1542,28 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
     if (relayPopover.hidden) renderRelayPopover();
     else relayPopover.hidden = true;
   };
+  // An opened picker is brought into view above the pinned Post button
+  // (its scroll-margin clears the footer); on a tall editor it opened out
+  // of sight below it.
+  const revealPicker = (wrap: HTMLElement) =>
+    requestAnimationFrame(() => {
+      if (!wrap.classList.contains('hidden')) wrap.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    });
   const segs = {
     camera: segment(ImageIcon, 'Add a picture or video', () => fileInput.click()),
     gif: segment(GifIcon, 'GIF search', () => {
-      actionsEl.appendChild(gifPicker.wrap);
+      // Below the button row, full width, as Sidecar seats it (inside the
+      // row it was only as wide as its contents).
+      if (gifPicker.wrap.previousElementSibling !== actionsEl) actionsEl.after(gifPicker.wrap);
       gifPicker.addBtn.click();
+      revealPicker(gifPicker.wrap);
     }),
     emoji: segment(SmileyIcon, 'Emoji', () => {
-      actionsEl.appendChild(emojiPicker.wrap);
+      // Below the button row, full width, as Sidecar seats it (inside the
+      // row it was only as wide as its contents).
+      if (emojiPicker.wrap.previousElementSibling !== actionsEl) actionsEl.after(emojiPicker.wrap);
       emojiPicker.addBtn.click();
+      revealPicker(emojiPicker.wrap);
     }),
     pow: segment(HammerIcon, 'Proof of work lands next', () => {}, true),
     relays: segment(GlobeIcon, 'Where this posts', toggleRelays),
@@ -910,7 +1655,7 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
   });
   const gifPicker = SidecarCore.buildGifPicker({
     onPick: (gif: { url: string; title?: string }) => {
-      if (!media.some((m) => m.url === gif.url)) media.push({ url: gif.url, isVideo: false });
+      if (!media.some((m) => m.url === gif.url)) SidecarCore.addMedia(media, { url: gif.url, isVideo: false });
       renderThumbs();
       draftSaveSoon();
     }
@@ -1167,6 +1912,10 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
 
   function setPreview(which: 'write' | 'preview') {
     showPreview = which === 'preview';
+    // The preview draws the attachments full size, so the strip of small
+    // ones (and a description being written) steps aside until Write.
+    if (showPreview) closeAltEditor();
+    sheetEl.classList.toggle('mono-previewing', showPreview);
     subtabWrite.classList.toggle('active', !showPreview);
     subtabPreview.classList.toggle('active', showPreview);
     slotEl.innerHTML = '';
@@ -1176,7 +1925,12 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
       preview.className = 'compose-preview compose-preview-lg';
       preview.style.cssText = 'min-height:240px';
       if (currentTab === 'notes' || currentTab === 'polls') {
-        composer.renderNotePreview(preview, SidecarCore.composeNoteContent(editorApi.getText(), media));
+        // Into a .preview-body, as Sidecar does: its preview rules (mentions in
+        // the accent, bold) are written against that box.
+        const body = document.createElement('div');
+        body.className = 'preview-body';
+        preview.appendChild(body);
+        composer.renderNotePreview(body, SidecarCore.composeNoteContent(editorApi.getText(), media));
       } else {
         const note = document.createElement('p');
         note.style.cssText = 'color:var(--muted,#999);font-size:13px;padding:12px 4px';
@@ -1201,13 +1955,18 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
   // one flushes pending updates) — reported first, that answer ran in the
   // middle of the build and the recipe form was drawn twice.
   function setPane(tab: MonoTab, keepPreview = false) {
+    // A save still waiting belongs to the tab being left: write it first.
+    if (draftTimer) saveNow();
     paintPane(tab, keepPreview);
     opts.onTabChange?.(tab);
   }
 
   function paintPane(tab: MonoTab, keepPreview: boolean) {
+    // Notes and Polls each bring back their own draft.
+    if (tab === 'notes' || tab === 'polls') swapEditorTo(tab);
     currentTab = tab;
     sheetEl.dataset.mode = SHEET_MODE[tab];
+    sheetEl.dataset.tab = tab; // the mono layer's own per-tab rules
     kindsEl.querySelectorAll<HTMLButtonElement>('.compose-mode').forEach((b) => {
       b.classList.toggle('active', b.dataset.tab === tab);
     });
@@ -1228,6 +1987,10 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
       slotEl.appendChild(editorApi.wrap);
       if (tab === 'polls') {
         if (!pollDraft) pollEditor.addBtn.click(); // Sidecar's own raise-the-poll path
+        // A poll already in hand (a draft restored, the tab left and come
+        // back to) is drawn as it is: the editor only fills itself when one
+        // is raised, so without this it stood empty.
+        else pollEditor.paint();
         slotEl.appendChild(pollEditor.wrap);
         pollEditor.wrap.classList.remove('hidden');
       }
@@ -1252,6 +2015,7 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
   kindsEl.querySelectorAll<HTMLButtonElement>('.compose-mode').forEach((b) => {
     b.addEventListener('click', () => {
       showPreview = false;
+      sheetEl.classList.remove('mono-previewing');
       subtabWrite.classList.add('active');
       subtabPreview.classList.remove('active');
       setPane((b.dataset.tab || 'notes') as MonoTab);
@@ -1266,7 +2030,8 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
     }
     const hasBody = !!editorApi.getText().trim() || media.length > 0;
     const pollOk = currentTab !== 'polls' || !pollDraft || SidecarCore.pollDraftIsPostable(pollDraft);
-    postBtn.disabled = posting || !hasBody || !pollOk;
+    // A post sent mid-upload would leave the file behind.
+    postBtn.disabled = posting || uploadsInFlight > 0 || !hasBody || !pollOk;
   }
 
   postBtn.addEventListener('click', () => onPost());
@@ -1297,15 +2062,37 @@ export async function mountMonoComposer(container: HTMLElement, opts: MountOptio
     applyAvatar(el('avatar'), profile);
   })();
 
+  // The dialog's bottom padding, for the sticky footer to hang over (it
+  // differs on phones, where the safe area is added to it).
+  const dialogEl = root.closest('dialog');
+  const readDialogPad = () => {
+    if (dialogEl) root.style.setProperty('--mono-pad-b', getComputedStyle(dialogEl).paddingBottom);
+  };
+  readDialogPad();
+  window.addEventListener('resize', readDialogPad);
+
   // ── boot ─────────────────────────────────────────────────────
   restoreSavedDraft();
+  // The draft on screen is a poll (options filled in): it opens where it
+  // was being written, not on Notes with its poll out of sight.
   setPane(currentTab);
+  // Catch-up: a draft changed since its last push (the tab was killed, the
+  // phone backgrounded it) goes up now, and the relays' drafts come in.
+  if (me()) void syncDrafts();
   paintDraftsCount();
 
   return {
     destroy() {
+      // Closing is the push: what is on screen is saved, then what changed
+      // goes to the relays (the sync outlives the composer).
+      saveNow();
+      // Send only: the next open reads the relays, and every read can mean
+      // signer requests.
+      if (me()) void draftSync.sync({ pull: false });
       if (countdownRaf !== null) cancelAnimationFrame(countdownRaf);
       unsubTimer();
+      releaseGifRoute();
+      window.removeEventListener('resize', readDialogPad);
       mountedIcons.splice(0).forEach((c) => c.$destroy());
       root.remove();
       styleEl.remove();

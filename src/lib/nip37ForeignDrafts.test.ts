@@ -159,3 +159,16 @@ describe("other apps' drafts under kind 31234", () => {
     expect(set.foreignIds).toEqual([]);
   });
 });
+
+describe('the private relay list', () => {
+  it('reads the NIP-37 tag list (Sidecar), a plain array, and { relays }', async () => {
+    const { parsePrivateRelayContent } = await import('./nip37DraftService');
+    expect(parsePrivateRelayContent([['relay', 'wss://a.test'], ['relay', 'wss://b.test/']])).toEqual([
+      'wss://a.test',
+      'wss://b.test/'
+    ]);
+    expect(parsePrivateRelayContent(['wss://a.test', 'wss://a.test', 'https://no.test'])).toEqual(['wss://a.test']);
+    expect(parsePrivateRelayContent({ relays: ['wss://c.test'] })).toEqual(['wss://c.test']);
+    expect(parsePrivateRelayContent({ nope: 1 })).toEqual([]);
+  });
+});

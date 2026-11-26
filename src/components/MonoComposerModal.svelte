@@ -81,6 +81,11 @@
 <style>
   .mono-modal-mount {
     min-height: 420px;
+    /* Fills the dialog, so on a phone the composer can put Post at the
+       bottom of the screen. */
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
   }
   .mount-error {
     color: var(--color-danger, #f66);

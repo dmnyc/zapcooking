@@ -1,5 +1,6 @@
 import { writable } from 'svelte/store';
 import type { MonoTab } from '$lib/sidecar/mount';
+import { composerDraftCount } from '$lib/composerDrafts';
 
 /**
  * The monocomposer's modal: the tab it is open on, or null when closed.
@@ -28,18 +29,19 @@ export function openMonoComposerDrafts() {
   monoComposerDraftsRequest.update((n) => n + 1);
 }
 
-/** Where the composer keeps its saved drafts, one entry per tab. */
+/** The single-slot draft list from before drafts had ids; the composer
+ *  moves what it held and removes it on its next open. */
 export const MONO_DRAFTS_LIST_KEY = 'zapcooking_mono_drafts_v1';
 
-/** How many saved drafts there are, read without loading the composer. */
-export function monoDraftCount(): number {
+/** How many saved drafts an account has (notes and polls, plus the recipe
+ *  and article kept on this device), read without loading the composer. */
+export function monoDraftCount(pubkey: string): number {
+  let n = composerDraftCount(pubkey);
   try {
-    const list = JSON.parse(localStorage.getItem(MONO_DRAFTS_LIST_KEY) || '{}') as Record<
-      string,
-      { text?: string }
-    >;
-    return Object.values(list).filter((d) => d?.text?.trim()).length;
+    if (localStorage.getItem('zapcooking_mono_recipe_draft')) n++;
+    if (localStorage.getItem('zapcooking_mono_article_draft')) n++;
   } catch {
-    return 0;
+    /* storage blocked */
   }
+  return n;
 }

@@ -61,7 +61,7 @@ Status: ✅ has it · ◐ partial · ❌ missing · — not this app's shape.
 | Feature | Sidecar | Zap Cooking | Gap → slice |
 |---|---|---|---|
 | `drafts` — autosave, reopen, saved list | ✅ | ✅ | — |
-| `relayDrafts` — NIP-37 private drafts | ✅ | ◐ | `nip37DraftService.ts` exists, unwired → slice C5 |
+| `relayDrafts` — NIP-37 private drafts | ✅ | ◐ | `nip37DraftService.ts` exists, unwired → slice C5 (decided: push on close, no Save Draft button) |
 | `pow` — cancellable | ✅ | ✅ | powActive |
 | `sendDelay` — review countdown | ✅ | ✅ | countdown |
 | `duplicateGuard` — same note twice caught | ✅ | ❌ | slice C1 |
@@ -82,7 +82,24 @@ Status: ✅ has it · ◐ partial · ❌ missing · — not this app's shape.
 - **C2 — composer emoji picker**: searchable, skin tones (reactions picker is the seed).
 - **C3 — fenced code in notes**: preview + NoteContent rendering.
 - **C4 — media pipeline + strip drag**: EXIF/location strip, HEIC refusal with a reason, recompress when large; drag-to-reorder the strip.
-- **C5 — relay drafts wired**: nip37DraftService into the note composer, explicit never automatic.
+- **C5 — relay drafts wired** (branch `feat/composer-drafts`). Decided 2026-11-24, replacing
+  Sidecar's explicit-only rule:
+  - **No Save Draft button.** Drafts save to the device as you type (debounced); the top strip's
+    green check says so.
+  - **Pushed to relays when the composer closes**, and only when the draft changed since its last
+    push (a fingerprint of the content, as Sidecar's `draftSum`), so open-and-close sends nothing.
+  - **Catch-up on open**: a local draft changed since its last push is pushed when the composer next
+    opens. That covers a tab killed or a phone backgrounded mid-draft, without pushing on page
+    hide (a remote signer would prompt on every tab switch, and a dying page rarely waits for it).
+  - **Sync now** in the drafts list, for the one case closing does not cover: continuing on another
+    device right away. Each draft row shows whether its latest version is on the relays.
+  - **One draft, one id, for its whole life** — the runaway-drafts rule. An id is allocated when a
+    draft first has content (never on open, never for an empty draft); restoring, editing, switching
+    tabs and every push reuse it, so a push replaces the relay copy. Posting or emptying a draft
+    deletes it locally and blanks the relay copy. A draft opened from the relays keeps its d-tag.
+  - Notes in Sidecar's NIP-37 shape (k=1), so drafts round-trip with Sidecar; recipes and articles
+    keep the shape `nip37DraftService` writes (k=30023). Needs `fix/drafts-foreign-kinds`, which
+    stops either app's drafts being read as the other's.
 - **C6 — article inline pictures**: paste/drop/pick into the body where it lands, `![Uploading…]()`
   → `![](url)`, per-picture alt from Preview.
 - **C7 — RTL empty fields**: direction from content, placeholder and caret both (Sidecar #669).
